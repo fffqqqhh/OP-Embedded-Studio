@@ -40,6 +40,7 @@ export type EmbeddedFrameBakeById = (frameId: string) => Promise<File | null>
 export interface EmbeddedPrototypeOption {
   id: string
   name: string
+  contentKind: 'prototype' | 'animated-prototype'
   mode: 'manual' | 'slideshow' | 'custom'
   stateCount: number
   initialStateName: string
@@ -99,6 +100,10 @@ export type EmbeddedPrototypeBake = (
   interactionId: string
 ) => Promise<EmbeddedPrototypeBakeResult | null>
 
+export type EmbeddedAnimatedPrototypeBake = (
+  interactionId: string
+) => EmbeddedAnimatedPrototypeBakeResult | null
+
 export interface EmbeddedPrototypePayload {
   profileId: string
   name: string
@@ -149,7 +154,6 @@ export interface EmbeddedWifiCredentials {
 export type EmbeddedBuildMode =
   | 'usb-frame'
   | 'usb-prototype'
-  | 'usb-animated-prototype'
   | 'wifi-frame'
   | 'wifi-prototype'
   | 'wifi-live'

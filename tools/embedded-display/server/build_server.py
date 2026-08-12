@@ -44,7 +44,6 @@ DEFAULT_BUILD_MODE = "usb-frame"
 BUILD_MODES = {
     "usb-frame": {"partitionTable": "partitions_32mb_usb_frame.csv", "appPartitionBytes": 0x300000},
     "usb-prototype": {"partitionTable": "partitions_8mb_content.csv", "appPartitionBytes": 0x300000},
-    "usb-animated-prototype": {"partitionTable": "partitions_32mb_usb_animated.csv", "appPartitionBytes": 0x300000},
     "wifi-frame": {"partitionTable": "partitions_32mb_wireless.csv", "appPartitionBytes": 0x300000},
     "wifi-live": {"partitionTable": "partitions_8mb_wireless.csv", "appPartitionBytes": 0x300000},
     "wifi-prototype": {"partitionTable": "partitions_32mb_wireless.csv", "appPartitionBytes": 0x300000},
@@ -74,9 +73,9 @@ NVS_PARTITION_SIZE = 0x6000
 WIRELESS_CONTENT_RESET_ARTIFACT = "content-reset.bin"
 WIRELESS_CONTENT_OFFSET = 0x310000
 WIRELESS_CONTENT_RESET_BYTES = 0x1000
-PREBUILT_FIRMWARE_MODES = frozenset(("usb-frame", "usb-animated-prototype", "wifi-frame", "wifi-live", "ble-frame"))
+PREBUILT_FIRMWARE_MODES = frozenset(("usb-frame", "wifi-frame", "wifi-live", "ble-frame"))
 EXTERNAL_CONTENT_BUILD_MODES = frozenset((
-    "usb-frame", "usb-prototype", "usb-animated-prototype",
+    "usb-frame", "usb-prototype",
     "wifi-frame", "wifi-prototype", "wifi-live", "lan-frame", "lan-prototype",
     "ble-frame", "ble-prototype",
 ))
@@ -326,7 +325,7 @@ def mode_defaults_path(build_mode):
     path.parent.mkdir(parents=True, exist_ok=True)
     wireless_enabled = mode.startswith(("wifi-", "lan-"))
     external_content = mode in (
-        "usb-frame", "usb-prototype", "usb-animated-prototype", "wifi-frame", "wifi-prototype", "wifi-live", "lan-frame",
+        "usb-frame", "usb-prototype", "wifi-frame", "wifi-prototype", "wifi-live", "lan-frame",
         "ble-frame", "ble-prototype",
     )
     external_prototype = mode in ("usb-frame", "usb-prototype", "wifi-frame", "wifi-prototype")
@@ -334,7 +333,7 @@ def mode_defaults_path(build_mode):
     lan_status_screen = mode.startswith("lan-")
     setup_access_point = mode.startswith("wifi-")
     ble_enabled = mode.startswith("ble-")
-    usb_content_server = mode in ("usb-frame", "usb-animated-prototype")
+    usb_content_server = mode == "usb-frame"
     settings = [
         f'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="{partition_table}"',
         f'CONFIG_PARTITION_TABLE_FILENAME="{partition_table}"',
@@ -342,7 +341,7 @@ def mode_defaults_path(build_mode):
         f'CONFIG_OPENPENCIL_EXTERNAL_CONTENT_ONLY={"y" if external_content else "n"}',
         f'CONFIG_OPENPENCIL_EXTERNAL_PROTOTYPE={"y" if external_prototype else "n"}',
         f'CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK={"y" if mode in ("usb-frame", "wifi-frame", "ble-frame") else "n"}',
-        f'CONFIG_OPENPENCIL_ANIMATED_PROTOTYPE={"y" if mode == "usb-animated-prototype" else "n"}',
+        f'CONFIG_OPENPENCIL_ANIMATED_PROTOTYPE={"y" if mode == "usb-frame" else "n"}',
         f'CONFIG_OPENPENCIL_WIFI_LIVE_PREVIEW={"y" if live_preview else "n"}',
         f'CONFIG_OPENPENCIL_LAN_STATUS_SCREEN={"y" if lan_status_screen else "n"}',
         f'CONFIG_OPENPENCIL_SETUP_ACCESS_POINT={"y" if setup_access_point else "n"}',
@@ -358,7 +357,7 @@ def mode_defaults_path(build_mode):
             "CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y",
             'CONFIG_ESPTOOLPY_FLASHSIZE="32MB"',
         ])
-    if mode in ("usb-frame", "usb-animated-prototype"):
+    if mode == "usb-frame":
         settings.extend([
             "# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160 is not set",
             "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y",
@@ -933,7 +932,7 @@ def run_build(profile_id, wifi_credentials=None, build_mode=DEFAULT_BUILD_MODE):
     with BUILD_LOCK:
         if mode in ("usb-frame", "usb-prototype"):
             restore_generated_resources(profile_id, mode)
-        elif mode in ("usb-animated-prototype", "wifi-frame", "wifi-prototype", "wifi-live", "lan-frame", "lan-prototype", "ble-frame", "ble-prototype"):
+        elif mode in ("wifi-frame", "wifi-prototype", "wifi-live", "lan-frame", "lan-prototype", "ble-frame", "ble-prototype"):
             ensure_wireless_base_resources(profile_id, mode)
         build_signature = prepare_build_dir(registry, profile, mode, build_dir)
         artifacts = firmware_artifacts(build_dir)

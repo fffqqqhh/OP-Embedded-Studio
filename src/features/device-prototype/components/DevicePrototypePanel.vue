@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
@@ -9,10 +9,6 @@ import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 import {
   getActiveEmbeddedDisplayProfile,
   getActiveEmbeddedImageSettings,
-  executeUsbFrameDeployment,
-  prepareUsbAnimatedPrototypeDeployment,
-  type EmbeddedAnimatedPrototypeBakeResult,
-  type UsbFrameDeploymentPlan
 } from '@/features/embedded-display'
 
 import DevicePrototypePreview from './DevicePrototypePreview.vue'
@@ -31,8 +27,7 @@ const {
   selectedFrame,
   selectedFrames = [],
   renderFrame,
-  renderRevision,
-  bakeAnimation
+  renderRevision
 } = defineProps<{
   active?: boolean
   scopeKey?: object
@@ -40,15 +35,11 @@ const {
   selectedFrames?: DevicePrototypeFrameCandidate[]
   renderFrame?: DevicePrototypeFrameRender
   renderRevision?: number
-  bakeAnimation?: (interactionId: string) => EmbeddedAnimatedPrototypeBakeResult | null
 }>()
 
 const previewOpen = ref(false)
 const animationFileInput = ref<HTMLInputElement>()
 const animationImportError = ref('')
-const animationDeploymentError = ref('')
-const animationDeploying = ref(false)
-const animationDeploymentPlan = shallowRef<UsbFrameDeploymentPlan>()
 const {
   events,
   interactions,
@@ -96,11 +87,6 @@ const canAddSelection = computed(
 const canPreview = computed(() =>
   Boolean(renderFrame && selectedInteraction.value?.initialStateId && states.value.length)
 )
-const animatedInteractionReady = computed(
-  () =>
-    Boolean(selectedInteraction.value?.states.length) &&
-    selectedInteraction.value?.states.every((state) => state.animation?.files.length)
-)
 const displayProfile = computed(() => getActiveEmbeddedDisplayProfile())
 const imageSettings = computed(() => getActiveEmbeddedImageSettings())
 watch(
@@ -130,13 +116,6 @@ const mode = computed({
   set: (value: string) => setMode(value as DevicePrototypeMode)
 })
 
-function deploymentStageLabel(stage: UsbFrameDeploymentPlan['firmwareStage']): string {
-  if (stage === 'running') return '进行中'
-  if (stage === 'done') return '已刷新'
-  if (stage === 'skipped') return '已就绪'
-  if (stage === 'error') return '失败'
-  return '等待中'
-}
 const nextEvent = computed({
   get: () => selectedInteraction.value?.manual.nextEvent ?? 'screen_click',
   set: (value: DevicePrototypeEventId) => setManualEvent('next', value)
@@ -185,44 +164,6 @@ async function importAnimationState(event: Event) {
   }
 }
 
-async function deployAnimatedInteraction() {
-  if (!selectedInteraction.value || !bakeAnimation || !animatedInteractionReady.value) return
-  animationDeploying.value = true
-  animationDeploymentError.value = ''
-  try {
-    const bake = bakeAnimation(selectedInteraction.value.id)
-    if (!bake) throw new Error('无法准备动画交互内容')
-    const profile = getActiveEmbeddedDisplayProfile()
-    const settings = getActiveEmbeddedImageSettings()
-    const initialState = selectedInteraction.value.states.find(
-      (state) => state.id === selectedInteraction.value?.initialStateId
-    )
-    if (!initialState) throw new Error('请先设置动画交互的初始状态')
-    const plan = await prepareUsbAnimatedPrototypeDeployment({
-      profile,
-      frame: {
-        id: initialState.id,
-        name: initialState.name,
-        revision: renderRevision ?? 0,
-        width: initialState.width,
-        height: initialState.height
-      },
-      bake,
-      backgroundColor: settings.backgroundColor,
-      placement: settings.placement,
-      firstDeployment: false,
-      scopeKey
-    })
-    animationDeploymentPlan.value = plan
-    const deployed = await executeUsbFrameDeployment(plan.id)
-    if (!deployed) throw new Error(plan.error || plan.message)
-  } catch (error) {
-    animationDeploymentError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    animationDeploying.value = false
-  }
-}
-
 function handleManualLoopChange(event: Event) {
   setManualLoop((event.target as HTMLInputElement).checked)
 }
@@ -265,13 +206,6 @@ function handleAnimationLoopChange(event: Event) {
       </template>
       <span role="heading" aria-level="2">{{ selectedInteraction?.name || '交互原型' }}</span>
       <template #actions>
-        <IconButton
-          label="烧录 PNG 动画交互"
-          :disabled="!animatedInteractionReady || animationDeploying"
-          @click="deployAnimatedInteraction"
-        >
-          <icon-lucide-upload class="size-3.5" />
-        </IconButton>
         <IconButton label="预览交互" :disabled="!canPreview" @click="previewOpen = true">
           <icon-lucide-play class="size-3.5" />
         </IconButton>
@@ -279,25 +213,6 @@ function handleAnimationLoopChange(event: Event) {
     </PanelHeader>
 
     <div class="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-4">
-      <div
-        v-if="animationDeploymentPlan && animationDeploying"
-        class="border-b border-border px-3 py-2.5"
-      >
-        <div class="flex items-center justify-between gap-3 text-[11px]">
-          <span class="min-w-0 truncate text-surface">{{ animationDeploymentPlan.message }}</span>
-          <span class="shrink-0 tabular-nums text-muted">{{ animationDeploymentPlan.progress }}%</span>
-        </div>
-        <div class="mt-2 h-1.5 overflow-hidden rounded bg-panel-field">
-          <div
-            class="h-full rounded bg-accent transition-[width]"
-            :style="{ width: `${Math.max(3, animationDeploymentPlan.progress)}%` }"
-          />
-        </div>
-        <div class="mt-2 grid grid-cols-2 gap-2 text-[10px] text-muted">
-          <span>基础固件: {{ deploymentStageLabel(animationDeploymentPlan.firmwareStage) }}</span>
-          <span>动画内容: {{ deploymentStageLabel(animationDeploymentPlan.contentStage) }}</span>
-        </div>
-      </div>
       <PanelSection label="交互">
         <template #actions>
           <IconButton label="新建交互" @click="addInteraction">
@@ -548,11 +463,5 @@ function handleAnimationLoopChange(event: Event) {
       :placement="imageSettings.placement"
       :background-color="imageSettings.backgroundColor"
     />
-    <p
-      v-if="animationDeploymentError"
-      class="border-t border-border px-3 py-2 text-[11px] text-red-300"
-    >
-      {{ animationDeploymentError }}
-    </p>
   </div>
 </template>

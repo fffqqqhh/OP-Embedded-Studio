@@ -29,6 +29,7 @@ export {
 
 export type {
   EmbeddedDisplayProfile,
+  EmbeddedAnimatedPrototypeBake,
   EmbeddedAnimatedPrototypeBakeResult,
   EmbeddedFrameBake,
   EmbeddedFrameBakeById,

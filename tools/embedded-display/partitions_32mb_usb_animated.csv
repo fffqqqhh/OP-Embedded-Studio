@@ -1,6 +1,0 @@
-# 32MB USB animated interaction layout.
-# Name,   Type, SubType, Offset,  Size,       Flags
-nvs,      data, nvs,     ,        0x6000,
-phy_init, data, phy,     ,        0x1000,
-factory,  app,  factory, ,        0x300000,
-content,  data, 0x40,    ,        0x1CF0000,

@@ -4,8 +4,7 @@ const USB_PROTOCOL_PREFIX = 'OPUSB/1'
 const USB_CONTENT_HEADER_BYTES = 24
 const USB_CONTENT_CHUNK_BYTES = 0x10000
 const USB_CONTENT_MAGIC = 0x4f504331
-const USB_CONTENT_SERVICE_VERSION = 2
-const USB_ANIMATED_CONTENT_SERVICE_VERSION = 5
+const USB_CONTENT_SERVICE_VERSION = 6
 const USB_HANDSHAKE_TIMEOUT_MS = 10000
 const USB_HANDSHAKE_RETRY_MS = 750
 const USB_COMMAND_TIMEOUT_MS = 15000
@@ -237,7 +236,7 @@ async function handshakeUsbDevice(
   ) {
     throw new UsbContentFirmwareError(
       'protocol',
-      '设备正在运行另一种内容固件，请让 Studio 自动刷新动画交互固件后重试'
+      '设备正在运行旧版 USB 内容固件，请让 Studio 自动刷新统一 USB 基础固件后重试'
     )
   }
   if (contentBytes > capacity) {
@@ -369,9 +368,8 @@ export async function uploadUsbContent(
       profile,
       content.byteLength,
       {
-        expectedFirmwareMode: content[6] === 3 ? 3 : 2,
-        expectedServiceVersion:
-          content[6] === 3 ? USB_ANIMATED_CONTENT_SERVICE_VERSION : USB_CONTENT_SERVICE_VERSION
+        expectedFirmwareMode: 2,
+        expectedServiceVersion: USB_CONTENT_SERVICE_VERSION
       }
     )
 

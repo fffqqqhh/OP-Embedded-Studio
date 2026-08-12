@@ -310,7 +310,7 @@ async function deployContent(
   const result = await transferUsbContentWithFirmwareFallback({
     port,
     manifestUrl: plan.manifestUrl,
-    firmwareBuildMode: plan.mode === 'animated-prototype' ? 'usb-animated-prototype' : 'usb-frame',
+    firmwareBuildMode: 'usb-frame',
     transfer: (activePort, firmwareUpdated) => uploadContent(plan, activePort, firmwareUpdated),
     onLog: (message) => appendLog(plan, message),
     onProgress: ({ percent }) => {
@@ -579,7 +579,7 @@ export async function prepareUsbAnimatedPrototypeDeployment(
     logs: [],
     createdAt: Date.now(),
     payload: markRaw(payload),
-    manifestUrl: embeddedManifestUrl(input.profile.id, 'usb-animated-prototype'),
+    manifestUrl: embeddedManifestUrl(input.profile.id, 'usb-frame'),
     scopeKey: input.scopeKey ? markRaw(input.scopeKey) : undefined
   })
   plans.set(id, plan)

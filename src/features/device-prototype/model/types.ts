@@ -74,6 +74,7 @@ export interface DevicePrototypePreviewProfile {
 export interface DevicePrototypeInteractionOption {
   id: string
   name: string
+  contentKind: 'prototype' | 'animated-prototype'
   mode: DevicePrototypeMode
   stateCount: number
   initialStateName: string

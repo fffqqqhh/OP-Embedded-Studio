@@ -19,7 +19,7 @@ class FakeUsbContentPort {
   private helloResponseIndex = 0
 
   constructor(
-    private readonly helloResponses: string | null | string[] = 'OPUSB/1 READY 2 466 466 30343168'
+    private readonly helloResponses: string | null | string[] = 'OPUSB/1 READY 6 466 466 30343168 2'
   ) {}
 
   async open() {
@@ -107,8 +107,8 @@ describe('USB runtime content transfer', () => {
 
   test('classifies missing, resolution, and capacity firmware problems', async () => {
     const missing = new FakeUsbContentPort(null)
-    const resolution = new FakeUsbContentPort('OPUSB/1 READY 2 240 240 30343168')
-    const capacity = new FakeUsbContentPort('OPUSB/1 READY 2 466 466 100')
+    const resolution = new FakeUsbContentPort('OPUSB/1 READY 6 240 240 30343168 2')
+    const capacity = new FakeUsbContentPort('OPUSB/1 READY 6 466 466 100 2')
 
     await expect(
       probeUsbContentDevice(missing, { width: 466, height: 466 }, 90)
@@ -134,7 +134,7 @@ describe('USB runtime content transfer', () => {
     const port = new FakeUsbContentPort([
       'OPUSB/1 ERR -3 chunk_data',
       'OPUSB/1 ABORTED',
-      'OPUSB/1 READY 2 466 466 30343168'
+      'OPUSB/1 READY 6 466 466 30343168 2'
     ])
 
     await expect(probeUsbContentDevice(port, { width: 466, height: 466 }, 1024)).resolves.toEqual({
@@ -170,7 +170,7 @@ describe('USB runtime content transfer', () => {
 
   test('ignores delayed duplicate READY responses after the handshake', async () => {
     const port = new FakeUsbContentPort(
-      'OPUSB/1 READY 2 466 466 30343168\nOPUSB/1 READY 2 466 466 30343168'
+      'OPUSB/1 READY 6 466 466 30343168 2\nOPUSB/1 READY 6 466 466 30343168 2'
     )
 
     await expect(uploadUsbContent({ width: 466, height: 466 }, createContent(1024), { port })).resolves.toBe(

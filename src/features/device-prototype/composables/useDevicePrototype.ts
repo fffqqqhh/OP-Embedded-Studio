@@ -125,22 +125,27 @@ export function useDevicePrototype(scopeKey: object = defaultScope) {
     () => states.value.find((state) => state.id === selectedStateId.value) ?? null
   )
   const interactionOptions = computed<DevicePrototypeInteractionOption[]>(() =>
-    interactions.value
-      .filter((interaction) => !interaction.states.some((state) => state.animation))
-      .map((interaction) => {
+    interactions.value.map((interaction) => {
+        const animated = interaction.states.some((state) => state.animation)
         const firstState = interaction.states.at(0)
         const initialState = interaction.states.find(
           (state) => state.id === interaction.initialStateId
         )
-        const valid = interaction.states.length >= 2 && Boolean(initialState)
+        const animationStatesValid = !animated || interaction.states.every((state) => state.animation)
+        const valid =
+          interaction.states.length >= (animated ? 1 : 2) &&
+          Boolean(initialState) &&
+          animationStatesValid
         let reason = ''
         if (interaction.states.length === 0) reason = '尚未添加界面状态'
-        else if (interaction.states.length < 2) reason = '交互至少需要两个画面'
+        else if (!animationStatesValid) reason = 'PNG 动画状态不能与普通画面混用'
+        else if (!animated && interaction.states.length < 2) reason = '交互至少需要两个画面'
         else if (!initialState) reason = '未设置有效的初始状态'
 
         return {
           id: interaction.id,
           name: interaction.name,
+          contentKind: animated ? 'animated-prototype' : 'prototype',
           mode: interaction.mode,
           stateCount: interaction.states.length,
           initialStateName: initialState?.name ?? '',

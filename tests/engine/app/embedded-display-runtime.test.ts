@@ -20,9 +20,6 @@ describe('embedded display runtime catalog', () => {
     expect(bundledFirmwareManifestUrl(profileId, 'usb-frame')).toContain(
       '/embedded-display/firmware/usb-frame/'
     )
-    expect(bundledFirmwareManifestUrl(profileId, 'usb-animated-prototype')).toContain(
-      '/embedded-display/firmware/usb-animated-prototype/'
-    )
     expect(bundledFirmwareManifestUrl(profileId, 'wifi-frame')).toContain(
       '/embedded-display/firmware/wifi-frame/'
     )

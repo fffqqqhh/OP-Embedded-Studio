@@ -144,7 +144,6 @@ function handleAnimatedPrototypeBake(interactionId: string) {
           :selected-frames="selectedDevicePrototypeFrames"
           :render-frame="devicePrototypeFrameRenderer"
           :render-revision="editorStore.state.sceneVersion"
-          :bake-animation="handleAnimatedPrototypeBake"
         />
       </TabsContent>
 
@@ -160,6 +159,7 @@ function handleAnimatedPrototypeBake(interactionId: string) {
           :bake-frame-by-id="handleEmbeddedFrameBakeById"
           :prototype-options="interactionOptions"
           :bake-prototype="handleEmbeddedPrototypeBake"
+          :bake-animation="handleAnimatedPrototypeBake"
         />
       </TabsContent>
     </TabsRoot>

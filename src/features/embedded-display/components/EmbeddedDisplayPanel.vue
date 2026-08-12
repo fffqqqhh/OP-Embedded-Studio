@@ -28,6 +28,7 @@ import {
 } from '../adapters/wireless-sequence'
 import {
   flashUsbFrameFirmware,
+  flashUsbAnimatedPrototypeFirmware,
   flashUsbPrototypeFirmware,
   flashUsbSequenceFirmware,
   supportsUsbFrameFastFlash,
@@ -35,6 +36,7 @@ import {
 } from '../adapters/usb-content'
 import type { UsbContentSerialPort } from '../adapters/usb-content-transfer'
 import { imageFilesToUsbSequence } from '../adapters/usb-sequence'
+import { encodeUsbAnimatedPrototype } from '../adapters/animated-prototype'
 import type { SerialPortLike } from '../adapters/serial-flasher'
 import { useBleDeviceSession } from '../composables/useBleDeviceSession'
 import { useEmbeddedDisplay } from '../composables/useEmbeddedDisplay'
@@ -46,17 +48,20 @@ import type {
   EmbeddedFrameBake,
   EmbeddedFrameBakeById,
   EmbeddedFrameBakeState,
+  EmbeddedAnimatedPrototypeBake,
+  EmbeddedAnimatedPrototypeBakeResult,
   EmbeddedImagePayload,
   EmbeddedPrototypeBake,
   EmbeddedPrototypeOption,
   EmbeddedPrototypePayload
 } from '../model/types'
 
-const { bakeState, bakeFrame, bakeFrameById, bakePrototype, prototypeOptions } = defineProps<{
+const { bakeState, bakeFrame, bakeFrameById, bakePrototype, bakeAnimation, prototypeOptions } = defineProps<{
   bakeState?: EmbeddedFrameBakeState
   bakeFrame?: EmbeddedFrameBake
   bakeFrameById?: EmbeddedFrameBakeById
   bakePrototype?: EmbeddedPrototypeBake
+  bakeAnimation?: EmbeddedAnimatedPrototypeBake
   prototypeOptions?: EmbeddedPrototypeOption[]
 }>()
 
@@ -184,10 +189,18 @@ const imagePlacementOptions: Array<{ value: EmbeddedImagePlacement; label: strin
   { value: 'pixel-perfect', label: '不缩放' }
 ]
 const imagePlacementSummary = computed(() => embeddedImagePlacementLabel(imagePlacement.value))
+const availablePrototypeOptions = computed(() =>
+  (prototypeOptions ?? []).filter(
+    (option) => transportMode.value === 'usb' || option.contentKind !== 'animated-prototype'
+  )
+)
 const selectedPrototype = computed(
-  () => prototypeOptions?.find((option) => option.id === selectedPrototypeId.value) ?? null
+  () => availablePrototypeOptions.value.find((option) => option.id === selectedPrototypeId.value) ?? null
 )
 const selectedInteractionIsSlideshow = computed(() => selectedPrototype.value?.mode === 'slideshow')
+const selectedInteractionIsAnimated = computed(
+  () => selectedPrototype.value?.contentKind === 'animated-prototype'
+)
 const selectedInteractionModeLabel = computed(() => {
   if (selectedPrototype.value?.mode === 'slideshow') return '幻灯片'
   if (selectedPrototype.value?.mode === 'manual') return '手动浏览'
@@ -260,7 +273,8 @@ const canBleBakeAndUpload = computed(
     transportMode.value === 'ble' &&
     (burnMode.value === 'frame'
       ? canBake.value
-      : Boolean(bakePrototype && selectedPrototype.value) &&
+      : !selectedInteractionIsAnimated.value &&
+        Boolean(bakePrototype && selectedPrototype.value) &&
         prototypeReason.value === '' &&
         !prototypePending.value) &&
     (bleSession.deviceReady.value || bleSession.canReconnect.value) &&
@@ -277,7 +291,8 @@ const canWifiBakeAndUpload = computed(
     wifiTransferAvailable.value &&
     (burnMode.value === 'frame'
       ? canBake.value
-      : Boolean(bakePrototype && selectedPrototype.value) &&
+      : !selectedInteractionIsAnimated.value &&
+        Boolean(bakePrototype && selectedPrototype.value) &&
         prototypeReason.value === '' &&
         !prototypePending.value)
 )
@@ -302,7 +317,7 @@ function interactionModeLabel(mode: EmbeddedPrototypeOption['mode']): string {
 
 const prototypeSelectOptions = computed(() => [
   { value: NO_PROTOTYPE_VALUE, label: '请选择交互' },
-  ...(prototypeOptions ?? []).map((option) => ({
+  ...availablePrototypeOptions.value.map((option) => ({
     value: option.id,
     label: `${option.name} · ${interactionModeLabel(option.mode)} · ${option.stateCount} 个画面`
   }))
@@ -331,7 +346,7 @@ const canPreparePrototype = computed(
     (transportMode.value === 'usb' ||
       transportMode.value === 'wifi' ||
       transportMode.value === 'ble') &&
-    Boolean(bakePrototype && selectedPrototype.value) &&
+    Boolean((bakePrototype || bakeAnimation) && selectedPrototype.value) &&
     prototypeReason.value === '' &&
     !prototypePending.value &&
     !['uploading', 'building'].includes(buildStatus.value)
@@ -361,7 +376,7 @@ const canUsbPrototypeFlash = computed(
     transportMode.value === 'usb' &&
     burnMode.value === 'prototype' &&
     usbFrameFastSupported.value &&
-    Boolean(bakePrototype && selectedPrototype.value) &&
+    Boolean((bakePrototype || bakeAnimation) && selectedPrototype.value) &&
     prototypeReason.value === '' &&
     !prototypePending.value &&
     !usbFlashing.value &&
@@ -375,7 +390,7 @@ const wifiCredentials = computed(() =>
 )
 
 watch(
-  [transportMode, () => prototypeOptions],
+  [transportMode, availablePrototypeOptions],
   ([, options]) => {
     if (!options?.some((option) => option.id === selectedPrototypeId.value)) {
       selectedPrototypeId.value = options?.[0]?.id ?? ''
@@ -605,16 +620,26 @@ async function handleUsbPrototypeBakeAndFlash() {
   usbPreparing.value = true
   try {
     const port = await serialSession.requirePort()
-    if (!(await preparePrototypeResources(false))) return
-    const interactionPayload = selectedInteractionIsSlideshow.value
-      ? usbSequencePayload.value
-      : prototypePayload.value
+    const animated = selectedInteractionIsAnimated.value
+    const selectedInteraction = selectedPrototype.value
+    if (!selectedInteraction) return
+    let interactionPayload: EmbeddedPrototypePayload | WirelessImageSequencePayload | EmbeddedAnimatedPrototypeBakeResult | null
+    if (animated) {
+      interactionPayload = bakeAnimation?.(selectedInteraction.id) ?? null
+    } else {
+      if (!(await preparePrototypeResources(false))) return
+      interactionPayload = selectedInteractionIsSlideshow.value
+        ? usbSequencePayload.value
+        : prototypePayload.value
+    }
     if (!interactionPayload) return
     if (
       transportMode.value !== 'usb' ||
       burnMode.value !== 'prototype' ||
       selectedProfile.value?.id !== requestedProfileId ||
-      interactionPayload.profileId !== requestedProfileId
+      (!animated &&
+        !('states' in interactionPayload) &&
+        interactionPayload.profileId !== requestedProfileId)
     ) {
       return
     }
@@ -625,7 +650,16 @@ async function handleUsbPrototypeBakeAndFlash() {
     buildMessage.value = `正在准备 USB ${selectedInteractionModeLabel.value}内容…`
     buildLog.value = []
     let upload: (options: UsbFlashOptions) => Promise<number>
-    if (selectedInteractionIsSlideshow.value && usbSequencePayload.value) {
+    if (animated && 'states' in interactionPayload) {
+      const animationBake = interactionPayload as EmbeddedAnimatedPrototypeBakeResult
+      const payload = await encodeUsbAnimatedPrototype(
+        animationBake,
+        selectedProfile.value,
+        imagePlacement.value,
+        frameBackgroundColor.value
+      )
+      upload = (options) => flashUsbAnimatedPrototypeFirmware(payload, options)
+    } else if (selectedInteractionIsSlideshow.value && usbSequencePayload.value) {
       const sequence = usbSequencePayload.value
       upload = (options) => flashUsbSequenceFirmware(sequence, options)
     } else if (prototypePayload.value) {
