@@ -13,6 +13,7 @@ export const DEFAULT_EMBEDDED_DISPLAY_PROFILE_ID = 'co5300_waveshare_amoled_1_75
 
 const BUNDLED_FIRMWARE_PROFILES: Partial<Record<EmbeddedBuildMode, ReadonlySet<string>>> = {
   'usb-frame': new Set(['co5300_waveshare_amoled_1_75c']),
+  'usb-animated-prototype': new Set(['co5300_waveshare_amoled_1_75c']),
   'wifi-frame': new Set(['co5300_waveshare_amoled_1_75c']),
   'wifi-live': new Set(['co5300_waveshare_amoled_1_75c']),
   'ble-frame': new Set(['co5300_waveshare_amoled_1_75c'])

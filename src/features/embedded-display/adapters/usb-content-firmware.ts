@@ -23,6 +23,7 @@ export type UsbContentFirmwareStage =
 export interface TransferUsbContentWithFirmwareFallbackOptions {
   port: UsbContentSerialPort
   manifestUrl: string
+  firmwareBuildMode?: 'usb-frame' | 'usb-animated-prototype'
   transfer: (port: UsbContentSerialPort, firmwareUpdated: boolean) => Promise<number>
   onLog?: (message: string) => void
   onProgress?: (progress: SerialFlashProgress) => void
@@ -173,7 +174,7 @@ async function transferUsbContentWithFirmwareFallbackUnlocked(
   }
 
   options.onStage?.('flashing', '正在自动更新 USB 基础固件')
-  await dependencies.flashManifest(options.manifestUrl, 'usb-frame', {
+  await dependencies.flashManifest(options.manifestUrl, options.firmwareBuildMode ?? 'usb-frame', {
     port: firmwarePort as SerialPortLike,
     onLog: options.onLog,
     onProgress: options.onProgress

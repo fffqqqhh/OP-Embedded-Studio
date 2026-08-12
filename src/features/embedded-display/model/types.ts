@@ -76,6 +76,25 @@ export interface EmbeddedPrototypeBakeResult {
   }>
 }
 
+/** A state in the independent PNG-animation interaction firmware. */
+export interface EmbeddedAnimatedPrototypeBakeResult {
+  id: string
+  name: string
+  initialStateId: string
+  states: Array<{
+    id: string
+    name: string
+    frameDelayMs: number
+    loop: boolean
+    files: File[]
+  }>
+  transitions: Array<{
+    fromStateId: string
+    event: EmbeddedPrototypeEventId
+    toStateId: string
+  }>
+}
+
 export type EmbeddedPrototypeBake = (
   interactionId: string
 ) => Promise<EmbeddedPrototypeBakeResult | null>
@@ -130,6 +149,7 @@ export interface EmbeddedWifiCredentials {
 export type EmbeddedBuildMode =
   | 'usb-frame'
   | 'usb-prototype'
+  | 'usb-animated-prototype'
   | 'wifi-frame'
   | 'wifi-prototype'
   | 'wifi-live'

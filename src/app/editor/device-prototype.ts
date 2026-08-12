@@ -7,7 +7,10 @@ import type {
   DevicePrototypeInteraction
 } from '@/features/device-prototype'
 import { resolveDevicePrototypeTransitions } from '@/features/device-prototype'
-import type { EmbeddedPrototypeBakeResult } from '@/features/embedded-display'
+import type {
+  EmbeddedAnimatedPrototypeBakeResult,
+  EmbeddedPrototypeBakeResult
+} from '@/features/embedded-display'
 
 import {
   getEmbeddedFrameBakeState,
@@ -102,6 +105,33 @@ export async function bakeDevicePrototype(
     name: interaction.name,
     mode: interaction.mode,
     intervalMs: interaction.slideshow.intervalMs,
+    initialStateId: interaction.initialStateId,
+    states,
+    transitions: resolveDevicePrototypeTransitions(interaction).map((transition) => ({
+      ...transition
+    }))
+  }
+}
+
+export function bakeDevicePrototypeAnimation(
+  interaction: DevicePrototypeInteraction
+): EmbeddedAnimatedPrototypeBakeResult {
+  if (!interaction.states.length) throw new Error('动画交互至少需要一个状态')
+  const states = interaction.states.map((state) => {
+    if (!state.animation?.files.length) {
+      throw new Error(`状态“${state.name}”不是 PNG 动画状态，不能与动画交互固件混用`)
+    }
+    return {
+      id: state.id,
+      name: state.name,
+      frameDelayMs: state.animation.frameDelayMs,
+      loop: state.animation.loop,
+      files: [...state.animation.files]
+    }
+  })
+  return {
+    id: interaction.id,
+    name: interaction.name,
     initialStateId: interaction.initialStateId,
     states,
     transitions: resolveDevicePrototypeTransitions(interaction).map((transition) => ({

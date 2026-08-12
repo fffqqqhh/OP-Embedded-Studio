@@ -17,6 +17,7 @@ An embedded UI design, interaction prototyping, firmware flashing, and wireless 
 - USB 自动检查设备固件；固件不兼容时自动更新，再继续传输当前内容
 - 支持 USB、Wi-Fi、BLE 和 Wi-Fi 实时镜像
 - 支持本地单图、PNG 序列，以及独立 Android BLE 图片上传器
+- 交互栏可导入“状态级”PNG 序列：每个状态独立播放动画，并能由屏幕/BOOT 事件即时切换到另一段动画。该模式使用独立固件，不会改变普通烧录页的内容路径。
 - 保留 OpenPencil 的设计编辑、文档格式、MCP、CLI 和设计转代码基础能力
 
 <p align="center">

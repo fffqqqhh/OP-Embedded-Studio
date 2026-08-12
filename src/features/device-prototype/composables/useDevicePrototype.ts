@@ -28,6 +28,15 @@ export interface CreateDevicePrototypeInteractionInput {
   slideshow?: Partial<DevicePrototypeSlideshowSettings>
 }
 
+export interface AddDevicePrototypeAnimationInput {
+  name: string
+  width: number
+  height: number
+  files: File[]
+  frameDelayMs?: number
+  loop?: boolean
+}
+
 interface DevicePrototypeScopeState {
   interactions: Ref<DevicePrototypeInteraction[]>
   selectedInteractionId: Ref<string>
@@ -116,30 +125,32 @@ export function useDevicePrototype(scopeKey: object = defaultScope) {
     () => states.value.find((state) => state.id === selectedStateId.value) ?? null
   )
   const interactionOptions = computed<DevicePrototypeInteractionOption[]>(() =>
-    interactions.value.map((interaction) => {
-      const firstState = interaction.states.at(0)
-      const initialState = interaction.states.find(
-        (state) => state.id === interaction.initialStateId
-      )
-      const valid = interaction.states.length >= 2 && Boolean(initialState)
-      let reason = ''
-      if (interaction.states.length === 0) reason = '尚未添加界面状态'
-      else if (interaction.states.length < 2) reason = '交互至少需要两个画面'
-      else if (!initialState) reason = '未设置有效的初始状态'
+    interactions.value
+      .filter((interaction) => !interaction.states.some((state) => state.animation))
+      .map((interaction) => {
+        const firstState = interaction.states.at(0)
+        const initialState = interaction.states.find(
+          (state) => state.id === interaction.initialStateId
+        )
+        const valid = interaction.states.length >= 2 && Boolean(initialState)
+        let reason = ''
+        if (interaction.states.length === 0) reason = '尚未添加界面状态'
+        else if (interaction.states.length < 2) reason = '交互至少需要两个画面'
+        else if (!initialState) reason = '未设置有效的初始状态'
 
-      return {
-        id: interaction.id,
-        name: interaction.name,
-        mode: interaction.mode,
-        stateCount: interaction.states.length,
-        initialStateName: initialState?.name ?? '',
-        intervalMs: interaction.slideshow.intervalMs,
-        width: firstState?.width ?? 0,
-        height: firstState?.height ?? 0,
-        valid,
-        reason: reason || undefined
-      }
-    })
+        return {
+          id: interaction.id,
+          name: interaction.name,
+          mode: interaction.mode,
+          stateCount: interaction.states.length,
+          initialStateName: initialState?.name ?? '',
+          intervalMs: interaction.slideshow.intervalMs,
+          width: firstState?.width ?? 0,
+          height: firstState?.height ?? 0,
+          valid,
+          reason: reason || undefined
+        }
+      })
   )
 
   function updateSelectedInteraction(
@@ -235,6 +246,31 @@ export function useDevicePrototype(scopeKey: object = defaultScope) {
     selectedStateId.value = state.id
   }
 
+  function addAnimationState(input: AddDevicePrototypeAnimationInput) {
+    if (!selectedInteraction.value || !input.files.length) return
+    if (states.value.length >= DEVICE_PROTOTYPE_MAX_STATES) return
+    const id = createId('animation-state')
+    const state: DevicePrototypeState = {
+      id,
+      frameId: id,
+      name: input.name.trim() || `动画状态 ${states.value.length + 1}`,
+      width: input.width,
+      height: input.height,
+      animation: {
+        files: [...input.files],
+        frameDelayMs: Math.min(2000, Math.max(16, Math.round(input.frameDelayMs ?? 50))),
+        loop: input.loop ?? true
+      }
+    }
+    updateSelectedInteraction((interaction) => ({
+      ...interaction,
+      mode: 'custom',
+      states: [...interaction.states, state],
+      initialStateId: interaction.initialStateId || state.id
+    }))
+    selectedStateId.value = state.id
+  }
+
   function addFrames(candidates: DevicePrototypeFrameCandidate[]) {
     for (const candidate of candidates) {
       if (states.value.length >= DEVICE_PROTOTYPE_MAX_STATES) break
@@ -295,6 +331,26 @@ export function useDevicePrototype(scopeKey: object = defaultScope) {
     updateSelectedInteraction((interaction) => ({
       ...interaction,
       slideshow: { intervalMs: normalizeSlideshowInterval(intervalMs) }
+    }))
+  }
+
+  function setAnimationSettings(stateId: string, input: { frameDelayMs?: number; loop?: boolean }) {
+    updateSelectedInteraction((interaction) => ({
+      ...interaction,
+      states: interaction.states.map((state) => {
+        if (state.id !== stateId || !state.animation) return state
+        return {
+          ...state,
+          animation: {
+            ...state.animation,
+            frameDelayMs:
+              input.frameDelayMs === undefined
+                ? state.animation.frameDelayMs
+                : Math.min(2000, Math.max(16, Math.round(input.frameDelayMs))),
+            loop: input.loop ?? state.animation.loop
+          }
+        }
+      })
     }))
   }
 
@@ -376,6 +432,7 @@ export function useDevicePrototype(scopeKey: object = defaultScope) {
     selectInteraction,
     renameInteraction,
     addFrame,
+    addAnimationState,
     addFrames,
     removeState,
     moveState,
@@ -384,6 +441,7 @@ export function useDevicePrototype(scopeKey: object = defaultScope) {
     setManualEvent,
     setManualLoop,
     setSlideshowInterval,
+    setAnimationSettings,
     selectState,
     transitionTarget,
     setTransition,

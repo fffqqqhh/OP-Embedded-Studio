@@ -17,7 +17,11 @@
 #include "wireless_content.h"
 
 #define USB_PROTOCOL_PREFIX "OPUSB/1"
+#if CONFIG_OPENPENCIL_ANIMATED_PROTOTYPE
+#define USB_CONTENT_SERVICE_VERSION 5u
+#else
 #define USB_CONTENT_SERVICE_VERSION 2u
+#endif
 #define USB_CONTENT_CHUNK_BYTES 0x10000u
 #define USB_CONTENT_LINE_BYTES 128u
 #define USB_CONTENT_TASK_STACK_BYTES 6144u
@@ -218,11 +222,12 @@ static void usb_content_server_task(void *argument)
             char response[USB_CONTENT_LINE_BYTES];
             snprintf(response,
                      sizeof(response),
-                     USB_PROTOCOL_PREFIX " READY %u %u %u %u\n",
+                     USB_PROTOCOL_PREFIX " READY %u %u %u %u %u\n",
                      USB_CONTENT_SERVICE_VERSION,
                      CONFIG_EXAMPLE_LCD_H_RES,
                      CONFIG_EXAMPLE_LCD_V_RES,
-                     (unsigned)openpencil_content_capacity());
+                     (unsigned)openpencil_content_capacity(),
+                     (unsigned)openpencil_content_firmware_mode());
             result = usb_write_line(response);
             operation = "hello";
         } else if (strncmp(line, USB_PROTOCOL_PREFIX " BEGIN ", 14) == 0) {

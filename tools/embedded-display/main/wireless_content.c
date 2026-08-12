@@ -1,6 +1,7 @@
 #include "wireless_content.h"
 #include "lcd_panel_factory.h"
 
+#include <inttypes.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,7 @@ static const esp_partition_t *content_partition;
 static openpencil_content_header_t active_header;
 static openpencil_prototype_content_header_t active_prototype;
 static openpencil_sequence_content_header_t active_sequence;
+static openpencil_animated_content_header_t active_animated;
 static uint8_t sequence_decode_chunk[16384];
 static bool content_valid;
 static atomic_bool content_write_in_progress = ATOMIC_VAR_INIT(false);
@@ -93,7 +95,9 @@ bool openpencil_content_write_in_progress(void)
 
 uint8_t openpencil_content_firmware_mode(void)
 {
-#if CONFIG_OPENPENCIL_BLE_SERVER || CONFIG_OPENPENCIL_EXTERNAL_PROTOTYPE
+#if CONFIG_OPENPENCIL_ANIMATED_PROTOTYPE
+    return OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE;
+#elif CONFIG_OPENPENCIL_BLE_SERVER || CONFIG_OPENPENCIL_EXTERNAL_PROTOTYPE
     return OPENPENCIL_CONTENT_FIRMWARE_MODE_UNIFIED;
 #else
     return OPENPENCIL_CONTENT_MODE_FRAME;
@@ -108,6 +112,9 @@ static bool content_mode_supported(uint8_t mode)
 #endif
 #if CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK
     supported = supported || mode == OPENPENCIL_CONTENT_MODE_SEQUENCE;
+#endif
+#if CONFIG_OPENPENCIL_ANIMATED_PROTOTYPE
+    supported = supported || mode == OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE;
 #endif
     return supported;
 }
@@ -127,7 +134,8 @@ static bool common_header_matches(const openpencil_content_header_t *header)
 
 static bool layout_matches(const openpencil_content_header_t *header,
                            const openpencil_prototype_content_header_t *prototype,
-                           const openpencil_sequence_content_header_t *sequence)
+                           const openpencil_sequence_content_header_t *sequence,
+                           const openpencil_animated_content_header_t *animated)
 {
     if (!common_header_matches(header)) return false;
     const size_t frame_bytes = (size_t)header->width * header->height * sizeof(uint16_t);
@@ -144,6 +152,17 @@ static bool layout_matches(const openpencil_content_header_t *header,
                header->payload_bytes == sizeof(*sequence) + resources_bytes + sequence->data_bytes;
     }
 #endif
+    if (header->mode == OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE) {
+        if (!animated) return false;
+        const size_t state_bytes = (size_t)animated->state_count * sizeof(openpencil_animated_state_t);
+        const size_t transition_bytes = (size_t)animated->transition_count * sizeof(openpencil_content_transition_t);
+        const size_t resource_bytes = (size_t)animated->frame_count * sizeof(openpencil_sequence_resource_t);
+        return animated->state_count > 0 &&
+               animated->state_count <= OPENPENCIL_CONTENT_MAX_PROTOTYPE_STATES &&
+               animated->initial_state < animated->state_count &&
+               animated->frame_count > 0 && animated->frame_bytes == frame_bytes &&
+               sizeof(*animated) + state_bytes + transition_bytes + resource_bytes <= header->payload_bytes;
+    }
     if (!prototype || header->mode != OPENPENCIL_CONTENT_MODE_PROTOTYPE ||
         header->frame_count > OPENPENCIL_CONTENT_MAX_PROTOTYPE_STATES ||
         prototype->initial_state >= header->frame_count || prototype->frame_bytes != frame_bytes) {
@@ -157,27 +176,34 @@ static bool layout_matches(const openpencil_content_header_t *header,
 
 static esp_err_t validate_transitions(const openpencil_content_header_t *header,
                                       const openpencil_prototype_content_header_t *prototype,
+                                      const openpencil_animated_content_header_t *animated,
                                       const uint8_t *payload)
 {
-    if (header->mode != OPENPENCIL_CONTENT_MODE_PROTOTYPE) return ESP_OK;
-    for (uint16_t index = 0; index < prototype->transition_count; index++) {
+    const bool animated_mode = header->mode == OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE;
+    if (header->mode != OPENPENCIL_CONTENT_MODE_PROTOTYPE && !animated_mode) return ESP_OK;
+    const uint16_t state_count = animated_mode ? animated->state_count : header->frame_count;
+    const uint16_t transition_count = animated_mode ? animated->transition_count : prototype->transition_count;
+    const size_t transition_offset = animated_mode
+        ? sizeof(*animated) + (size_t)animated->state_count * sizeof(openpencil_animated_state_t)
+        : sizeof(*prototype);
+    for (uint16_t index = 0; index < transition_count; index++) {
         openpencil_content_transition_t transition;
         if (payload) {
             memcpy(&transition,
-                   payload + sizeof(*prototype) + (size_t)index * sizeof(transition),
+                   payload + transition_offset + (size_t)index * sizeof(transition),
                    sizeof(transition));
         } else {
             ESP_RETURN_ON_ERROR(
                 esp_partition_read(content_partition,
-                                   sizeof(*header) + sizeof(*prototype) +
+                                   sizeof(*header) + transition_offset +
                                        (size_t)index * sizeof(transition),
                                    &transition,
                                    sizeof(transition)),
                 TAG,
                 "read prototype transition failed");
         }
-        if (transition.from_state >= header->frame_count ||
-            transition.to_state >= header->frame_count || transition.event > 5) {
+        if (transition.from_state >= state_count ||
+            transition.to_state >= state_count || transition.event > 5) {
             return ESP_ERR_INVALID_ARG;
         }
     }
@@ -211,12 +237,23 @@ static esp_err_t validate_sequence_resources(
         if (resource.offset != expected_offset || resource.offset > sequence->data_bytes ||
             resource.stored_bytes == 0 ||
             resource.stored_bytes > sequence->data_bytes - resource.offset) {
+            ESP_LOGW(TAG, "sequence resource %u has invalid range: offset=%u, bytes=%u, data=%u",
+                     index, (unsigned)resource.offset, (unsigned)resource.stored_bytes,
+                     (unsigned)sequence->data_bytes);
             return ESP_ERR_INVALID_SIZE;
         }
         if (resource.codec == OPENPENCIL_SEQUENCE_CODEC_RAW_RGB565) {
-            if (resource.stored_bytes != frame_bytes) return ESP_ERR_INVALID_SIZE;
+            if (resource.stored_bytes != frame_bytes) {
+                ESP_LOGW(TAG, "sequence resource %u raw size mismatch: %u != %u",
+                         index, (unsigned)resource.stored_bytes, (unsigned)frame_bytes);
+                return ESP_ERR_INVALID_SIZE;
+            }
         } else if (resource.codec == OPENPENCIL_SEQUENCE_CODEC_RLE16) {
-            if (resource.stored_bytes % 4 != 0) return ESP_ERR_INVALID_SIZE;
+            if (resource.stored_bytes % 4 != 0) {
+                ESP_LOGW(TAG, "sequence resource %u has unaligned RLE payload: %u",
+                         index, (unsigned)resource.stored_bytes);
+                return ESP_ERR_INVALID_SIZE;
+            }
         } else if (resource.codec == OPENPENCIL_SEQUENCE_CODEC_PATCH_RGB565) {
             if (resource.stored_bytes <= sizeof(openpencil_sequence_patch_header_t)) {
                 return ESP_ERR_INVALID_SIZE;
@@ -227,6 +264,75 @@ static esp_err_t validate_sequence_resources(
         expected_offset += resource.stored_bytes;
     }
     return expected_offset == sequence->data_bytes ? ESP_OK : ESP_ERR_INVALID_SIZE;
+}
+
+static esp_err_t validate_animated_resources(
+    const openpencil_content_header_t *header,
+    const openpencil_animated_content_header_t *animated,
+    const uint8_t *payload)
+{
+    if (header->mode != OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE) return ESP_OK;
+    const size_t frame_bytes = (size_t)header->width * header->height * sizeof(uint16_t);
+    const size_t metadata_bytes = sizeof(*animated) +
+                                  (size_t)animated->state_count * sizeof(openpencil_animated_state_t) +
+                                  (size_t)animated->transition_count * sizeof(openpencil_content_transition_t);
+    const size_t resource_bytes = (size_t)animated->frame_count * sizeof(openpencil_sequence_resource_t);
+    if (metadata_bytes + resource_bytes > header->payload_bytes) {
+        ESP_LOGW(TAG, "animated metadata exceeds payload: metadata=%u, resources=%u, payload=%u",
+                 (unsigned)metadata_bytes, (unsigned)resource_bytes,
+                 (unsigned)header->payload_bytes);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    const size_t data_bytes = header->payload_bytes - metadata_bytes - resource_bytes;
+    size_t expected_offset = 0;
+    for (uint16_t index = 0; index < animated->frame_count; index++) {
+        openpencil_sequence_resource_t resource;
+        if (payload) {
+            memcpy(&resource,
+                   payload + metadata_bytes + (size_t)index * sizeof(resource),
+                   sizeof(resource));
+        } else {
+            ESP_RETURN_ON_ERROR(
+                esp_partition_read(content_partition,
+                                   sizeof(*header) + metadata_bytes +
+                                       (size_t)index * sizeof(resource),
+                                   &resource,
+                                   sizeof(resource)),
+                TAG,
+                "read animated resource failed");
+        }
+        if (resource.offset != expected_offset || resource.offset > data_bytes ||
+            resource.stored_bytes == 0 || resource.stored_bytes > data_bytes - resource.offset) {
+            ESP_LOGW(TAG, "animated resource %u has invalid range: offset=%u, bytes=%u, data=%u",
+                     index, (unsigned)resource.offset, (unsigned)resource.stored_bytes,
+                     (unsigned)data_bytes);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if (resource.codec == OPENPENCIL_SEQUENCE_CODEC_RAW_RGB565) {
+            if (resource.stored_bytes != frame_bytes) {
+                ESP_LOGW(TAG, "animated resource %u raw size mismatch: %u != %u",
+                         index, (unsigned)resource.stored_bytes, (unsigned)frame_bytes);
+                return ESP_ERR_INVALID_SIZE;
+            }
+        } else if (resource.codec == OPENPENCIL_SEQUENCE_CODEC_RLE16) {
+            if (resource.stored_bytes % 4 != 0) {
+                ESP_LOGW(TAG, "animated resource %u has unaligned RLE payload: %u",
+                         index, (unsigned)resource.stored_bytes);
+                return ESP_ERR_INVALID_SIZE;
+            }
+        } else {
+            ESP_LOGW(TAG, "animated resource %u uses unsupported codec: %u",
+                     index, resource.codec);
+            return ESP_ERR_NOT_SUPPORTED;
+        }
+        expected_offset += resource.stored_bytes;
+    }
+    if (expected_offset != data_bytes) {
+        ESP_LOGW(TAG, "animated resource data length mismatch: resources=%u, data=%u",
+                 (unsigned)expected_offset, (unsigned)data_bytes);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
 }
 
 esp_err_t openpencil_content_init(void)
@@ -244,6 +350,7 @@ esp_err_t openpencil_content_init(void)
                         "read content header failed");
     openpencil_prototype_content_header_t prototype = {0};
     openpencil_sequence_content_header_t sequence = {0};
+    openpencil_animated_content_header_t animated = {0};
     if (header.mode == OPENPENCIL_CONTENT_MODE_PROTOTYPE) {
         ESP_RETURN_ON_ERROR(esp_partition_read(content_partition, sizeof(header), &prototype,
                                                sizeof(prototype)),
@@ -254,9 +361,18 @@ esp_err_t openpencil_content_init(void)
                                                sizeof(sequence)),
                             TAG,
                             "read sequence header failed");
+    } else if (header.mode == OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE) {
+        ESP_RETURN_ON_ERROR(esp_partition_read(content_partition, sizeof(header), &animated,
+                                               sizeof(animated)),
+                            TAG,
+                            "read animated header failed");
     }
-    if (!layout_matches(&header, &prototype, &sequence)) {
-        ESP_LOGI(TAG, "no valid wireless content; using generated image");
+    if (!layout_matches(&header, &prototype, &sequence, &animated)) {
+        ESP_LOGW(TAG, "invalid content layout: mode=%u, frame_count=%u, %ux%u, payload=%u; animated states=%u, transitions=%u, frames=%u, frame_bytes=%u",
+                 header.mode, header.frame_count, header.width, header.height,
+                 (unsigned)header.payload_bytes, animated.state_count,
+                 animated.transition_count, animated.frame_count,
+                 (unsigned)animated.frame_bytes);
         content_valid = false;
         return ESP_OK;
     }
@@ -276,16 +392,26 @@ esp_err_t openpencil_content_init(void)
         offset += length;
         remaining -= length;
         chunks_since_yield += 1;
-        if (header.mode != OPENPENCIL_CONTENT_MODE_SEQUENCE || chunks_since_yield >= 64) {
+        if ((header.mode != OPENPENCIL_CONTENT_MODE_SEQUENCE &&
+             header.mode != OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE) || chunks_since_yield >= 64) {
             vTaskDelay(pdMS_TO_TICKS(1));
             chunks_since_yield = 0;
         }
     }
     free(chunk);
-    if (crc != header.payload_crc32 ||
-        validate_transitions(&header, &prototype, NULL) != ESP_OK ||
-        validate_sequence_resources(&header, &sequence, NULL) != ESP_OK) {
-        ESP_LOGW(TAG, "wireless content validation failed; using generated image");
+    if (crc != header.payload_crc32) {
+        ESP_LOGW(TAG, "content CRC mismatch: received=%08" PRIx32 ", expected=%08" PRIx32,
+                 crc, header.payload_crc32);
+        content_valid = false;
+        return ESP_OK;
+    }
+    const esp_err_t transition_result = validate_transitions(&header, &prototype, &animated, NULL);
+    const esp_err_t resource_result = header.mode == OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE
+                                          ? validate_animated_resources(&header, &animated, NULL)
+                                          : validate_sequence_resources(&header, &sequence, NULL);
+    if (transition_result != ESP_OK || resource_result != ESP_OK) {
+        ESP_LOGW(TAG, "content validation failed: transitions=%s, resources=%s",
+                 esp_err_to_name(transition_result), esp_err_to_name(resource_result));
         content_valid = false;
         return ESP_OK;
     }
@@ -293,6 +419,7 @@ esp_err_t openpencil_content_init(void)
     active_header = header;
     active_prototype = prototype;
     active_sequence = sequence;
+    active_animated = animated;
     content_valid = true;
     ESP_LOGI(TAG, "wireless content ready: mode=%u, %ux%u, frames=%u, %u bytes",
              header.mode, header.width, header.height, header.frame_count,
@@ -315,6 +442,11 @@ bool openpencil_content_is_sequence(void)
     return content_valid && active_header.mode == OPENPENCIL_CONTENT_MODE_SEQUENCE;
 }
 
+bool openpencil_content_is_animated_prototype(void)
+{
+    return content_valid && active_header.mode == OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE;
+}
+
 uint16_t openpencil_content_frame_delay_ms(void)
 {
     return openpencil_content_is_sequence() ? active_sequence.frame_delay_ms : 0;
@@ -327,20 +459,38 @@ const openpencil_content_header_t *openpencil_content_header(void)
 
 uint16_t openpencil_content_initial_state(void)
 {
+    if (openpencil_content_is_animated_prototype()) return active_animated.initial_state;
     return openpencil_content_is_prototype() ? active_prototype.initial_state : 0;
+}
+
+esp_err_t openpencil_content_animated_state(uint16_t state, openpencil_animated_state_t *descriptor)
+{
+    ESP_RETURN_ON_FALSE(openpencil_content_is_animated_prototype() && descriptor &&
+                            state < active_animated.state_count,
+                        ESP_ERR_INVALID_ARG, TAG, "invalid animated state");
+    const size_t offset = sizeof(active_header) + sizeof(active_animated) +
+                          (size_t)state * sizeof(*descriptor);
+    return esp_partition_read(content_partition, offset, descriptor, sizeof(*descriptor));
 }
 
 esp_err_t openpencil_content_transition_target(uint16_t state, uint8_t event, uint16_t *target)
 {
-    if (!openpencil_content_is_prototype() || !target || state >= active_header.frame_count) {
+    const bool animated = openpencil_content_is_animated_prototype();
+    if ((!openpencil_content_is_prototype() && !animated) || !target ||
+        state >= (animated ? active_animated.state_count : active_header.frame_count)) {
         return ESP_ERR_INVALID_ARG;
     }
     *target = state;
-    for (uint16_t index = 0; index < active_prototype.transition_count; index++) {
+    const uint16_t transition_count = animated ? active_animated.transition_count : active_prototype.transition_count;
+    const size_t transition_offset = sizeof(active_header) +
+                                     (animated ? sizeof(active_animated) +
+                                                     (size_t)active_animated.state_count * sizeof(openpencil_animated_state_t)
+                                               : sizeof(active_prototype));
+    for (uint16_t index = 0; index < transition_count; index++) {
         openpencil_content_transition_t transition;
         ESP_RETURN_ON_ERROR(
             esp_partition_read(content_partition,
-                               sizeof(active_header) + sizeof(active_prototype) +
+                               transition_offset +
                                    (size_t)index * sizeof(transition),
                                &transition,
                                sizeof(transition)),
@@ -356,11 +506,18 @@ esp_err_t openpencil_content_transition_target(uint16_t state, uint8_t event, ui
 
 bool openpencil_content_state_uses_multi_click(uint16_t state)
 {
-    if (!openpencil_content_is_prototype() || state >= active_header.frame_count) return false;
-    for (uint16_t index = 0; index < active_prototype.transition_count; index++) {
+    const bool animated = openpencil_content_is_animated_prototype();
+    if ((!openpencil_content_is_prototype() && !animated) ||
+        state >= (animated ? active_animated.state_count : active_header.frame_count)) return false;
+    const uint16_t transition_count = animated ? active_animated.transition_count : active_prototype.transition_count;
+    const size_t transition_offset = sizeof(active_header) +
+                                     (animated ? sizeof(active_animated) +
+                                                     (size_t)active_animated.state_count * sizeof(openpencil_animated_state_t)
+                                               : sizeof(active_prototype));
+    for (uint16_t index = 0; index < transition_count; index++) {
         openpencil_content_transition_t transition;
         if (esp_partition_read(content_partition,
-                               sizeof(active_header) + sizeof(active_prototype) +
+                               transition_offset +
                                    (size_t)index * sizeof(transition),
                                &transition,
                                sizeof(transition)) != ESP_OK) {
@@ -377,13 +534,20 @@ static esp_err_t read_sequence_resource(uint16_t frame_index,
                                         openpencil_sequence_resource_t *resource,
                                         size_t *data_offset)
 {
-    ESP_RETURN_ON_FALSE(openpencil_content_is_sequence() && resource && data_offset &&
+    const bool animated = openpencil_content_is_animated_prototype();
+    ESP_RETURN_ON_FALSE((openpencil_content_is_sequence() || animated) && resource && data_offset &&
                             frame_index < active_header.frame_count,
                         ESP_ERR_INVALID_ARG,
                         TAG,
                         "invalid sequence resource request");
+    const size_t metadata_bytes = animated
+                                      ? sizeof(active_animated) +
+                                            (size_t)active_animated.state_count * sizeof(openpencil_animated_state_t) +
+                                            (size_t)active_animated.transition_count * sizeof(openpencil_content_transition_t)
+                                      : sizeof(active_sequence);
+    const uint16_t resource_count = animated ? active_animated.frame_count : active_sequence.resource_count;
     const size_t resource_offset =
-        sizeof(active_header) + sizeof(active_sequence) +
+        sizeof(active_header) + metadata_bytes +
         (size_t)frame_index * sizeof(*resource);
     ESP_RETURN_ON_ERROR(esp_partition_read(content_partition,
                                            resource_offset,
@@ -391,8 +555,8 @@ static esp_err_t read_sequence_resource(uint16_t frame_index,
                                            sizeof(*resource)),
                         TAG,
                         "read sequence resource failed");
-    *data_offset = sizeof(active_header) + sizeof(active_sequence) +
-                   (size_t)active_sequence.resource_count * sizeof(*resource) +
+    *data_offset = sizeof(active_header) + metadata_bytes +
+                   (size_t)resource_count * sizeof(*resource) +
                    resource->offset;
     return ESP_OK;
 }
@@ -535,7 +699,8 @@ esp_err_t openpencil_content_load_frame(uint16_t frame_index, uint16_t *destinat
     const size_t frame_pixels = frame_bytes / sizeof(uint16_t);
     if (pixels < frame_pixels) return ESP_ERR_INVALID_SIZE;
 
-    if (active_header.mode == OPENPENCIL_CONTENT_MODE_SEQUENCE) {
+    if (active_header.mode == OPENPENCIL_CONTENT_MODE_SEQUENCE ||
+        active_header.mode == OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE) {
         openpencil_sequence_resource_t resource;
         size_t data_offset = 0;
         ESP_RETURN_ON_ERROR(read_sequence_resource(frame_index, &resource, &data_offset),
@@ -594,7 +759,8 @@ esp_err_t openpencil_content_reconstruct_sequence_frame(uint16_t frame_index,
                                                         uint16_t *destination,
                                                         size_t pixels)
 {
-    ESP_RETURN_ON_FALSE(content_valid && active_header.mode == OPENPENCIL_CONTENT_MODE_SEQUENCE &&
+    ESP_RETURN_ON_FALSE(content_valid && (active_header.mode == OPENPENCIL_CONTENT_MODE_SEQUENCE ||
+                            active_header.mode == OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE) &&
                             previous_frame && destination && previous_frame != destination &&
                             frame_index < active_header.frame_count,
                         ESP_ERR_INVALID_STATE,

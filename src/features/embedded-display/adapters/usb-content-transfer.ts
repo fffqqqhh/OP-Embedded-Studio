@@ -5,7 +5,9 @@ const USB_CONTENT_HEADER_BYTES = 24
 const USB_CONTENT_CHUNK_BYTES = 0x10000
 const USB_CONTENT_MAGIC = 0x4f504331
 const USB_CONTENT_SERVICE_VERSION = 2
-const USB_HANDSHAKE_TIMEOUT_MS = 2500
+const USB_ANIMATED_CONTENT_SERVICE_VERSION = 5
+const USB_HANDSHAKE_TIMEOUT_MS = 10000
+const USB_HANDSHAKE_RETRY_MS = 750
 const USB_COMMAND_TIMEOUT_MS = 15000
 
 export type UsbContentFirmwareIssue = 'missing' | 'protocol' | 'resolution' | 'capacity'
@@ -117,6 +119,24 @@ function assertProtocolResponse(line: string, expected: string): void {
   }
 }
 
+async function readExpectedProtocolResponse(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  state: ProtocolReaderState,
+  expected: string
+): Promise<void> {
+  const deadline = Date.now() + USB_COMMAND_TIMEOUT_MS
+  for (;;) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error('等待 USB 设备响应超时')
+    const line = await readProtocolLine(reader, state, remaining)
+    // HELLO may have been retried while the device was starting. Ignore any
+    // delayed READY frames left in the stream once a transfer has begun.
+    if (/^OPUSB\/1 READY \d+ \d+ \d+ \d+(?: \d+)?$/u.test(line)) continue
+    assertProtocolResponse(line, expected)
+    return
+  }
+}
+
 async function deflateChunk(bytes: Uint8Array): Promise<EncodedUsbChunk> {
   if (typeof CompressionStream === 'undefined') return { codec: 0, bytes }
   const copy = new Uint8Array(bytes.byteLength)
@@ -152,7 +172,11 @@ async function handshakeUsbDevice(
   state: ProtocolReaderState,
   profile: { width: number; height: number },
   contentBytes: number,
-  options: { timeoutIsMissing?: boolean } = {}
+  options: {
+    timeoutIsMissing?: boolean
+    expectedFirmwareMode?: number
+    expectedServiceVersion?: number
+  } = {}
 ): Promise<number> {
   await writeProtocolLine(writer, 'HELLO')
   const deadline = Date.now() + USB_HANDSHAKE_TIMEOUT_MS
@@ -161,7 +185,15 @@ async function handshakeUsbDevice(
     for (;;) {
       const remaining = deadline - Date.now()
       if (remaining <= 0) throw new Error('等待 USB 设备响应超时')
-      line = await readProtocolLine(reader, state, remaining)
+      try {
+        line = await readProtocolLine(reader, state, Math.min(remaining, USB_HANDSHAKE_RETRY_MS))
+      } catch (error) {
+        if (error instanceof Error && /响应超时/u.test(error.message)) {
+          await writeProtocolLine(writer, 'HELLO')
+          continue
+        }
+        throw error
+      }
       if (/^OPUSB\/1 (?:ERR -?\d+ \S+|ABORTED)$/u.test(line)) {
         await writeProtocolLine(writer, 'HELLO')
         continue
@@ -176,7 +208,7 @@ async function handshakeUsbDevice(
       error instanceof Error ? error.message : 'USB 设备尚未准备好'
     )
   }
-  const ready = line.match(/^OPUSB\/1 READY (\d+) (\d+) (\d+) (\d+)$/)
+  const ready = line.match(/^OPUSB\/1 READY (\d+) (\d+) (\d+) (\d+)(?: (\d+))?$/)
   if (!ready) {
     throw new UsbContentFirmwareError('protocol', `USB 高速固件握手失败：${line}`)
   }
@@ -184,16 +216,28 @@ async function handshakeUsbDevice(
   const width = Number(ready[2])
   const height = Number(ready[3])
   const capacity = Number(ready[4])
-  if (version !== USB_CONTENT_SERVICE_VERSION) {
+  const firmwareMode = ready[5] === undefined ? undefined : Number(ready[5])
+  const expectedServiceVersion = options.expectedServiceVersion ?? USB_CONTENT_SERVICE_VERSION
+  if (version !== expectedServiceVersion) {
     throw new UsbContentFirmwareError(
       'protocol',
-      `设备内容服务版本为 ${version}，Studio 需要版本 ${USB_CONTENT_SERVICE_VERSION}`
+      `设备内容服务版本为 ${version}，Studio 需要版本 ${expectedServiceVersion}`
     )
   }
   if (width !== profile.width || height !== profile.height) {
     throw new UsbContentFirmwareError(
       'resolution',
       `设备分辨率为 ${width} × ${height}，与当前方案不匹配`
+    )
+  }
+  if (
+    options.expectedFirmwareMode !== undefined &&
+    firmwareMode !== undefined &&
+    firmwareMode !== options.expectedFirmwareMode
+  ) {
+    throw new UsbContentFirmwareError(
+      'protocol',
+      '设备正在运行另一种内容固件，请让 Studio 自动刷新动画交互固件后重试'
     )
   }
   if (contentBytes > capacity) {
@@ -259,10 +303,7 @@ async function transferUsbPayload(
     )
     await writer.write(encoded.bytes)
     const nextOffset = payloadOffset + raw.byteLength
-    assertProtocolResponse(
-      await readProtocolLine(reader, state, USB_COMMAND_TIMEOUT_MS),
-      `ACK ${nextOffset}`
-    )
+    await readExpectedProtocolResponse(reader, state, `ACK ${nextOffset}`)
     payloadOffset = nextOffset
     wireBytes += encoded.bytes.byteLength
     options.onProgress?.({
@@ -326,16 +367,18 @@ export async function uploadUsbContent(
       writer,
       readerState,
       profile,
-      content.byteLength
+      content.byteLength,
+      {
+        expectedFirmwareMode: content[6] === 3 ? 3 : 2,
+        expectedServiceVersion:
+          content[6] === 3 ? USB_ANIMATED_CONTENT_SERVICE_VERSION : USB_CONTENT_SERVICE_VERSION
+      }
     )
 
     options.onLog?.(`USB 高速固件已连接，内容容量 ${(capacity / 1024 / 1024).toFixed(2)} MiB`)
     await writeProtocolLine(writer, `BEGIN ${content.byteLength}`)
     await writer.write(content.subarray(0, USB_CONTENT_HEADER_BYTES))
-    assertProtocolResponse(
-      await readProtocolLine(reader, readerState, USB_COMMAND_TIMEOUT_MS),
-      'ACK 0'
-    )
+    await readExpectedProtocolResponse(reader, readerState, 'ACK 0')
     transferStarted = true
 
     const wireBytes = await transferUsbPayload(reader, writer, readerState, content, options)
@@ -344,10 +387,7 @@ export async function uploadUsbContent(
       `内容传输完成：${(content.byteLength / 1024 / 1024).toFixed(2)} MiB，USB 实际发送 ${(wireBytes / 1024 / 1024).toFixed(2)} MiB`
     )
     await writeProtocolLine(writer, 'END')
-    assertProtocolResponse(
-      await readProtocolLine(reader, readerState, USB_COMMAND_TIMEOUT_MS),
-      'DONE'
-    )
+    await readExpectedProtocolResponse(reader, readerState, 'DONE')
     transferStarted = false
     options.onProgress?.({ written: content.byteLength, total: content.byteLength, percent: 100 })
     options.onLog?.('内容校验通过，设备正在重启。')

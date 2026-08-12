@@ -23,6 +23,7 @@
 #include "generated_prototype.h"
 #include "lcd_panel_factory.h"
 #include "prototype_runtime.h"
+#include "animated_prototype_runtime.h"
 #include "sequence_player.h"
 #include "wireless_content.h"
 #include "wireless_diagnostic_view.h"
@@ -251,6 +252,15 @@ void app_main(void)
 
 #if CONFIG_OPENPENCIL_EXTERNAL_CONTENT_ONLY || CONFIG_OPENPENCIL_WIFI_SERVER || CONFIG_OPENPENCIL_BLE_SERVER
     if (LCD_GENERATED_IMAGE_PIXEL_COUNT == 0 && openpencil_content_is_valid()) {
+#if CONFIG_OPENPENCIL_ANIMATED_PROTOTYPE
+        if (openpencil_content_is_animated_prototype()) {
+#if CONFIG_OPENPENCIL_USB_CONTENT_SERVER
+            ESP_ERROR_CHECK(openpencil_usb_content_server_start());
+#endif
+            ESP_ERROR_CHECK(openpencil_wireless_animated_prototype_run(panel_handle, frame_buffer));
+            return;
+        }
+#endif
 #if CONFIG_OPENPENCIL_BLE_SERVER || CONFIG_OPENPENCIL_EXTERNAL_PROTOTYPE
         if (openpencil_content_is_prototype()) {
 #if CONFIG_OPENPENCIL_BLE_SERVER

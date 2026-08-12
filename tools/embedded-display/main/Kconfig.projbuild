@@ -23,6 +23,11 @@ menu "Example Configuration"
         depends on OPENPENCIL_EXTERNAL_CONTENT_ONLY || OPENPENCIL_WIFI_SERVER || OPENPENCIL_BLE_SERVER
         default n
 
+    config OPENPENCIL_ANIMATED_PROTOTYPE
+        bool "Allow PNG animation interaction content from the content partition"
+        depends on OPENPENCIL_EXTERNAL_CONTENT_ONLY || OPENPENCIL_USB_CONTENT_SERVER
+        default n
+
     config OPENPENCIL_LAN_STATUS_SCREEN
         bool "Show LAN connection details while waiting for content"
         default n

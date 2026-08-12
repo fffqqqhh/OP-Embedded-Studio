@@ -10,6 +10,7 @@
 #define OPENPENCIL_CONTENT_MODE_FRAME 0u
 #define OPENPENCIL_CONTENT_MODE_PROTOTYPE 1u
 #define OPENPENCIL_CONTENT_MODE_SEQUENCE 2u
+#define OPENPENCIL_CONTENT_MODE_ANIMATED_PROTOTYPE 3u
 #define OPENPENCIL_CONTENT_FIRMWARE_MODE_UNIFIED 2u
 #define OPENPENCIL_CONTENT_MAX_PROTOTYPE_STATES 10u
 #define OPENPENCIL_SEQUENCE_CODEC_RAW_RGB565 0u
@@ -43,6 +44,25 @@ typedef struct __attribute__((packed)) {
     uint16_t resource_count;
     uint32_t data_bytes;
 } openpencil_sequence_content_header_t;
+
+typedef struct __attribute__((packed)) {
+    uint16_t initial_state;
+    uint16_t state_count;
+    uint16_t transition_count;
+    uint16_t frame_count;
+    uint32_t frame_bytes;
+} openpencil_animated_content_header_t;
+
+typedef struct __attribute__((packed)) {
+    uint16_t first_frame;
+    uint16_t frame_count;
+    uint16_t frame_delay_ms;
+    uint8_t loop;
+    uint8_t reserved[5];
+} openpencil_animated_state_t;
+
+_Static_assert(sizeof(openpencil_animated_state_t) == 12,
+               "animated state descriptor must match the Studio wire format");
 
 typedef struct __attribute__((packed)) {
     uint32_t offset;
@@ -80,6 +100,8 @@ bool openpencil_content_write_in_progress(void);
 bool openpencil_content_is_valid(void);
 bool openpencil_content_is_prototype(void);
 bool openpencil_content_is_sequence(void);
+bool openpencil_content_is_animated_prototype(void);
+esp_err_t openpencil_content_animated_state(uint16_t state, openpencil_animated_state_t *descriptor);
 uint16_t openpencil_content_frame_delay_ms(void);
 const openpencil_content_header_t *openpencil_content_header(void);
 uint16_t openpencil_content_initial_state(void);

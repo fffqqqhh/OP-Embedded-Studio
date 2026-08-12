@@ -7,6 +7,7 @@ import { useI18n } from '@open-pencil/vue'
 import { useEditorStore } from '@/app/editor/active-store'
 import {
   bakeDevicePrototype,
+  bakeDevicePrototypeAnimation,
   createDevicePrototypeFrameRenderer,
   getDevicePrototypeFrameCandidate,
   getSelectedDevicePrototypeFrameCandidates
@@ -49,6 +50,11 @@ async function handleEmbeddedPrototypeBake(interactionId: string) {
   const interaction = interactions.value.find((item) => item.id === interactionId)
   if (!interaction) return null
   return bakeDevicePrototype(editorStore, interaction)
+}
+
+function handleAnimatedPrototypeBake(interactionId: string) {
+  const interaction = interactions.value.find((item) => item.id === interactionId)
+  return interaction ? bakeDevicePrototypeAnimation(interaction) : null
 }
 </script>
 
@@ -138,6 +144,7 @@ async function handleEmbeddedPrototypeBake(interactionId: string) {
           :selected-frames="selectedDevicePrototypeFrames"
           :render-frame="devicePrototypeFrameRenderer"
           :render-revision="editorStore.state.sceneVersion"
+          :bake-animation="handleAnimatedPrototypeBake"
         />
       </TabsContent>
 

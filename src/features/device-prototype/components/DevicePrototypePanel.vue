@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 
 import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
@@ -8,7 +8,11 @@ import { PanelHeader, PanelSection } from '@/components/ui/panel'
 import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 import {
   getActiveEmbeddedDisplayProfile,
-  getActiveEmbeddedImageSettings
+  getActiveEmbeddedImageSettings,
+  executeUsbFrameDeployment,
+  prepareUsbAnimatedPrototypeDeployment,
+  type EmbeddedAnimatedPrototypeBakeResult,
+  type UsbFrameDeploymentPlan
 } from '@/features/embedded-display'
 
 import DevicePrototypePreview from './DevicePrototypePreview.vue'
@@ -27,7 +31,8 @@ const {
   selectedFrame,
   selectedFrames = [],
   renderFrame,
-  renderRevision
+  renderRevision,
+  bakeAnimation
 } = defineProps<{
   active?: boolean
   scopeKey?: object
@@ -35,9 +40,15 @@ const {
   selectedFrames?: DevicePrototypeFrameCandidate[]
   renderFrame?: DevicePrototypeFrameRender
   renderRevision?: number
+  bakeAnimation?: (interactionId: string) => EmbeddedAnimatedPrototypeBakeResult | null
 }>()
 
 const previewOpen = ref(false)
+const animationFileInput = ref<HTMLInputElement>()
+const animationImportError = ref('')
+const animationDeploymentError = ref('')
+const animationDeploying = ref(false)
+const animationDeploymentPlan = shallowRef<UsbFrameDeploymentPlan>()
 const {
   events,
   interactions,
@@ -52,6 +63,7 @@ const {
   selectInteraction,
   renameInteraction,
   addFrame,
+  addAnimationState,
   addFrames,
   removeState,
   moveState,
@@ -60,6 +72,7 @@ const {
   setManualEvent,
   setManualLoop,
   setSlideshowInterval,
+  setAnimationSettings,
   selectState,
   transitionTarget,
   setTransition
@@ -82,6 +95,11 @@ const canAddSelection = computed(
 )
 const canPreview = computed(() =>
   Boolean(renderFrame && selectedInteraction.value?.initialStateId && states.value.length)
+)
+const animatedInteractionReady = computed(
+  () =>
+    Boolean(selectedInteraction.value?.states.length) &&
+    selectedInteraction.value?.states.every((state) => state.animation?.files.length)
 )
 const displayProfile = computed(() => getActiveEmbeddedDisplayProfile())
 const imageSettings = computed(() => getActiveEmbeddedImageSettings())
@@ -111,6 +129,14 @@ const mode = computed({
   get: () => selectedInteraction.value?.mode ?? 'manual',
   set: (value: string) => setMode(value as DevicePrototypeMode)
 })
+
+function deploymentStageLabel(stage: UsbFrameDeploymentPlan['firmwareStage']): string {
+  if (stage === 'running') return '进行中'
+  if (stage === 'done') return '已刷新'
+  if (stage === 'skipped') return '已就绪'
+  if (stage === 'error') return '失败'
+  return '等待中'
+}
 const nextEvent = computed({
   get: () => selectedInteraction.value?.manual.nextEvent ?? 'screen_click',
   set: (value: DevicePrototypeEventId) => setManualEvent('next', value)
@@ -133,6 +159,70 @@ function addSelectedSources() {
   else if (selectedFrame) addFrame(selectedFrame)
 }
 
+function chooseAnimationFiles() {
+  animationImportError.value = ''
+  animationFileInput.value?.click()
+}
+
+async function importAnimationState(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  if (!files.length) return
+  try {
+    if (
+      files.some((file) => file.type !== 'image/png' && !file.name.toLowerCase().endsWith('.png'))
+    ) {
+      throw new Error('动画状态只支持 PNG 文件')
+    }
+    const bitmap = await createImageBitmap(files[0])
+    const name =
+      files[0].name.replace(/(?:[_-]?\d+)?\.png$/iu, '') || `动画状态 ${states.value.length + 1}`
+    addAnimationState({ name, width: bitmap.width, height: bitmap.height, files })
+    bitmap.close()
+  } catch (error) {
+    animationImportError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function deployAnimatedInteraction() {
+  if (!selectedInteraction.value || !bakeAnimation || !animatedInteractionReady.value) return
+  animationDeploying.value = true
+  animationDeploymentError.value = ''
+  try {
+    const bake = bakeAnimation(selectedInteraction.value.id)
+    if (!bake) throw new Error('无法准备动画交互内容')
+    const profile = getActiveEmbeddedDisplayProfile()
+    const settings = getActiveEmbeddedImageSettings()
+    const initialState = selectedInteraction.value.states.find(
+      (state) => state.id === selectedInteraction.value?.initialStateId
+    )
+    if (!initialState) throw new Error('请先设置动画交互的初始状态')
+    const plan = await prepareUsbAnimatedPrototypeDeployment({
+      profile,
+      frame: {
+        id: initialState.id,
+        name: initialState.name,
+        revision: renderRevision ?? 0,
+        width: initialState.width,
+        height: initialState.height
+      },
+      bake,
+      backgroundColor: settings.backgroundColor,
+      placement: settings.placement,
+      firstDeployment: false,
+      scopeKey
+    })
+    animationDeploymentPlan.value = plan
+    const deployed = await executeUsbFrameDeployment(plan.id)
+    if (!deployed) throw new Error(plan.error || plan.message)
+  } catch (error) {
+    animationDeploymentError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    animationDeploying.value = false
+  }
+}
+
 function handleManualLoopChange(event: Event) {
   setManualLoop((event.target as HTMLInputElement).checked)
 }
@@ -149,6 +239,22 @@ function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
   if (!selectedState.value) return
   setTransition(selectedState.value.id, eventId, targetId === NO_TRANSITION_VALUE ? '' : targetId)
 }
+
+const selectedAnimationDelay = computed({
+  get: () => selectedState.value?.animation?.frameDelayMs ?? 50,
+  set: (value: string | number) => {
+    if (selectedState.value?.animation) {
+      setAnimationSettings(selectedState.value.id, { frameDelayMs: Number(value) })
+    }
+  }
+})
+
+function handleAnimationLoopChange(event: Event) {
+  if (!selectedState.value?.animation) return
+  setAnimationSettings(selectedState.value.id, {
+    loop: (event.target as HTMLInputElement).checked
+  })
+}
 </script>
 
 <template>
@@ -159,6 +265,13 @@ function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
       </template>
       <span role="heading" aria-level="2">{{ selectedInteraction?.name || '交互原型' }}</span>
       <template #actions>
+        <IconButton
+          label="烧录 PNG 动画交互"
+          :disabled="!animatedInteractionReady || animationDeploying"
+          @click="deployAnimatedInteraction"
+        >
+          <icon-lucide-upload class="size-3.5" />
+        </IconButton>
         <IconButton label="预览交互" :disabled="!canPreview" @click="previewOpen = true">
           <icon-lucide-play class="size-3.5" />
         </IconButton>
@@ -166,6 +279,25 @@ function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
     </PanelHeader>
 
     <div class="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-4">
+      <div
+        v-if="animationDeploymentPlan && animationDeploying"
+        class="border-b border-border px-3 py-2.5"
+      >
+        <div class="flex items-center justify-between gap-3 text-[11px]">
+          <span class="min-w-0 truncate text-surface">{{ animationDeploymentPlan.message }}</span>
+          <span class="shrink-0 tabular-nums text-muted">{{ animationDeploymentPlan.progress }}%</span>
+        </div>
+        <div class="mt-2 h-1.5 overflow-hidden rounded bg-panel-field">
+          <div
+            class="h-full rounded bg-accent transition-[width]"
+            :style="{ width: `${Math.max(3, animationDeploymentPlan.progress)}%` }"
+          />
+        </div>
+        <div class="mt-2 grid grid-cols-2 gap-2 text-[10px] text-muted">
+          <span>基础固件: {{ deploymentStageLabel(animationDeploymentPlan.firmwareStage) }}</span>
+          <span>动画内容: {{ deploymentStageLabel(animationDeploymentPlan.contentStage) }}</span>
+        </div>
+      </div>
       <PanelSection label="交互">
         <template #actions>
           <IconButton label="新建交互" @click="addInteraction">
@@ -255,6 +387,13 @@ function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
       <PanelSection label="界面状态" :empty="states.length === 0">
         <template #actions>
           <IconButton
+            label="导入 PNG 动画状态"
+            :disabled="states.length >= DEVICE_PROTOTYPE_MAX_STATES"
+            @click="chooseAnimationFiles"
+          >
+            <icon-lucide-images class="size-3.5" />
+          </IconButton>
+          <IconButton
             :label="
               canAddSelection || canAddFrame
                 ? `添加${selectedFrames.length > 1 ? '选中的画面' : '当前画面'}`
@@ -278,6 +417,17 @@ function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
             {{ states.length }} / {{ DEVICE_PROTOTYPE_MAX_STATES }}
           </span>
         </div>
+        <input
+          ref="animationFileInput"
+          type="file"
+          accept="image/png,.png"
+          multiple
+          class="hidden"
+          @change="importAnimationState"
+        />
+        <p v-if="animationImportError" class="mb-panel text-[11px] text-red-300">
+          {{ animationImportError }}
+        </p>
 
         <p v-if="states.length === 0" class="text-[11px] leading-relaxed text-muted">
           选中一个 Frame 或图片，然后点击右上角加号添加为第一个界面状态。
@@ -300,6 +450,9 @@ function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
               <span class="block truncate text-xs text-surface">{{ state.name }}</span>
               <span class="block truncate text-[10px] text-muted">
                 {{ state.width }} × {{ state.height }}
+                <template v-if="state.animation">
+                  · {{ state.animation.files.length }} PNG 帧</template
+                >
                 <template v-if="state.id === initialStateId"> · 初始界面</template>
               </span>
             </button>
@@ -328,6 +481,35 @@ function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
               <icon-lucide-x class="size-3" />
             </IconButton>
           </div>
+        </div>
+      </PanelSection>
+
+      <PanelSection v-if="selectedState?.animation" label="动画状态">
+        <div class="grid gap-panel">
+          <label class="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-panel text-[11px]">
+            <span class="text-muted">帧间隔</span>
+            <div class="grid grid-cols-[minmax(0,1fr)_32px] items-center gap-1">
+              <AppInput
+                v-model="selectedAnimationDelay"
+                type="number"
+                :min="16"
+                :max="2000"
+                :step="1"
+                tone="panel"
+                size="sm"
+              />
+              <span class="text-muted">ms</span>
+            </div>
+          </label>
+          <label class="flex h-control items-center gap-2 text-[11px] text-surface">
+            <input
+              type="checkbox"
+              class="size-3.5 accent-accent"
+              :checked="selectedState.animation.loop"
+              @change="handleAnimationLoopChange"
+            />
+            循环播放
+          </label>
         </div>
       </PanelSection>
 
@@ -366,5 +548,11 @@ function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
       :placement="imageSettings.placement"
       :background-color="imageSettings.backgroundColor"
     />
+    <p
+      v-if="animationDeploymentError"
+      class="border-t border-border px-3 py-2 text-[11px] text-red-300"
+    >
+      {{ animationDeploymentError }}
+    </p>
   </div>
 </template>

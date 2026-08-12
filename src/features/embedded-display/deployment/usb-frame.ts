@@ -1,5 +1,9 @@
 import { markRaw, reactive } from 'vue'
 
+import {
+  encodeUsbAnimatedPrototype,
+  type UsbAnimatedPrototypePayload
+} from '../adapters/animated-prototype'
 import { embeddedManifestUrl } from '../adapters/http'
 import {
   imageFileToRgb565,
@@ -7,6 +11,7 @@ import {
   type EmbeddedImagePlacement
 } from '../adapters/image'
 import {
+  flashUsbAnimatedPrototypeFirmware,
   flashUsbFrameFirmware,
   flashUsbPrototypeFirmware,
   flashUsbSequenceFirmware,
@@ -29,6 +34,7 @@ import { imageFilesToUsbSequence, type UsbImageSequencePayload } from '../adapte
 import { encodeWirelessImage, encodeWirelessPrototype } from '../adapters/wireless-content'
 import type {
   EmbeddedDisplayProfile,
+  EmbeddedAnimatedPrototypeBakeResult,
   EmbeddedImagePayload,
   EmbeddedPrototypeBakeResult,
   EmbeddedPrototypePayload
@@ -59,7 +65,7 @@ export interface UsbFrameDeploymentFrame {
 
 export interface UsbFrameDeploymentPlan {
   id: string
-  mode: 'frame' | 'prototype' | 'slideshow'
+  mode: 'frame' | 'prototype' | 'slideshow' | 'animated-prototype'
   status: UsbFrameDeploymentStatus
   profileId: string
   profileName: string
@@ -94,7 +100,11 @@ export interface UsbFrameDeploymentPlan {
 type DeploymentSerialPort = UsbContentSerialPort
 
 interface UsbFrameDeploymentRecord extends UsbFrameDeploymentPlan {
-  payload?: EmbeddedImagePayload | EmbeddedPrototypePayload | UsbImageSequencePayload
+  payload?:
+    | EmbeddedImagePayload
+    | EmbeddedPrototypePayload
+    | UsbImageSequencePayload
+    | UsbAnimatedPrototypePayload
   source?: UsbFrameDeploymentSource
   port?: DeploymentSerialPort
   manifestUrl: string
@@ -114,6 +124,7 @@ type UsbFrameDeploymentSource =
     }
 
 function deploymentContentLabel(mode: UsbFrameDeploymentPlan['mode']): string {
+  if (mode === 'animated-prototype') return '动画交互内容'
   if (mode === 'prototype') return '交互内容'
   if (mode === 'slideshow') return '幻灯片'
   return '当前 Frame'
@@ -133,6 +144,16 @@ export interface PrepareUsbPrototypeDeploymentInput {
   profile: EmbeddedDisplayProfile
   frame: UsbFrameDeploymentFrame
   bake: EmbeddedPrototypeBakeResult
+  backgroundColor: string
+  placement?: EmbeddedImagePlacement
+  firstDeployment: boolean
+  scopeKey?: object
+}
+
+export interface PrepareUsbAnimatedPrototypeDeploymentInput {
+  profile: EmbeddedDisplayProfile
+  frame: UsbFrameDeploymentFrame
+  bake: EmbeddedAnimatedPrototypeBakeResult
   backgroundColor: string
   placement?: EmbeddedImagePlacement
   firstDeployment: boolean
@@ -264,7 +285,13 @@ async function uploadContent(
   }
   let capacity: number
   if ('content' in payload) {
-    capacity = await flashUsbSequenceFirmware(payload, flashOptions)
+    capacity =
+      plan.mode === 'animated-prototype'
+        ? await flashUsbAnimatedPrototypeFirmware(
+            payload as UsbAnimatedPrototypePayload,
+            flashOptions
+          )
+        : await flashUsbSequenceFirmware(payload as UsbImageSequencePayload, flashOptions)
   } else if (plan.mode === 'prototype' && 'initialStateIndex' in payload) {
     capacity = await flashUsbPrototypeFirmware(payload, flashOptions)
   } else if (!('initialStateIndex' in payload)) {
@@ -283,6 +310,7 @@ async function deployContent(
   const result = await transferUsbContentWithFirmwareFallback({
     port,
     manifestUrl: plan.manifestUrl,
+    firmwareBuildMode: plan.mode === 'animated-prototype' ? 'usb-animated-prototype' : 'usb-frame',
     transfer: (activePort, firmwareUpdated) => uploadContent(plan, activePort, firmwareUpdated),
     onLog: (message) => appendLog(plan, message),
     onProgress: ({ percent }) => {
@@ -497,6 +525,61 @@ export async function prepareUsbPrototypeDeployment(
     payload: markRaw(payload),
     source,
     manifestUrl: embeddedManifestUrl(input.profile.id, 'usb-frame'),
+    scopeKey: input.scopeKey ? markRaw(input.scopeKey) : undefined
+  })
+  plans.set(id, plan)
+  return plan
+}
+
+export async function prepareUsbAnimatedPrototypeDeployment(
+  input: PrepareUsbAnimatedPrototypeDeploymentInput
+): Promise<UsbFrameDeploymentPlan> {
+  if (!supportsUsbFrameFastFlash(input.profile.id)) {
+    throw new Error('当前屏幕尚未提供 USB 动画交互固件')
+  }
+  const placement = input.placement ?? 'pixel-perfect'
+  const payload = await encodeUsbAnimatedPrototype(
+    input.bake,
+    input.profile,
+    placement,
+    input.backgroundColor
+  )
+  const initialState = input.bake.states.find((state) => state.id === input.bake.initialStateId)
+  const previewFile = initialState?.files[0]
+  if (!initialState || !previewFile) throw new Error('动画交互缺少可预览的初始状态')
+  const id = globalThis.crypto.randomUUID()
+  supersedeInactiveUsbDeployments(input.scopeKey)
+  const plan = reactive<UsbFrameDeploymentRecord>({
+    id,
+    mode: 'animated-prototype',
+    status: 'ready',
+    profileId: input.profile.id,
+    profileName: input.profile.name,
+    resolution: { ...input.profile.resolution },
+    roundScreen: input.profile.visibleArea?.shape === 'round',
+    frame: { ...input.frame },
+    prototype: {
+      id: input.bake.id,
+      name: input.bake.name,
+      stateCount: input.bake.states.length,
+      transitionCount: input.bake.transitions.length,
+      stateNames: input.bake.states.map((state) => state.name)
+    },
+    backgroundColor: input.backgroundColor,
+    placement,
+    previewUrl: URL.createObjectURL(previewFile),
+    contentBytes: payload.content.byteLength,
+    firstDeployment: input.firstDeployment,
+    needsDeviceSelection: true,
+    firmwareVerified: false,
+    progress: 0,
+    message: '动画交互内容已准备，等待确认',
+    firmwareStage: 'pending',
+    contentStage: 'pending',
+    logs: [],
+    createdAt: Date.now(),
+    payload: markRaw(payload),
+    manifestUrl: embeddedManifestUrl(input.profile.id, 'usb-animated-prototype'),
     scopeKey: input.scopeKey ? markRaw(input.scopeKey) : undefined
   })
   plans.set(id, plan)

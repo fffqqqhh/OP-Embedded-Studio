@@ -1,9 +1,6 @@
 import type { EmbeddedImagePayload, EmbeddedPrototypePayload } from '../model/types'
-import {
-  requestSerialPort,
-  type SerialFlashProgress,
-  type SerialPortLike
-} from './serial-flasher'
+import type { UsbAnimatedPrototypePayload } from './animated-prototype'
+import { requestSerialPort, type SerialFlashProgress, type SerialPortLike } from './serial-flasher'
 import { uploadUsbContent, type UsbContentTransferOptions } from './usb-content-transfer'
 import type { UsbImageSequencePayload } from './usb-sequence'
 import { encodeWirelessImage, encodeWirelessPrototype } from './wireless-content'
@@ -13,10 +10,7 @@ const USB_FAST_PROFILES = new Set(['co5300_waveshare_amoled_1_75c'])
 export type UsbFlashOptions = UsbContentTransferOptions
 
 export { requestSerialPort as requestUsbSerialPort }
-export type {
-  SerialPortLike as UsbSerialPort,
-  SerialFlashProgress as UsbFlashProgress
-}
+export type { SerialPortLike as UsbSerialPort, SerialFlashProgress as UsbFlashProgress }
 
 export function supportsUsbFrameFastFlash(profileId: string | undefined): boolean {
   return Boolean(profileId && USB_FAST_PROFILES.has(profileId))
@@ -50,6 +44,19 @@ export async function flashUsbFrameFirmware(
 
 export async function flashUsbSequenceFirmware(
   payload: UsbImageSequencePayload,
+  options: UsbFlashOptions = {}
+): Promise<number> {
+  return uploadUsbFirmwareContent(
+    payload.profileId,
+    payload.width,
+    payload.height,
+    new Uint8Array(payload.content),
+    options
+  )
+}
+
+export async function flashUsbAnimatedPrototypeFirmware(
+  payload: UsbAnimatedPrototypePayload,
   options: UsbFlashOptions = {}
 ): Promise<number> {
   return uploadUsbFirmwareContent(

@@ -38,6 +38,11 @@ export interface DevicePrototypeState {
   name: string
   width: number
   height: number
+  animation?: {
+    files: File[]
+    frameDelayMs: number
+    loop: boolean
+  }
 }
 
 export interface DevicePrototypeTransition {

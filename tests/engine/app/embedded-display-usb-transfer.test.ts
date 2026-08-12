@@ -167,4 +167,20 @@ describe('USB runtime content transfer', () => {
     expect(port.commands.at(-1)).toBe('OPUSB/1 END')
     expect(progress.at(-1)).toBe(100)
   })
+
+  test('ignores delayed duplicate READY responses after the handshake', async () => {
+    const port = new FakeUsbContentPort(
+      'OPUSB/1 READY 2 466 466 30343168\nOPUSB/1 READY 2 466 466 30343168'
+    )
+
+    await expect(uploadUsbContent({ width: 466, height: 466 }, createContent(1024), { port })).resolves.toBe(
+      30343168
+    )
+    expect(port.commands).toEqual([
+      'OPUSB/1 HELLO',
+      'OPUSB/1 BEGIN 1048',
+      expect.stringMatching(/^OPUSB\/1 CHUNK 0 1024 \d+ [01]$/),
+      'OPUSB/1 END'
+    ])
+  })
 })

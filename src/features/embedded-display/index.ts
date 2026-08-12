@@ -21,6 +21,7 @@ export {
   isUsbFrameDeploymentBusy,
   normalizeUsbDeploymentError,
   prepareUsbFrameDeployment,
+  prepareUsbAnimatedPrototypeDeployment,
   prepareUsbPrototypeDeployment,
   supersedeUsbFrameDeployment,
   updateUsbFrameDeploymentAdaptation
@@ -28,6 +29,7 @@ export {
 
 export type {
   EmbeddedDisplayProfile,
+  EmbeddedAnimatedPrototypeBakeResult,
   EmbeddedFrameBake,
   EmbeddedFrameBakeById,
   EmbeddedFrameBakeState,
@@ -40,6 +42,7 @@ export type {
 export type {
   ExecuteUsbFrameDeploymentOptions,
   PrepareUsbFrameDeploymentInput,
+  PrepareUsbAnimatedPrototypeDeploymentInput,
   PrepareUsbPrototypeDeploymentInput,
   UpdateUsbFrameDeploymentAdaptationInput,
   UsbFrameDeploymentFrame,

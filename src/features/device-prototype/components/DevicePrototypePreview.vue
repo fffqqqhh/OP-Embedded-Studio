@@ -40,6 +40,8 @@ const renderNonce = ref(0)
 let clickTimer: ReturnType<typeof setTimeout> | undefined
 let longPressTimer: ReturnType<typeof setTimeout> | undefined
 let slideshowTimer: ReturnType<typeof setTimeout> | undefined
+let animationTimer: ReturnType<typeof setTimeout> | undefined
+let animationFrameIndex = 0
 let longPressTriggered = false
 let renderRequest = 0
 
@@ -56,10 +58,38 @@ function clearPreviewUrl() {
   previewUrl.value = ''
 }
 
+function clearAnimationTimer() {
+  if (animationTimer) clearTimeout(animationTimer)
+  animationTimer = undefined
+}
+
+function scheduleAnimationFrame() {
+  clearAnimationTimer()
+  const animation = currentState.value?.animation
+  if (!open || !animation || animation.files.length < 2) return
+  animationTimer = setTimeout(() => {
+    animationFrameIndex += 1
+    if (animationFrameIndex >= animation.files.length) {
+      if (!animation.loop) return
+      animationFrameIndex = 0
+    }
+    clearPreviewUrl()
+    previewUrl.value = URL.createObjectURL(animation.files[animationFrameIndex])
+    scheduleAnimationFrame()
+  }, animation.frameDelayMs)
+}
+
 async function renderCurrentState() {
   const request = ++renderRequest
   clearPreviewUrl()
   previewError.value = ''
+  animationFrameIndex = 0
+  const animation = currentState.value?.animation
+  if (animation?.files.length) {
+    previewUrl.value = URL.createObjectURL(animation.files[0])
+    scheduleAnimationFrame()
+    return
+  }
   if (!currentState.value || !renderFrame) return
   previewLoading.value = true
   try {
@@ -77,6 +107,7 @@ async function renderCurrentState() {
 
 function resetPreview() {
   clearSlideshowTimer()
+  clearAnimationTimer()
   clickCount.value = 0
   if (clickTimer) clearTimeout(clickTimer)
   clickTimer = undefined
@@ -91,6 +122,7 @@ function resetPreview() {
 
 function closePreview() {
   clearSlideshowTimer()
+  clearAnimationTimer()
   if (clickTimer) clearTimeout(clickTimer)
   if (longPressTimer) clearTimeout(longPressTimer)
   clickTimer = undefined
@@ -241,6 +273,7 @@ watch(
   (isOpen) => {
     if (!isOpen) {
       clearSlideshowTimer()
+      clearAnimationTimer()
       renderRequest += 1
       previewLoading.value = false
       clearPreviewUrl()
@@ -254,6 +287,7 @@ onUnmounted(() => {
   if (clickTimer) clearTimeout(clickTimer)
   if (longPressTimer) clearTimeout(longPressTimer)
   clearSlideshowTimer()
+  clearAnimationTimer()
   clearPreviewUrl()
 })
 </script>
