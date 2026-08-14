@@ -1,5 +1,8 @@
 package app.openpencil.bleuploader;
 
+import android.net.Uri;
+import android.content.Intent;
+import android.content.ClipData;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -17,37 +20,31 @@ import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
-import android.content.ClipData;
 import android.content.Context;
-import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.ImageDecoder;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelUuid;
-import android.provider.MediaStore;
 import android.provider.Settings;
+import android.provider.MediaStore;
 import android.util.Base64;
-import android.util.Size;
 import android.webkit.JavascriptInterface;
-import android.webkit.ValueCallback;
-import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebResourceResponse;
+import android.webkit.MimeTypeMap;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
+import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -56,20 +53,17 @@ import java.util.UUID;
 
 public final class MainActivity extends Activity {
     private static final int BLE_PERMISSION_REQUEST = 101;
-    private static final int FILE_CHOOSER_REQUEST = 102;
     private static final UUID SERVICE_UUID = UUID.fromString("a110207d-8f4d-559b-8e4a-4791892b127d");
     private static final UUID TRANSFER_UUID = UUID.fromString("a210207d-8f4d-559b-8e4a-4791892b127d");
     private static final UUID STATUS_UUID = UUID.fromString("a310207d-8f4d-559b-8e4a-4791892b127d");
     private static final UUID CLIENT_CONFIG_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final int DEFAULT_PAYLOAD_CHUNK_BYTES = 16;
-    private static final int MAX_PAYLOAD_CHUNK_BYTES = 240;
-    private static final int MAX_IMPORT_DIMENSION = 12288;
-    private static final long MAX_IMPORT_PIXELS = 8L * 1024L * 1024L;
+    private static final int MAX_PAYLOAD_CHUNK_BYTES = 508;
+    private static final int FALLBACK_PAYLOAD_CHUNK_BYTES = 240;
+    private static final int STATUS_CHECKPOINT_BYTES = 12 * 1024;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private WebView webView;
-    private ValueCallback<Uri[]> fileCallback;
-    private Uri cameraCaptureUri;
     private BluetoothAdapter bluetoothAdapter;
     private BluetoothLeScanner scanner;
     private BluetoothGatt gatt;
@@ -78,6 +72,11 @@ public final class MainActivity extends Activity {
     private boolean pendingConnect;
     private boolean scanning;
     private boolean connected;
+    private boolean linkReady;
+    private boolean statusSubscriptionPending;
+    private boolean initialStatusReadPending;
+    private int negotiatedMtu = 23;
+    private Uri cameraCaptureUri;
     private File payloadFile;
     private FileOutputStream payloadOutput;
     private int payloadExpectedBytes;
@@ -88,6 +87,16 @@ public final class MainActivity extends Activity {
     private int lastProgressBytes;
     private int payloadChunkBytes = DEFAULT_PAYLOAD_CHUNK_BYTES;
     private boolean uploading;
+    private int queuedOffset;
+    private int confirmedOffset;
+    private int packetsPerBurst;
+    private int checkpointReadAttempts;
+    private int completionReadAttempts;
+    private boolean checkpointPending;
+    private boolean statusReadPending;
+    private boolean awaitingCompletion;
+    private long statusReadNotBefore;
+    private long statusReadDeadline;
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
@@ -100,192 +109,82 @@ public final class MainActivity extends Activity {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        webView.setWebViewClient(new WebViewClient());
-        webView.setWebChromeClient(new WebChromeClient() {
+        webView.setWebViewClient(new WebViewClient() {
             @Override
-            public boolean onShowFileChooser(
-                    WebView view,
-                    ValueCallback<Uri[]> callback,
-                    FileChooserParams params) {
-                if (fileCallback != null) fileCallback.onReceiveValue(null);
-                fileCallback = callback;
-                if (params != null && params.isCaptureEnabled()) {
-                    File captureFile = CameraFileProvider.captureFile(MainActivity.this);
-                    if (captureFile.exists()) captureFile.delete();
-                    cameraCaptureUri = CameraFileProvider.captureUri(MainActivity.this);
-                    Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-                    cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraCaptureUri);
-                    cameraIntent.setClipData(ClipData.newRawUri("OP Embedded photo", cameraCaptureUri));
-                    cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                    if (cameraIntent.resolveActivity(getPackageManager()) == null) {
-                        fileCallback.onReceiveValue(null);
-                        fileCallback = null;
-                        cameraCaptureUri = null;
-                        emitError("没有找到可用的相机应用");
-                        return true;
-                    }
-                    startActivityForResult(cameraIntent, FILE_CHOOSER_REQUEST);
-                    return true;
-                }
-                cameraCaptureUri = null;
-                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                intent.addCategory(Intent.CATEGORY_OPENABLE);
-                intent.setType("image/*");
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params != null
-                        && params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
-                startActivityForResult(intent, FILE_CHOOSER_REQUEST);
-                return true;
+            public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+                return interceptAppAsset(Uri.parse(url));
+            }
+
+            @Override
+            public WebResourceResponse shouldInterceptRequest(
+                    WebView view, android.webkit.WebResourceRequest request) {
+                return interceptAppAsset(request.getUrl());
             }
         });
         webView.addJavascriptInterface(new NativeBridge(), "OpenPencilNative");
         setContentView(webView);
-        webView.loadUrl("file:///android_asset/index.html");
+        webView.loadUrl("https://appassets.androidplatform.net/assets/index.html");
+    }
+
+    private WebResourceResponse interceptAppAsset(Uri uri) {
+        if (uri == null || !"appassets.androidplatform.net".equals(uri.getHost())) return null;
+        String path = uri.getPath();
+        if (path == null) return missingResource();
+        try {
+            if (path.startsWith("/assets/")) {
+                String assetPath = path.substring("/assets/".length());
+                if (assetPath.isEmpty() || assetPath.contains("..")) return missingResource();
+                return resourceResponse(assetPath, getAssets().open(assetPath));
+            }
+            if (path.startsWith("/media/")) {
+                String name = path.substring("/media/".length());
+                if (name.isEmpty() || name.contains("/") || name.contains("\\") || name.contains("..")) {
+                    return missingResource();
+                }
+                File file = new File(getCacheDir(), name);
+                if (!file.isFile() || file.length() == 0) return missingResource();
+                return resourceResponse(name, new java.io.FileInputStream(file));
+            }
+        } catch (IOException ignored) {
+        }
+        return missingResource();
+    }
+
+    private WebResourceResponse resourceResponse(String name, InputStream stream) {
+        String extension = MimeTypeMap.getFileExtensionFromUrl(name);
+        String mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+        if (mimeType == null) mimeType = "application/octet-stream";
+        String encoding = mimeType.startsWith("text/") || "application/javascript".equals(mimeType)
+                ? "UTF-8" : null;
+        return new WebResourceResponse(mimeType, encoding, stream);
+    }
+
+    private WebResourceResponse missingResource() {
+        return new WebResourceResponse("text/plain", "UTF-8",
+                new ByteArrayInputStream(new byte[0]));
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != FILE_CHOOSER_REQUEST || fileCallback == null) return;
-        if (resultCode == RESULT_OK && cameraCaptureUri != null) {
+        if (requestCode == REQUEST_CAMERA_CAPTURE) {
             File captureFile = CameraFileProvider.captureFile(this);
-            finishFileChooser(captureFile.isFile() && captureFile.length() > 0
-                    ? new Uri[]{cameraCaptureUri}
-                    : null);
+            if (resultCode == RESULT_OK && captureFile.isFile() && captureFile.length() > 0) {
+                deliverManagedMedia(captureFile.getName(), "image/jpeg");
+            } else if (resultCode != RESULT_CANCELED) {
+                emitError("拍照失败，没有收到图片");
+            }
+            cameraCaptureUri = null;
             return;
         }
-        if (resultCode != RESULT_OK || data == null) {
-            finishFileChooser(null);
+        if (requestCode == REQUEST_PICK_MEDIA && resultCode == RESULT_OK && data != null) {
+            Uri uri = data.getData();
+            if (uri != null) importMedia(uri, getContentResolver().getType(uri));
             return;
         }
-        Uri[] selected = selectedUris(data);
-        if (selected == null || selected.length == 0) {
-            finishFileChooser(null);
-            return;
-        }
-        int persistFlags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
-        if (persistFlags != 0) {
-            for (Uri uri : selected) {
-                try {
-                    getContentResolver().takePersistableUriPermission(uri, persistFlags);
-                } catch (SecurityException ignored) {
-                }
-            }
-        }
-        emitEvent("status", "正在兼容处理图片…", -1, -1);
-        prepareSelectedImages(selected);
-    }
-
-    private Uri[] selectedUris(Intent data) {
-        if (data.getClipData() != null) {
-            int count = data.getClipData().getItemCount();
-            Uri[] selected = new Uri[count];
-            for (int index = 0; index < count; index++) {
-                selected[index] = data.getClipData().getItemAt(index).getUri();
-            }
-            return selected;
-        }
-        return data.getData() == null ? null : new Uri[]{data.getData()};
-    }
-
-    private void finishFileChooser(Uri[] result) {
-        if (fileCallback != null) fileCallback.onReceiveValue(result);
-        fileCallback = null;
-        cameraCaptureUri = null;
-    }
-
-    private void prepareSelectedImages(Uri[] selected) {
-        new Thread(() -> {
-            try {
-                CameraFileProvider.clearImportedFiles(this);
-                String batchId = Long.toUnsignedString(System.nanoTime());
-                Uri[] normalized = new Uri[selected.length];
-                for (int index = 0; index < selected.length; index++) {
-                    normalized[index] = normalizeSelectedImage(selected[index], batchId, index);
-                }
-                runOnUiThread(() -> finishFileChooser(normalized));
-            } catch (Exception error) {
-                String detail = error.getMessage();
-                runOnUiThread(() -> {
-                    finishFileChooser(null);
-                    emitError("无法处理图片" + (detail == null ? "" : "：" + detail));
-                });
-            }
-        }, "op-image-normalizer").start();
-    }
-
-    private Uri normalizeSelectedImage(Uri sourceUri, String batchId, int index) throws IOException {
-        Bitmap bitmap = decodeSelectedImage(sourceUri);
-        File output = CameraFileProvider.importFile(this, batchId, index);
-        try (FileOutputStream stream = new FileOutputStream(output, false)) {
-            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
-                throw new IOException("无法编码标准 PNG");
-            }
-        } finally {
-            bitmap.recycle();
-        }
-        if (!output.isFile() || output.length() == 0) throw new IOException("标准 PNG 文件为空");
-        return CameraFileProvider.importUri(this, batchId, index);
-    }
-
-    private Bitmap decodeSelectedImage(Uri uri) throws IOException {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            try {
-                ImageDecoder.Source source = ImageDecoder.createSource(getContentResolver(), uri);
-                return ImageDecoder.decodeBitmap(source, (decoder, info, ignored) -> {
-                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
-                    Size size = info.getSize();
-                    int[] target = targetImageSize(size.getWidth(), size.getHeight());
-                    if (target[0] != size.getWidth() || target[1] != size.getHeight()) {
-                        decoder.setTargetSize(target[0], target[1]);
-                    }
-                });
-            } catch (IOException | RuntimeException ignored) {
-            }
-        }
-        BitmapFactory.Options bounds = new BitmapFactory.Options();
-        bounds.inJustDecodeBounds = true;
-        try (InputStream stream = getContentResolver().openInputStream(uri)) {
-            if (stream == null) throw new IOException("无法打开图片数据");
-            BitmapFactory.decodeStream(stream, null, bounds);
-        }
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new IOException("无法识别图片编码");
-        BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
-        options.inSampleSize = bitmapSampleSize(bounds.outWidth, bounds.outHeight);
-        try (InputStream stream = getContentResolver().openInputStream(uri)) {
-            if (stream == null) throw new IOException("无法重新打开图片数据");
-            Bitmap bitmap = BitmapFactory.decodeStream(stream, null, options);
-            if (bitmap == null) throw new IOException("系统图片解码器不支持该文件");
-            return bitmap;
-        }
-    }
-
-    private int[] targetImageSize(int width, int height) {
-        double scale = 1.0;
-        int largest = Math.max(width, height);
-        if (largest > MAX_IMPORT_DIMENSION) {
-            scale = Math.min(scale, (double) MAX_IMPORT_DIMENSION / largest);
-        }
-        long pixels = (long) width * height;
-        if (pixels > MAX_IMPORT_PIXELS) {
-            scale = Math.min(scale, Math.sqrt((double) MAX_IMPORT_PIXELS / pixels));
-        }
-        return new int[]{
-                Math.max(1, (int) Math.round(width * scale)),
-                Math.max(1, (int) Math.round(height * scale))
-        };
-    }
-
-    private int bitmapSampleSize(int width, int height) {
-        int sample = 1;
-        while (width / sample > MAX_IMPORT_DIMENSION
-                || height / sample > MAX_IMPORT_DIMENSION
-                || (long) (width / sample) * (height / sample) > MAX_IMPORT_PIXELS) {
-            sample *= 2;
-        }
-        return sample;
     }
 
     @Override
@@ -386,7 +285,12 @@ public final class MainActivity extends Activity {
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
                 gatt = nextGatt;
                 connected = true;
+                linkReady = false;
+                statusSubscriptionPending = false;
+                initialStatusReadPending = false;
+                negotiatedMtu = 23;
                 payloadChunkBytes = DEFAULT_PAYLOAD_CHUNK_BYTES;
+                emitDiagnostic("LINK: connected, discovering services");
                 nextGatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     nextGatt.setPreferredPhy(
@@ -399,10 +303,14 @@ public final class MainActivity extends Activity {
                 return;
             }
             connected = false;
+            linkReady = false;
+            statusSubscriptionPending = false;
+            initialStatusReadPending = false;
             payloadChunkBytes = DEFAULT_PAYLOAD_CHUNK_BYTES;
             transferCharacteristic = null;
             statusCharacteristic = null;
             stopUpload("BLE 已断开");
+            emitDiagnostic("LINK: disconnected status=" + status + " state=" + newState);
             emitEvent("disconnected", "BLE 已断开", -1, -1);
             nextGatt.close();
             if (gatt == nextGatt) gatt = null;
@@ -412,46 +320,266 @@ public final class MainActivity extends Activity {
         @Override
         public void onServicesDiscovered(BluetoothGatt nextGatt, int status) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
+                emitDiagnostic("SERVICES: failed status=" + status);
                 emitError("无法读取 OP Embedded BLE 服务");
                 return;
             }
             BluetoothGattService service = nextGatt.getService(SERVICE_UUID);
             if (service == null) {
+                emitDiagnostic("SERVICES: OP Embedded service missing");
                 emitError("设备缺少 OP Embedded 传输服务");
                 return;
             }
             transferCharacteristic = service.getCharacteristic(TRANSFER_UUID);
             statusCharacteristic = service.getCharacteristic(STATUS_UUID);
             if (transferCharacteristic == null || statusCharacteristic == null) {
+                emitDiagnostic("SERVICES: transfer or status characteristic missing");
                 emitError("设备固件不支持手机传输");
                 return;
             }
-            if (!nextGatt.requestMtu(517)) configureReady(nextGatt);
+            boolean mtuRequestAccepted = nextGatt.requestMtu(517);
+            emitDiagnostic("SERVICES: ready; MTU 517 request=" + mtuRequestAccepted);
+            if (!mtuRequestAccepted) configureReady(nextGatt);
         }
 
         @Override
         public void onMtuChanged(BluetoothGatt nextGatt, int mtu, int status) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                negotiatedMtu = mtu;
                 payloadChunkBytes = Math.max(
                         DEFAULT_PAYLOAD_CHUNK_BYTES,
                         Math.min(MAX_PAYLOAD_CHUNK_BYTES, mtu - 7));
             }
+            emitDiagnostic("MTU: result=" + mtu + " status=" + status
+                    + " payload=" + payloadChunkBytes);
             configureReady(nextGatt);
         }
+
+        @Override
+        public void onDescriptorWrite(BluetoothGatt nextGatt,
+                                      BluetoothGattDescriptor descriptor,
+                                      int status) {
+            if (descriptor == null || !CLIENT_CONFIG_UUID.equals(descriptor.getUuid())) return;
+            statusSubscriptionPending = false;
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                emitDiagnostic("SUBSCRIBE: failed status=" + status);
+                emitError("BLE 状态订阅失败 (" + status + ")");
+                return;
+            }
+            emitDiagnostic("SUBSCRIBE: enabled; reading initial device status");
+            beginReadyStatusProbe(nextGatt);
+        }
+
+        @Override
+        public void onCharacteristicRead(BluetoothGatt nextGatt,
+                                         BluetoothGattCharacteristic characteristic,
+                                         int status) {
+            if (characteristic == null || !STATUS_UUID.equals(characteristic.getUuid())) return;
+            if (initialStatusReadPending) {
+                initialStatusReadPending = false;
+                if (status != BluetoothGatt.GATT_SUCCESS || characteristic.getValue() == null
+                        || characteristic.getValue().length < 14) {
+                    emitDiagnostic("READY: initial status read failed status=" + status);
+                    emitError("BLE 设备状态读取失败 (" + status + ")");
+                    return;
+                }
+                byte[] value = characteristic.getValue();
+                int received = parseReceivedOffset(value);
+                int total = parseTotalBytes(value);
+                if (value[2] != 0 && received > 0) {
+                    emitDiagnostic("READY BLOCKED: incomplete device transfer received="
+                            + received + " total=" + total);
+                    emitError("设备保留了上次未完成的传输（" + received + " / " + total
+                            + "）。请重启设备后重新连接；无需刷新固件。");
+                    return;
+                }
+                linkReady = true;
+                emitDiagnostic("READY: MTU=" + negotiatedMtu + " received="
+                        + received + " total=" + total
+                        + " receiving=" + value[2] + " complete=" + value[3]
+                        + " failed=" + value[4]);
+                emitEvent("connected", "OP Embedded BLE 已连接", -1, -1);
+                return;
+            }
+            if (!uploading || !checkpointPending) return;
+            statusReadPending = false;
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                emitDiagnostic("STATUS: read failed status=" + status);
+                retryStatusRead("无法读取设备传输状态");
+                return;
+            }
+            byte[] statusValue = characteristic.getValue();
+            if (statusValue == null || statusValue.length < 14) {
+                emitDiagnostic("STATUS: invalid response length="
+                        + (statusValue == null ? 0 : statusValue.length));
+            } else {
+                emitDiagnostic("STATUS: received=" + parseReceivedOffset(statusValue)
+                        + " queued=" + queuedOffset + " confirmed=" + confirmedOffset
+                        + " receiving=" + statusValue[2] + " complete=" + statusValue[3]
+                        + " failed=" + statusValue[4]);
+            }
+            handleConfirmedStatus(statusValue);
+        }
+
+        @Override
+        public void onCharacteristicChanged(BluetoothGatt nextGatt,
+                                            BluetoothGattCharacteristic characteristic) {
+            if (!uploading || characteristic != statusCharacteristic) return;
+            handleStatusNotification(characteristic.getValue());
+        }
+
     };
+
+    private void handleStatusNotification(byte[] value) {
+        if (value == null || value.length < 14) return;
+        if (value[4] != 0) {
+            stopUpload("设备拒绝内容，校验失败");
+            return;
+        }
+        if (value[3] != 0 && awaitingCompletion) {
+            stopUpload(null);
+            emitEvent("complete", "内容已校验，设备正在重启", uploadTotal, uploadTotal);
+            return;
+        }
+        int received = parseReceivedOffset(value);
+        if (received > lastProgressBytes) {
+            lastProgressBytes = Math.min(uploadTotal, received);
+            emitEvent("progress", "设备正在接收", lastProgressBytes, uploadTotal);
+        }
+    }
+
+    private int parseReceivedOffset(byte[] value) {
+        return (value[5] & 0xff)
+                | ((value[6] & 0xff) << 8)
+                | ((value[7] & 0xff) << 16)
+                | ((value[8] & 0xff) << 24);
+    }
+
+    private int parseTotalBytes(byte[] value) {
+        if (value == null || value.length < 13) return 0;
+        return (value[9] & 0xff)
+                | ((value[10] & 0xff) << 8)
+                | ((value[11] & 0xff) << 16)
+                | ((value[12] & 0xff) << 24);
+    }
+
+    private void handleConfirmedStatus(byte[] value) {
+        if (value == null || value.length < 14) {
+            retryStatusRead("设备返回的传输状态无效");
+            return;
+        }
+        if (value[4] != 0) {
+            stopUpload("设备拒绝内容，校验失败");
+            return;
+        }
+        int received = Math.max(0, Math.min(uploadTotal, parseReceivedOffset(value)));
+        if (value[3] != 0) {
+            stopUpload(null);
+            emitEvent("complete", "内容已校验，设备正在重启", uploadTotal, uploadTotal);
+            return;
+        }
+        if (awaitingCompletion && received == uploadTotal) {
+            completionReadAttempts += 1;
+            if (completionReadAttempts >= 10) {
+                stopUpload("设备未确认内容完成，请重新连接后重试");
+                return;
+            }
+            statusReadNotBefore = System.currentTimeMillis() + 150L;
+            mainHandler.postDelayed(uploadRunnable, 150L);
+            return;
+        }
+        if (received < confirmedOffset) {
+            retryStatusRead("设备接收位置异常");
+            return;
+        }
+        if (received == confirmedOffset) {
+            retryStatusRead("设备尚未确认新的数据");
+            return;
+        }
+
+        // Only a direct read may move the replay position. Notifications are display-only.
+        confirmedOffset = received;
+        queuedOffset = received;
+        uploadOffset = received;
+        checkpointPending = false;
+        checkpointReadAttempts = 0;
+        packetsPerBurst = Math.min(payloadChunkBytes > FALLBACK_PAYLOAD_CHUNK_BYTES ? 48 : 20,
+                packetsPerBurst + 2);
+        if (received >= lastProgressBytes + 4096 || received == uploadTotal) {
+            lastProgressBytes = received;
+            emitEvent("progress", "设备已接收", received, uploadTotal);
+        }
+        if (received == uploadTotal) {
+            awaitingCompletion = true;
+            checkpointPending = true;
+            statusReadNotBefore = System.currentTimeMillis() + 150L;
+        }
+        mainHandler.post(uploadRunnable);
+    }
+
+    private void retryStatusRead(String reason) {
+        checkpointReadAttempts += 1;
+        emitDiagnostic("STATUS: " + reason + " attempt=" + checkpointReadAttempts
+                + " queued=" + queuedOffset + " confirmed=" + confirmedOffset);
+        if (checkpointReadAttempts < 3) {
+            statusReadNotBefore = System.currentTimeMillis() + 120L;
+            mainHandler.postDelayed(uploadRunnable, 120L);
+            return;
+        }
+        if (payloadChunkBytes > FALLBACK_PAYLOAD_CHUNK_BYTES) {
+            payloadChunkBytes = FALLBACK_PAYLOAD_CHUNK_BYTES;
+            packetsPerBurst = 4;
+            queuedOffset = confirmedOffset;
+            uploadOffset = confirmedOffset;
+            checkpointPending = false;
+            checkpointReadAttempts = 0;
+            emitEvent("status", "连接较慢，已切换到兼容传输档", -1, -1);
+            mainHandler.post(uploadRunnable);
+            return;
+        }
+        stopUpload(reason + "，请重新连接设备后重试");
+    }
 
     @SuppressWarnings("deprecation")
     @SuppressLint("MissingPermission")
     private void configureReady(BluetoothGatt nextGatt) {
-        if (statusCharacteristic != null) {
-            nextGatt.setCharacteristicNotification(statusCharacteristic, true);
-            BluetoothGattDescriptor descriptor = statusCharacteristic.getDescriptor(CLIENT_CONFIG_UUID);
-            if (descriptor != null) {
-                descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                nextGatt.writeDescriptor(descriptor);
-            }
+        if (!connected || statusCharacteristic == null || linkReady
+                || statusSubscriptionPending || initialStatusReadPending) return;
+        boolean localNotificationEnabled = nextGatt.setCharacteristicNotification(statusCharacteristic, true);
+        if (!localNotificationEnabled) {
+            emitDiagnostic("SUBSCRIBE: local notification setup failed");
+            emitError("BLE 状态通知初始化失败");
+            return;
         }
-        emitEvent("connected", "OP Embedded BLE 已连接", -1, -1);
+        BluetoothGattDescriptor descriptor = statusCharacteristic.getDescriptor(CLIENT_CONFIG_UUID);
+        if (descriptor == null) {
+            emitDiagnostic("SUBSCRIBE: CCCD missing; probing status directly");
+            beginReadyStatusProbe(nextGatt);
+            return;
+        }
+        descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+        statusSubscriptionPending = true;
+        if (!nextGatt.writeDescriptor(descriptor)) {
+            statusSubscriptionPending = false;
+            emitDiagnostic("SUBSCRIBE: descriptor write rejected");
+            emitError("BLE 状态订阅请求被系统拒绝");
+            return;
+        }
+        emitDiagnostic("SUBSCRIBE: enabling status notifications");
+    }
+
+    @SuppressWarnings("deprecation")
+    @SuppressLint("MissingPermission")
+    private void beginReadyStatusProbe(BluetoothGatt nextGatt) {
+        if (initialStatusReadPending || statusCharacteristic == null) return;
+        initialStatusReadPending = true;
+        if (!nextGatt.readCharacteristic(statusCharacteristic)) {
+            initialStatusReadPending = false;
+            emitDiagnostic("READY: initial status read request rejected");
+            emitError("BLE 初始状态读取请求被系统拒绝");
+            return;
+        }
+        emitDiagnostic("READY: reading device status");
     }
 
     @SuppressLint("MissingPermission")
@@ -497,7 +625,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startUpload() {
-        if (!connected || gatt == null || transferCharacteristic == null) {
+        if (!connected || !linkReady || gatt == null || transferCharacteristic == null) {
             emitError("请先连接 OP Embedded BLE");
             return;
         }
@@ -509,10 +637,20 @@ public final class MainActivity extends Activity {
         try {
             uploadInput = new RandomAccessFile(payloadFile, "r");
             uploadOffset = 0;
+            queuedOffset = 0;
+            confirmedOffset = 0;
             uploadTotal = payloadExpectedBytes;
             lastProgressBytes = 0;
             uploading = true;
+            packetsPerBurst = payloadChunkBytes > FALLBACK_PAYLOAD_CHUNK_BYTES ? 8 : 4;
+            checkpointReadAttempts = 0;
+            completionReadAttempts = 0;
+            checkpointPending = false;
+            statusReadPending = false;
+            awaitingCompletion = false;
             transferCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
+            emitDiagnostic("UPLOAD: start MTU=" + negotiatedMtu + " payload=" + payloadChunkBytes
+                    + " total=" + uploadTotal);
             emitEvent("status", "开始通过 BLE 上传…", 0, uploadTotal);
             mainHandler.post(uploadRunnable);
         } catch (IOException error) {
@@ -530,30 +668,67 @@ public final class MainActivity extends Activity {
                 stopUpload("上传过程中 BLE 已断开");
                 return;
             }
-            if (uploadOffset >= uploadTotal) {
-                stopUpload(null);
-                emitEvent("complete", "内容已发送，设备正在校验并重启", uploadTotal, uploadTotal);
+            if (checkpointPending) {
+                if (System.currentTimeMillis() < statusReadNotBefore) {
+                    mainHandler.postDelayed(this, 20L);
+                    return;
+                }
+                if (statusReadPending) {
+                    if (System.currentTimeMillis() >= statusReadDeadline) {
+                        statusReadPending = false;
+                        retryStatusRead("设备传输状态读取超时");
+                    } else {
+                        mainHandler.postDelayed(this, 40L);
+                    }
+                    return;
+                }
+                statusReadPending = true;
+                emitDiagnostic("STATUS: requesting checkpoint queued=" + queuedOffset
+                        + " confirmed=" + confirmedOffset);
+                if (!gatt.readCharacteristic(statusCharacteristic)) {
+                    statusReadPending = false;
+                    retryStatusRead("无法请求设备传输状态");
+                } else {
+                    statusReadDeadline = System.currentTimeMillis() + 900L;
+                    mainHandler.postDelayed(this, 40L);
+                }
                 return;
             }
             try {
-                int length = Math.min(payloadChunkBytes, uploadTotal - uploadOffset);
-                byte[] content = new byte[length];
-                uploadInput.seek(uploadOffset);
-                uploadInput.readFully(content);
-                byte[] packet = new byte[length + 4];
-                ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN).putInt(uploadOffset).put(content);
-                transferCharacteristic.setValue(packet);
-                boolean accepted = gatt.writeCharacteristic(transferCharacteristic);
-                if (!accepted) {
-                    mainHandler.postDelayed(this, 12);
-                    return;
+                int sent = 0;
+                while (sent < packetsPerBurst
+                        && queuedOffset < uploadTotal
+                        && queuedOffset - confirmedOffset < STATUS_CHECKPOINT_BYTES) {
+                    int length = Math.min(payloadChunkBytes, uploadTotal - queuedOffset);
+                    byte[] content = new byte[length];
+                    uploadInput.seek(queuedOffset);
+                    uploadInput.readFully(content);
+                    byte[] packet = new byte[length + 4];
+                    ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN).putInt(queuedOffset).put(content);
+                    transferCharacteristic.setValue(packet);
+                    if (!gatt.writeCharacteristic(transferCharacteristic)) {
+                        emitDiagnostic("WRITE: rejected offset=" + queuedOffset + " burst=" + sent);
+                        packetsPerBurst = Math.max(1, packetsPerBurst / 2);
+                        mainHandler.postDelayed(this, 4L);
+                        return;
+                    }
+                    queuedOffset += length;
+                    sent += 1;
+                    if (queuedOffset == length) {
+                        emitDiagnostic("WRITE: first packet accepted bytes=" + length);
+                    }
                 }
-                uploadOffset += length;
-                if (uploadOffset == uploadTotal || uploadOffset >= lastProgressBytes + 65536) {
-                    lastProgressBytes = uploadOffset;
-                    emitEvent("progress", "正在上传", uploadOffset, uploadTotal);
+                if (queuedOffset - confirmedOffset >= STATUS_CHECKPOINT_BYTES
+                        || queuedOffset >= uploadTotal) {
+                    checkpointPending = true;
+                    statusReadNotBefore = System.currentTimeMillis() + 150L;
+                    emitDiagnostic("WRITE: checkpoint queued=" + queuedOffset
+                            + " confirmed=" + confirmedOffset);
+                    // Resume after the controller has had time to drain no-response writes.
+                    mainHandler.postDelayed(this, 150L);
+                } else {
+                    mainHandler.post(this);
                 }
-                mainHandler.postDelayed(this, 5);
             } catch (IOException error) {
                 stopUpload(error.getMessage());
             }
@@ -562,6 +737,9 @@ public final class MainActivity extends Activity {
 
     private void stopUpload(String errorMessage) {
         uploading = false;
+        checkpointPending = false;
+        statusReadPending = false;
+        awaitingCompletion = false;
         mainHandler.removeCallbacks(uploadRunnable);
         if (uploadInput != null) {
             try {
@@ -577,6 +755,10 @@ public final class MainActivity extends Activity {
         emitEvent("error", message == null ? "未知错误" : message, -1, -1);
     }
 
+    private void emitDiagnostic(String message) {
+        emitEvent("diagnostic", message, -1, -1);
+    }
+
     private void emitEvent(String type, String message, int written, int total) {
         JSONObject object = new JSONObject();
         try {
@@ -590,7 +772,100 @@ public final class MainActivity extends Activity {
         runOnUiThread(() -> webView.evaluateJavascript(script, null));
     }
 
+    private static final int REQUEST_CAMERA_CAPTURE = 1201;
+    private static final int REQUEST_PICK_MEDIA = 1202;
+
+    private void requestCamera() {
+        File captureFile = CameraFileProvider.captureFile(this);
+        if (captureFile.exists() && !captureFile.delete()) {
+            emitError("无法准备拍照文件");
+            return;
+        }
+        cameraCaptureUri = CameraFileProvider.captureUri(this);
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, cameraCaptureUri);
+        intent.setClipData(ClipData.newRawUri("OP Embedded photo", cameraCaptureUri));
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        if (intent.resolveActivity(getPackageManager()) == null) {
+            cameraCaptureUri = null;
+            emitError("没有找到可用的相机应用");
+            return;
+        }
+        startActivityForResult(intent, REQUEST_CAMERA_CAPTURE);
+    }
+
+    private void openNativeMediaPicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
+        startActivityForResult(intent, REQUEST_PICK_MEDIA);
+    }
+
+    private void importMedia(Uri uri, String mimeType) {
+        if (uri == null) return;
+        emitEvent("status", "正在读取媒体…", -1, -1);
+        new Thread(() -> {
+            String normalizedType = normalizeMediaMime(mimeType, uri);
+            String name = createMediaName(normalizedType);
+            File target = new File(getCacheDir(), name);
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                if (input == null) throw new IOException("无法读取所选媒体");
+                try (FileOutputStream output = new FileOutputStream(target, false)) {
+                    byte[] buffer = new byte[64 * 1024];
+                    int count;
+                    while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
+                }
+                runOnUiThread(() -> deliverManagedMedia(name, normalizedType));
+            } catch (Exception error) {
+                target.delete();
+                String message = error.getMessage();
+                runOnUiThread(() -> emitError(message == null ? "媒体读取失败" : message));
+            }
+        }, "op-media-import").start();
+    }
+
+    private void deliverManagedMedia(String name, String mimeType) {
+        File file = new File(getCacheDir(), name);
+        if (!file.isFile() || file.length() == 0) {
+            emitError("媒体文件为空或不存在");
+            return;
+        }
+        String normalizedMime = normalizeMediaMime(mimeType, null);
+        String url = "https://appassets.androidplatform.net/media/" + name;
+        webView.evaluateJavascript("window.OpenPencilApp.nativeMedia(" + JSONObject.quote(url)
+                + "," + JSONObject.quote(normalizedMime) + ")", null);
+    }
+
+    private String normalizeMediaMime(String mimeType, Uri sourceUri) {
+        if (mimeType != null && (mimeType.startsWith("video/") || mimeType.startsWith("image/"))) {
+            return mimeType;
+        }
+        String path = sourceUri == null ? "" : String.valueOf(sourceUri.getLastPathSegment()).toLowerCase();
+        if (path.endsWith(".mov")) return "video/quicktime";
+        if (path.endsWith(".webm")) return "video/webm";
+        if (path.endsWith(".mp4") || path.endsWith(".m4v")) return "video/mp4";
+        if (path.endsWith(".png")) return "image/png";
+        if (path.endsWith(".webp")) return "image/webp";
+        return "image/jpeg";
+    }
+
+    private String createMediaName(String mimeType) {
+        String extension = ".jpg";
+        if ("video/quicktime".equals(mimeType)) extension = ".mov";
+        else if ("video/webm".equals(mimeType)) extension = ".webm";
+        else if (mimeType.startsWith("video/")) extension = ".mp4";
+        else if ("image/png".equals(mimeType)) extension = ".png";
+        else if ("image/webp".equals(mimeType)) extension = ".webp";
+        return "openpencil-media-" + Long.toUnsignedString(System.nanoTime()) + extension;
+    }
+
     private final class NativeBridge {
+        @JavascriptInterface
+        public void capturePhoto() { runOnUiThread(MainActivity.this::requestCamera); }
+
+        @JavascriptInterface
+        public void pickMedia() { runOnUiThread(MainActivity.this::openNativeMediaPicker); }
         @JavascriptInterface
         public void connect() {
             runOnUiThread(() -> {

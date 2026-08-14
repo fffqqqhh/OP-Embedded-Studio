@@ -97,6 +97,8 @@ typedef struct __attribute__((packed)) {
 esp_err_t openpencil_content_init(void);
 uint8_t openpencil_content_firmware_mode(void);
 bool openpencil_content_write_in_progress(void);
+bool openpencil_content_read_begin(void);
+void openpencil_content_read_end(void);
 bool openpencil_content_is_valid(void);
 bool openpencil_content_is_prototype(void);
 bool openpencil_content_is_sequence(void);

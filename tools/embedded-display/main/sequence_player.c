@@ -61,16 +61,17 @@ static void sequence_decoder_task(void *argument)
         openpencil_sequence_region_t region = {0};
         esp_err_t result = ESP_OK;
         while (true) {
-            while (openpencil_content_write_in_progress()) {
+            while (!openpencil_content_read_begin()) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
             result = openpencil_content_sequence_region(request.frame_index, &region);
-            if (result != ESP_OK) break;
-            if (openpencil_content_write_in_progress()) continue;
-            result = openpencil_content_reconstruct_sequence_frame(request.frame_index,
-                                                                   request.previous_frame,
-                                                                   request.destination,
-                                                                   decoder->frame_pixels);
+            if (result == ESP_OK) {
+                result = openpencil_content_reconstruct_sequence_frame(request.frame_index,
+                                                                       request.previous_frame,
+                                                                       request.destination,
+                                                                       decoder->frame_pixels);
+            }
+            openpencil_content_read_end();
             if (!openpencil_content_write_in_progress()) break;
         }
         const sequence_decode_result_t decoded = {
@@ -184,17 +185,25 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
     int64_t present_total_us = 0;
     uint64_t transferred_pixels = 0;
     uint32_t stats_frames = 0;
+    uint32_t dropped_frames = 0;
 
     while (true) {
         openpencil_display_presenter_metrics_t present_metrics = {0};
-        ESP_RETURN_ON_ERROR(openpencil_display_presenter_draw_measured(panel,
-                                                                       width,
-                                                                       height,
-                                                                       current_buffer,
-                                                                       &present_metrics),
-                            TAG,
-                            "draw sequence frame failed");
-        if (on_first_frame) {
+        const esp_err_t present_result = openpencil_display_presenter_draw_measured(panel,
+                                                                                      width,
+                                                                                      height,
+                                                                                      current_buffer,
+                                                                                      &present_metrics);
+        if (present_result != ESP_OK) {
+            // Do not turn a transient QSPI DMA fault into an application reset.
+            // The next decoded frame is already independent and can be presented
+            // normally, so skipping this frame keeps BLE connected.
+            ESP_LOGW(TAG,
+                     "dropping sequence frame %u after display error: %s",
+                     current_frame,
+                     esp_err_to_name(present_result));
+            dropped_frames++;
+        } else if (on_first_frame) {
             ESP_RETURN_ON_ERROR(on_first_frame(), TAG, "start sequence transport failed");
             on_first_frame = NULL;
         }
@@ -227,7 +236,9 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
         te_total_us += present_metrics.te_wait_us;
         transfer_total_us += present_metrics.transfer_us;
         present_total_us += present_metrics.total_us;
-        transferred_pixels += (uint64_t)width * height;
+        if (present_result == ESP_OK) {
+            transferred_pixels += (uint64_t)width * height;
+        }
         stats_frames++;
 
         vTaskDelayUntil(&next_deadline, frame_delay > 0 ? frame_delay : 1);
@@ -244,7 +255,7 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                                           : 0.0;
             ESP_LOGI(TAG,
                      "stats: frames=%lu fps=%.2f load=%.2f ms wait=%.2f ms te=%.2f ms "
-                     "transfer=%.2f ms present=%.2f ms pixels=%.1f%% budget=%u ms",
+                     "transfer=%.2f ms present=%.2f ms pixels=%.1f%% drops=%lu budget=%u ms",
                      (unsigned long)stats_frames,
                      actual_fps,
                      (double)load_total_us / stats_frames / 1000.0,
@@ -254,6 +265,7 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                      (double)present_total_us / stats_frames / 1000.0,
                      (double)transferred_pixels * 100.0 /
                          ((double)stats_frames * width * height),
+                     (unsigned long)dropped_frames,
                      openpencil_content_frame_delay_ms());
             stats_started_us = esp_timer_get_time();
             load_total_us = 0;
@@ -263,6 +275,7 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
             present_total_us = 0;
             transferred_pixels = 0;
             stats_frames = 0;
+            dropped_frames = 0;
         }
 
         (void)current_frame;

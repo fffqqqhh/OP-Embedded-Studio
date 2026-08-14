@@ -78,14 +78,14 @@
       : { codec: 0, bytes: frame }
   }
 
-  function encodeSequence(frames) {
+  function encodeSequence(frames, frameDelayMs = 50) {
     if (frames.length < 2) throw new Error('PNG 序列至少需要两张图片')
     const encoded = frames.map(encodeRle)
     const dataBytes = encoded.reduce((total, frame) => total + frame.bytes.byteLength, 0)
     const payload = new Uint8Array(SEQUENCE_HEADER_BYTES + frames.length * RESOURCE_BYTES + dataBytes)
     const view = new DataView(payload.buffer)
     view.setUint32(0, WIDTH * HEIGHT * 2, true)
-    view.setUint16(4, 50, true)
+    view.setUint16(4, Math.min(0xffff, Math.max(1, Math.round(frameDelayMs))), true)
     view.setUint16(6, frames.length, true)
     view.setUint32(8, dataBytes, true)
     const dataOffset = SEQUENCE_HEADER_BYTES + frames.length * RESOURCE_BYTES

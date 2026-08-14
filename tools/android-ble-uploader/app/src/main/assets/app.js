@@ -3,7 +3,8 @@
   const canvas = document.getElementById('previewCanvas')
   const context = canvas.getContext('2d', { willReadFrequently: true })
   const fileInput = document.getElementById('fileInput')
-  const cameraInput = document.getElementById('cameraInput')
+  const cameraButton = document.getElementById('cameraButton')
+  const fpsInput = document.getElementById('fpsInput')
   const editButton = document.getElementById('editButton')
   const uploadButton = document.getElementById('uploadButton')
   const backgroundInput = document.getElementById('backgroundInput')
@@ -13,6 +14,7 @@
   const connectionBadge = document.getElementById('connectionBadge')
   const fileSummary = document.getElementById('fileSummary')
   const payloadSummary = document.getElementById('payloadSummary')
+  const diagnosticText = document.getElementById('diagnosticText')
   const emptyPreview = document.getElementById('emptyPreview')
   const editHint = document.getElementById('editHint')
   const editControls = document.getElementById('editControls')
@@ -26,14 +28,34 @@
   let busy = false
   let pendingUpload = false
   let editing = false
+  let renderedProgressPercent = -1
+  let lastProgressStatusAt = 0
+  let lastDiagnosticAt = 0
   let zoom = 1
   let offsetX = 0
   let offsetY = 0
   let gesture = null
+  const MAX_VIDEO_SECONDS = 4
+  const MAX_VIDEO_FRAMES = 64
+
+  function isVideoFile(file) {
+    return Boolean(file?.type?.startsWith('video/'))
+  }
+
+  function selectedFps() {
+    return Number(fpsInput.value) || 12
+  }
 
   function setStatus(message, type = '') {
     statusText.textContent = message
     statusText.className = `status ${type}`
+  }
+
+  function setDiagnostic(message, force = false) {
+    const now = performance.now()
+    if (!force && now - lastDiagnosticAt < 1000) return
+    lastDiagnosticAt = now
+    diagnosticText.textContent = `BLE diagnostics: ${message}`
   }
 
   function updateConnectionBadge() {
@@ -51,7 +73,8 @@
 
   function updateActions() {
     fileInput.disabled = busy
-    cameraInput.disabled = busy
+    cameraButton.disabled = busy
+    fpsInput.disabled = busy
     editButton.disabled = files.length === 0 || busy
     uploadButton.disabled = files.length === 0 || busy
     editButton.textContent = editing ? '完成' : '编辑'
@@ -139,6 +162,72 @@
     }
   }
 
+  async function decodeVideoFile(file) {
+    if (!file || file.size <= 0) throw new Error('视频文件为空，请确认视频已完整下载到手机')
+    const objectUrl = URL.createObjectURL(file)
+    const video = document.createElement('video')
+    video.muted = true
+    video.playsInline = true
+    video.preload = 'auto'
+    try {
+      video.src = objectUrl
+      await waitForVideoEvent(video, 'loadedmetadata', '无法读取视频，请选择本地视频文件')
+      if (!video.videoWidth || !video.videoHeight || !Number.isFinite(video.duration)) {
+        throw new Error('视频没有可用画面')
+      }
+      // WebView may expose metadata before its compositor has decoded a frame.
+      await waitForVideoFrame(video, Math.min(0.001, Math.max(0, video.duration / 2)))
+      return {
+        source: video,
+        width: video.videoWidth,
+        height: video.videoHeight,
+        duration: video.duration,
+        close() {
+          video.pause()
+          video.removeAttribute('src')
+          video.load()
+          URL.revokeObjectURL(objectUrl)
+        }
+      }
+    } catch (error) {
+      video.removeAttribute('src')
+      URL.revokeObjectURL(objectUrl)
+      throw error
+    }
+  }
+
+  function waitForVideoEvent(video, eventName, errorMessage, timeoutMs = 8000) {
+    return new Promise((resolve, reject) => {
+      const timer = window.setTimeout(() => finish(new Error(errorMessage)), timeoutMs)
+      const onEvent = () => finish()
+      const onError = () => finish(new Error(errorMessage))
+      const finish = (error) => {
+        window.clearTimeout(timer)
+        video.removeEventListener(eventName, onEvent)
+        video.removeEventListener('error', onError)
+        if (error) reject(error)
+        else resolve()
+      }
+      video.addEventListener(eventName, onEvent, { once: true })
+      video.addEventListener('error', onError, { once: true })
+    })
+  }
+
+  function waitForPresentedFrame(video) {
+    return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  }
+
+  async function waitForVideoFrame(video, time) {
+    const duration = Number.isFinite(video.duration) ? video.duration : 0
+    const target = duration > 0 ? Math.min(Math.max(0.001, time), Math.max(0.001, duration - 0.001)) : 0
+    if (Math.abs(video.currentTime - target) > 0.0005 || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      const seeked = waitForVideoEvent(video, 'seeked', '视频帧读取超时', 6000)
+      video.currentTime = target
+      await seeked
+    }
+    await waitForPresentedFrame(video)
+  }
+
   function drawBitmap(targetContext, bitmap) {
     const width = protocol.WIDTH
     const height = protocol.HEIGHT
@@ -180,7 +269,11 @@
 
   async function loadPreview() {
     releaseBitmap(previewBitmap)
-    previewBitmap = files.length ? await decodeImageFile(files[0]) : null
+    previewBitmap = files.length
+      ? isVideoFile(files[0])
+        ? await decodeVideoFile(files[0])
+        : await decodeImageFile(files[0])
+      : null
     emptyPreview.hidden = Boolean(previewBitmap)
     setEditing(Boolean(previewBitmap))
     resetCrop()
@@ -197,6 +290,30 @@
       return protocol.rgb565(frameContext.getImageData(0, 0, protocol.WIDTH, protocol.HEIGHT))
     } finally {
       releaseBitmap(bitmap)
+    }
+  }
+
+  async function renderVideoFrames(file) {
+    const video = await decodeVideoFile(file)
+    try {
+      const fps = selectedFps()
+      const duration = Math.min(video.duration, MAX_VIDEO_SECONDS)
+      const frameCount = Math.min(MAX_VIDEO_FRAMES, Math.max(2, Math.ceil(duration * fps)))
+      const frameCanvas = document.createElement('canvas')
+      frameCanvas.width = protocol.WIDTH
+      frameCanvas.height = protocol.HEIGHT
+      const frameContext = frameCanvas.getContext('2d', { willReadFrequently: true })
+      const frames = []
+      for (let index = 0; index < frameCount; index += 1) {
+        const time = Math.min(duration - 0.001, index / fps)
+        setStatus(`正在处理视频：${index + 1} / ${frameCount} 帧`)
+        await waitForVideoFrame(video.source, Math.max(0, time))
+        drawBitmap(frameContext, video)
+        frames.push(protocol.rgb565(frameContext.getImageData(0, 0, protocol.WIDTH, protocol.HEIGHT)))
+      }
+      return { frames, frameCount, fps, duration }
+    } finally {
+      releaseBitmap(video)
     }
   }
 
@@ -231,27 +348,45 @@
 
   async function processAndUpload() {
     if (!window.OpenPencilNative) return setStatus('原生 BLE 桥不可用', 'error')
+    setEditing(false)
     busy = true
     pendingUpload = false
     updateActions()
     progressBar.style.width = '0%'
+    renderedProgressPercent = 0
     try {
-      if (files.length > 1 && files.some((file) => !file.name.toLowerCase().endsWith('.png'))) {
+      const containsVideo = files.some(isVideoFile)
+      if (containsVideo && files.length !== 1) {
+        throw new Error('视频需要单独上传，不能与照片或 PNG 序列混合')
+      }
+      if (!containsVideo && files.length > 1 && files.some((file) => !file.name.toLowerCase().endsWith('.png'))) {
         throw new Error('多帧序列只支持 PNG 文件')
       }
-      const sorted = [...files].sort((left, right) =>
-        left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })
-      )
-      const frames = []
-      for (let index = 0; index < sorted.length; index += 1) {
-        setStatus(`正在处理第 ${index + 1} / ${sorted.length} 帧…`)
-        frames.push(await renderFile(sorted[index]))
+      let frames = []
+      let videoDetails = null
+      if (containsVideo) {
+        videoDetails = await renderVideoFrames(files[0])
+        frames = videoDetails.frames
+      } else {
+        const sorted = [...files].sort((left, right) =>
+          left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })
+        )
+        for (let index = 0; index < sorted.length; index += 1) {
+          setStatus(`正在处理第 ${index + 1} / ${sorted.length} 帧…`)
+          frames.push(await renderFile(sorted[index]))
+        }
       }
       const content = frames.length === 1
         ? protocol.encodeFrame(frames[0])
-        : protocol.encodeSequence(frames)
-      payloadSummary.textContent = `${frames.length} 帧 · ${(content.byteLength / 1024 / 1024).toFixed(2)} MiB`
-      setStatus('内容已准备，正在查找设备…')
+        : protocol.encodeSequence(frames, 1000 / (videoDetails?.fps || 20))
+      payloadSummary.textContent = videoDetails
+        ? `${frames.length} 帧 · ${videoDetails.fps} FPS · ${videoDetails.duration.toFixed(1)} 秒 · ${(content.byteLength / 1024 / 1024).toFixed(2)} MiB`
+        : `${frames.length} 帧 · ${(content.byteLength / 1024 / 1024).toFixed(2)} MiB`
+      setStatus(
+        videoDetails
+          ? `视频已转换为 ${frames.length} 帧，正在查找设备…`
+          : '内容已准备，正在查找设备…'
+      )
       sendPayloadToNative(content)
       if (connected) {
         startNativeUpload()
@@ -306,11 +441,18 @@
 
   async function handleFileSelection(input) {
     files = [...input.files]
+    if (files.some(isVideoFile) && files.length > 1) {
+      files = [files.find(isVideoFile)]
+      input.value = ''
+      setStatus('视频将单独处理，已忽略同次选择的其他文件')
+    }
     fileSummary.textContent = files.length
-      ? files.length === 1
-        ? '单帧图片 · 466 × 466'
-        : `${files.length} 帧 PNG 序列 · 20 FPS`
-      : '支持单图或 PNG 序列，目标 466 × 466。'
+      ? isVideoFile(files[0])
+        ? `短视频 · ${selectedFps()} FPS · 最多 ${MAX_VIDEO_SECONDS} 秒`
+        : files.length === 1
+          ? '单帧图片 · 466 × 466'
+          : `${files.length} 帧 PNG 序列 · 20 FPS`
+      : '支持照片、PNG 序列或短视频，目标 466 × 466。'
     payloadSummary.textContent = '尚未准备内容'
     progressBar.style.width = '0%'
     setStatus(files.length ? '编辑已激活，调整完成后点击“完成”' : '选择图片后即可上传')
@@ -331,7 +473,23 @@
   }
 
   fileInput.addEventListener('change', () => handleFileSelection(fileInput))
-  cameraInput.addEventListener('change', () => handleFileSelection(cameraInput))
+  cameraButton.addEventListener('click', () => {
+    if (window.OpenPencilNative?.capturePhoto) window.OpenPencilNative.capturePhoto()
+    else setStatus('相机功能只在 Android 应用内可用', 'error')
+  })
+  document.querySelector('.action-icon[title="导入照片或视频"]')?.addEventListener('click', (event) => {
+    if (window.OpenPencilNative?.pickMedia) {
+      event.preventDefault()
+      window.OpenPencilNative.pickMedia()
+    }
+  })
+  fpsInput.value = localStorage.getItem('openpencil-video-fps') || '12'
+  fpsInput.addEventListener('change', () => {
+    localStorage.setItem('openpencil-video-fps', fpsInput.value)
+    if (files.length && isVideoFile(files[0])) {
+      fileSummary.textContent = `短视频 · ${selectedFps()} FPS · 最多 ${MAX_VIDEO_SECONDS} 秒`
+    }
+  })
 
   editButton.addEventListener('click', () => setEditing(!editing))
   uploadButton.addEventListener('click', processAndUpload)
@@ -381,6 +539,25 @@
   previewWrap.addEventListener('lostpointercapture', releasePointer)
 
   window.OpenPencilApp = {
+    async nativeMedia(url, mimeType) {
+      try {
+        const response = await fetch(url)
+        if (!response.ok) throw new Error(`媒体文件读取失败 (${response.status})`)
+        const blob = await response.blob()
+        if (!blob.size) throw new Error('媒体文件为空，请重新选择或拍摄')
+        const file = new File([blob], mimeType.startsWith('video/') ? 'captured-video.mp4' : 'captured-image.jpg', { type: mimeType })
+        files = [file]
+        fileSummary.textContent = isVideoFile(file)
+          ? `短视频 · ${selectedFps()} FPS · 最多 ${MAX_VIDEO_SECONDS} 秒`
+          : '单帧图片 · 466 × 466'
+        payloadSummary.textContent = '媒体已载入，点击上传到设备'
+        await loadPreview()
+        updateActions()
+        setStatus('媒体已载入，可以编辑或上传')
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : String(error), 'error')
+      }
+    },
     nativeEvent(event) {
       if (event.type === 'connected') {
         connected = true
@@ -397,8 +574,15 @@
         setStatus(event.message)
       } else if (event.type === 'progress') {
         const percent = event.total ? Math.round(event.written / event.total * 100) : 0
-        progressBar.style.width = `${percent}%`
-        setStatus(`${event.message}：${percent}%`)
+        if (percent !== renderedProgressPercent) {
+          renderedProgressPercent = percent
+          progressBar.style.width = `${percent}%`
+        }
+        const now = performance.now()
+        if (percent === 100 || now - lastProgressStatusAt >= 500) {
+          lastProgressStatusAt = now
+          setStatus(`${event.message}：${percent}%`)
+        }
       } else if (event.type === 'complete') {
         busy = false
         pendingUpload = false
@@ -411,6 +595,11 @@
         connecting = false
         updateConnectionBadge()
         setStatus(event.message, 'error')
+      } else if (event.type === 'diagnostic') {
+        setDiagnostic(
+          event.message,
+          event.message.startsWith('READY') || event.message.startsWith('LINK: disconnected')
+        )
       } else {
         setStatus(event.message)
       }

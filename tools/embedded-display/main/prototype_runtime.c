@@ -35,8 +35,10 @@ static esp_err_t draw_state(esp_lcd_panel_handle_t panel,
                             uint16_t state)
 {
     if (state >= source->state_count) return ESP_ERR_INVALID_ARG;
-    ESP_RETURN_ON_ERROR(openpencil_frame_store_load(state, frame_buffer, FRAME_PIXELS), TAG,
-                        "load state frame");
+    while (!openpencil_content_read_begin()) vTaskDelay(pdMS_TO_TICKS(10));
+    const esp_err_t load_result = openpencil_frame_store_load(state, frame_buffer, FRAME_PIXELS);
+    openpencil_content_read_end();
+    ESP_RETURN_ON_ERROR(load_result, TAG, "load state frame");
     ESP_LOGI(TAG, "State %u", state);
     return openpencil_display_presenter_draw(panel,
                                              CONFIG_EXAMPLE_LCD_H_RES,

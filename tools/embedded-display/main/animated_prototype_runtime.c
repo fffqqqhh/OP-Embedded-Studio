@@ -44,7 +44,7 @@ static void animated_decoder_task(void *argument)
     animated_decoder_t *decoder = argument;
     animated_decode_request_t request;
     while (xQueueReceive(decoder->requests, &request, portMAX_DELAY) == pdTRUE) {
-        while (openpencil_content_write_in_progress()) {
+        while (!openpencil_content_read_begin()) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
         const animated_decode_result_t result = {
@@ -54,6 +54,7 @@ static void animated_decoder_task(void *argument)
                                                      request.destination,
                                                      FRAME_PIXELS),
         };
+        openpencil_content_read_end();
         xQueueSend(decoder->results, &result, portMAX_DELAY);
     }
     vTaskDelete(NULL);
@@ -144,11 +145,16 @@ esp_err_t openpencil_wireless_animated_prototype_run(esp_lcd_panel_handle_t pane
              header->width, header->height, descriptor.frame_count, descriptor.frame_delay_ms);
     while (true) {
         const TickType_t frame_started = xTaskGetTickCount();
-        ESP_RETURN_ON_ERROR(openpencil_display_presenter_draw(panel,
-                                                               CONFIG_EXAMPLE_LCD_H_RES,
-                                                               CONFIG_EXAMPLE_LCD_V_RES,
-                                                               current_buffer),
-                            TAG, "draw animated frame");
+        const esp_err_t present_result = openpencil_display_presenter_draw(panel,
+                                                                             CONFIG_EXAMPLE_LCD_H_RES,
+                                                                             CONFIG_EXAMPLE_LCD_V_RES,
+                                                                             current_buffer);
+        if (present_result != ESP_OK) {
+            // Preserve the interaction runtime when a CO5300 transfer underflows.
+            // A later frame can be submitted after the SPI driver has recovered.
+            ESP_LOGW(TAG, "dropping animated frame after display error: %s",
+                     esp_err_to_name(present_result));
+        }
 
         const TickType_t delay = pdMS_TO_TICKS(descriptor.frame_delay_ms);
         const TickType_t deadline = frame_started + (delay > 0 ? delay : 1);

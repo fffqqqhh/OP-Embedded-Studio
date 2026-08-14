@@ -15,10 +15,12 @@ h1, h2, p { margin: 0; }
 
 .app-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
   width: min(100%, 560px);
+  min-width: 0;
   height: 100dvh;
   margin: 0 auto;
+  overflow: hidden;
   padding: max(16px, env(safe-area-inset-top)) 16px
     max(24px, calc(env(safe-area-inset-bottom) + 14px));
 }
@@ -40,6 +42,7 @@ h2 { font-size: 17px; font-weight: 650; letter-spacing: -0.02em; }
 
 .editor-card {
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
@@ -87,20 +90,26 @@ button:disabled { cursor: default; opacity: 0.38; }
 .color-control input { width: 38px; height: 30px; border: 1px solid #d1d1d6; border-radius: 9px; background: transparent; padding: 3px; }
 .text-button { min-height: 34px; background: transparent; color: #007aff; padding: 0 4px; }
 
-.transfer-status { padding: 10px 2px 8px; }
-.status-copy { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
-.status { overflow: hidden; color: #636366; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.transfer-status { width: 100%; min-width: 0; min-height: 66px; overflow: hidden; padding: 10px 2px 8px; }
+.status-copy { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 10px; min-height: 16px; margin-bottom: 7px; }
+.status { min-width: 0; overflow: hidden; color: #636366; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .status.error { color: #ff3b30; }
 .status.success { color: #248a3d; }
-.payload-summary { flex: 0 0 auto; color: #aeaeb2; font-size: 10px; }
+.payload-summary { flex: 0 1 auto; min-width: 0; overflow: hidden; color: #aeaeb2; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .progress-track { height: 4px; overflow: hidden; border-radius: 999px; background: #d1d1d6; }
-#progressBar { width: 0; height: 100%; border-radius: inherit; background: #007aff; transition: width 160ms ease; }
+#progressBar { width: 0; height: 100%; border-radius: inherit; background: #007aff; }
+.diagnostic { width: 100%; min-width: 0; overflow: hidden; height: 14px; margin-top: 6px; color: #8e8e93; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
 
-.action-bar { display: grid; grid-template-columns: 52px 52px minmax(0, 1fr); gap: 10px; padding-top: 2px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 8px 2px 4px; color: #636366; font-size: 12px; }
+.settings-row select { min-width: 130px; min-height: 34px; border: 1px solid #d1d1d6; border-radius: 10px; background: #fff; color: #1c1c1e; padding: 0 8px; }
+
+.action-bar { display: flex; min-width: 0; align-items: stretch; gap: 8px; padding-top: 2px; }
 .action-bar > * { height: 52px; }
+.action-bar .action-icon { flex: 0 0 48px; }
 .action-icon { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #d1d1d6; background: #fff; color: #1c1c1e; }
 .action-icon svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .action-icon input { display: none; }
+.action-bar .primary { flex: 1 1 0; width: auto; min-width: 0; }
 .primary { background: #007aff; color: #fff; }
 
 @media (max-height: 680px) {
@@ -110,7 +119,9 @@ button:disabled { cursor: default; opacity: 0.38; }
   .subtitle { display: none; }
   .editor-card { padding: 11px; }
   .preview-wrap { width: min(100%, calc(100dvh - 238px)); }
-  .transfer-status { padding-top: 7px; padding-bottom: 6px; }
+  .transfer-status { min-height: 58px; padding-top: 7px; padding-bottom: 4px; }
+  .settings-row { min-height: 40px; padding-top: 4px; }
   .action-bar > * { height: 46px; min-height: 46px; }
-  .action-bar { grid-template-columns: 46px 46px minmax(0, 1fr); }
+  .action-bar { gap: 7px; }
+  .action-bar .action-icon { flex-basis: 44px; }
 }

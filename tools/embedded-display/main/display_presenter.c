@@ -10,6 +10,8 @@
 
 #define TE_WAIT_TIMEOUT_MS 100
 #define TRANSFER_DONE_TIMEOUT_MS 500
+#define CO5300_RECOVERY_RETRIES 2
+#define CO5300_RECOVERY_DELAY_MS 20
 
 static const char *TAG = "display_presenter";
 static SemaphoreHandle_t s_te_signal;
@@ -43,6 +45,19 @@ static void wait_for_te(int64_t *waited_us)
         ESP_LOGW(TAG, "TE wait timed out; presenting the frame without synchronization");
     }
     *waited_us = esp_timer_get_time() - started_us;
+}
+
+static bool should_retry_display_submit(esp_err_t result)
+{
+#if CONFIG_EXAMPLE_LCD_CONTROLLER_CO5300
+    // A QSPI DMA underflow leaves the panel IO transaction unusable for that
+    // transfer. The driver reports it as INVALID_STATE, but a later transfer
+    // is valid once the SPI host has recycled the failed transaction.
+    return result == ESP_ERR_INVALID_STATE;
+#else
+    (void)result;
+    return false;
+#endif
 }
 
 static esp_err_t submit_region(esp_lcd_panel_handle_t panel,
@@ -183,9 +198,22 @@ esp_err_t openpencil_display_presenter_draw_region_measured(
 
     const int64_t started_us = esp_timer_get_time();
     int64_t te_wait_us = 0;
-    wait_for_te(&te_wait_us);
-    const int64_t transfer_started_us = esp_timer_get_time();
-    const esp_err_t result = submit_region(panel, x, y, x + width, y + height, pixels);
+    int64_t transfer_started_us = 0;
+    esp_err_t result = ESP_FAIL;
+    int attempt = 0;
+    do {
+        wait_for_te(&te_wait_us);
+        transfer_started_us = esp_timer_get_time();
+        result = submit_region(panel, x, y, x + width, y + height, pixels);
+        if (!should_retry_display_submit(result) || attempt >= CO5300_RECOVERY_RETRIES) break;
+
+        ESP_LOGW(TAG,
+                 "CO5300 QSPI transfer underflow; retrying frame submission (%d/%d)",
+                 attempt + 1,
+                 CO5300_RECOVERY_RETRIES);
+        vTaskDelay(pdMS_TO_TICKS(CO5300_RECOVERY_DELAY_MS));
+        attempt++;
+    } while (true);
 
     const int64_t completed_us = esp_timer_get_time();
     if (metrics) {

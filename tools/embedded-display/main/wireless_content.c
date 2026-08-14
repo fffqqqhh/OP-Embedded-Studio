@@ -22,6 +22,7 @@ static openpencil_animated_content_header_t active_animated;
 static uint8_t sequence_decode_chunk[16384];
 static bool content_valid;
 static atomic_bool content_write_in_progress = ATOMIC_VAR_INIT(false);
+static atomic_uint content_readers = ATOMIC_VAR_INIT(0);
 static openpencil_content_header_t pending_header;
 static size_t pending_payload_bytes;
 static size_t pending_erase_size;
@@ -91,6 +92,20 @@ static esp_err_t decode_rle_chunk(const uint8_t *encoded,
 bool openpencil_content_write_in_progress(void)
 {
     return atomic_load_explicit(&content_write_in_progress, memory_order_acquire);
+}
+
+bool openpencil_content_read_begin(void)
+{
+    if (openpencil_content_write_in_progress()) return false;
+    atomic_fetch_add_explicit(&content_readers, 1, memory_order_acquire);
+    if (!openpencil_content_write_in_progress()) return true;
+    atomic_fetch_sub_explicit(&content_readers, 1, memory_order_release);
+    return false;
+}
+
+void openpencil_content_read_end(void)
+{
+    atomic_fetch_sub_explicit(&content_readers, 1, memory_order_release);
 }
 
 uint8_t openpencil_content_firmware_mode(void)
@@ -848,6 +863,10 @@ esp_err_t openpencil_content_write_begin(const openpencil_content_header_t *head
 
     openpencil_content_write_abort();
     atomic_store_explicit(&content_write_in_progress, true, memory_order_release);
+    // Let active playback reads complete before erasing their content partition.
+    while (atomic_load_explicit(&content_readers, memory_order_acquire) > 0) {
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
     content_valid = false;
     pending_erase_size = erase_size;
     const size_t initial_erase = erase_size < 0x10000u ? erase_size : 0x10000u;
