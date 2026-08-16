@@ -178,6 +178,7 @@ export interface EmbeddedBuildResult {
 export interface EmbeddedFlashManifest {
   name: string
   version: string
+  flashSize?: string
   new_install_prompt_erase?: boolean
   builds: Array<{
     chipFamily: string

@@ -42,6 +42,7 @@
 #include "usb_content_server.h"
 #endif
 #include "co5300_panel.h"
+#include "m5ioe1.h"
 
 static const char *TAG = "lcd_simple";
 
@@ -180,6 +181,14 @@ static esp_err_t draw_generated_image(esp_lcd_panel_handle_t panel, uint16_t *fr
 void app_main(void)
 {
     ESP_ERROR_CHECK(backlight_init());
+
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    ESP_LOGI(TAG, "Initialize M5IOE1 display power and reset");
+    const esp_err_t m5ioe1_result = openpencil_m5ioe1_display_init();
+    if (m5ioe1_result != ESP_OK) {
+        ESP_LOGE(TAG, "M5IOE1 display power initialization failed: %s; continuing", esp_err_to_name(m5ioe1_result));
+    }
+#endif
 
     esp_lcd_panel_io_handle_t io_handle = NULL;
     esp_lcd_panel_handle_t panel_handle = NULL;

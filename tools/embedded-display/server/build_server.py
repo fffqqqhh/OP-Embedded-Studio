@@ -53,6 +53,16 @@ BUILD_MODES = {
     "ble-prototype": {"partitionTable": "partitions_32mb_wireless.csv", "appPartitionBytes": 0x300000},
 }
 
+PROFILE_PARTITION_TABLES = {
+    "co5300_m5stack_stopwatch": {
+        "usb-frame": "partitions_16mb_usb_frame.csv",
+    },
+}
+
+BUILD_DIRECTORY_ALIASES = {
+    ("co5300_m5stack_stopwatch", "usb-frame"): Path("build") / "m5stopwatch_usb",
+}
+
 PROTOTYPE_EVENTS = {
     "screen_click": "OPENPENCIL_EVENT_SCREEN_CLICK",
     "screen_long_press": "OPENPENCIL_EVENT_SCREEN_LONG_PRESS",
@@ -140,9 +150,18 @@ def safe_path_segment(value):
 
 
 def build_dir_for_profile(profile_id, build_mode=DEFAULT_BUILD_MODE):
-    safe_mode = safe_path_segment(normalize_build_mode(build_mode))
+    mode = normalize_build_mode(build_mode)
+    alias = BUILD_DIRECTORY_ALIASES.get((profile_id, mode))
+    if alias is not None:
+        return alias
+    safe_mode = safe_path_segment(mode)
     safe_id = safe_path_segment(profile_id)
     return Path("build") / "modes" / safe_mode / f"profile_{safe_id}"
+
+
+def partition_table_for(profile, build_mode):
+    mode = normalize_build_mode(build_mode)
+    return PROFILE_PARTITION_TABLES.get(profile["id"], {}).get(mode, BUILD_MODES[mode]["partitionTable"])
 
 
 def generated_content_dir(profile_id, build_mode):
@@ -318,10 +337,10 @@ def idf_build_command(args):
     return [sys.executable, str(idf_py), *args]
 
 
-def mode_defaults_path(build_mode):
+def mode_defaults_path(profile, build_mode):
     mode = normalize_build_mode(build_mode)
-    partition_table = BUILD_MODES[mode]["partitionTable"]
-    path = PROJECT_DIR / "build" / "modes" / safe_path_segment(mode) / "mode.defaults"
+    partition_table = partition_table_for(profile, mode)
+    path = PROJECT_DIR / "build" / "modes" / safe_path_segment(mode) / safe_path_segment(profile["id"]) / "mode.defaults"
     path.parent.mkdir(parents=True, exist_ok=True)
     wireless_enabled = mode.startswith(("wifi-", "lan-"))
     external_content = mode in (
@@ -357,6 +376,12 @@ def mode_defaults_path(build_mode):
             "CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y",
             'CONFIG_ESPTOOLPY_FLASHSIZE="32MB"',
         ])
+    elif partition_table.startswith("partitions_16mb"):
+        settings.extend([
+            "# CONFIG_ESPTOOLPY_FLASHSIZE_8MB is not set",
+            "CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y",
+            'CONFIG_ESPTOOLPY_FLASHSIZE="16MB"',
+        ])
     if mode == "usb-frame":
         settings.extend([
             "# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160 is not set",
@@ -386,7 +411,7 @@ def build_command(registry, profile, build_mode):
     profile_defaults = profile["defaultsFile"]
     build_dir = build_dir_for_profile(profile["id"], build_mode)
     sdkconfig = build_dir / "sdkconfig"
-    defaults = f"{base_defaults};{profile_defaults};{mode_defaults_path(build_mode)}"
+    defaults = f"{base_defaults};{profile_defaults};{mode_defaults_path(profile, build_mode)}"
 
     return idf_build_command([
         "-B",
@@ -417,8 +442,8 @@ def build_inputs_signature(registry, profile, build_mode):
     paths = [
         registry["defaults"]["base"],
         profile["defaultsFile"],
-        BUILD_MODES[mode]["partitionTable"],
-        mode_defaults_path(mode),
+        partition_table_for(profile, mode),
+        mode_defaults_path(profile, mode),
     ]
     for relative_path in paths:
         path = resolve_project_file(relative_path)
@@ -749,7 +774,10 @@ def prebuilt_artifact_path(profile_id, file_name, build_mode):
     mode = normalize_build_mode(build_mode)
     if mode not in PREBUILT_FIRMWARE_MODES:
         return None
-    return PREBUILT_FIRMWARE_DIR / mode / safe_path_segment(profile_id) / file_name
+    path = PREBUILT_FIRMWARE_DIR / mode / safe_path_segment(profile_id) / file_name
+    # Profiles without checked-in prebuilt binaries fall back to their local
+    # build directory after the build API has produced the artifacts.
+    return path if path.is_file() else None
 
 
 def stable_artifact_path(profile_id, public_name, build_mode, build_path):
@@ -813,6 +841,7 @@ def artifact_manifest(profile_id, build_mode=DEFAULT_BUILD_MODE):
         "name": profile.get("displayName", profile_id),
         "version": profile_id,
         "buildMode": mode,
+        "flashSize": profile.get("flash", "32MB" if partition_table_for(profile, mode).startswith("partitions_32mb") else "8MB"),
         "new_install_prompt_erase": True,
         "builds": [
             {
@@ -931,7 +960,15 @@ def run_build(profile_id, wifi_credentials=None, build_mode=DEFAULT_BUILD_MODE):
 
     with BUILD_LOCK:
         if mode in ("usb-frame", "usb-prototype"):
-            restore_generated_resources(profile_id, mode)
+            content_dir = generated_content_dir(profile_id, mode)
+            has_resources = (
+                (content_dir / GENERATED_IMAGE_HEADER.name).is_file()
+                and (content_dir / GENERATED_PROTOTYPE_HEADER.name).is_file()
+            )
+            if has_resources:
+                restore_generated_resources(profile_id, mode)
+            else:
+                ensure_wireless_base_resources(profile_id, mode)
         elif mode in ("wifi-frame", "wifi-prototype", "wifi-live", "lan-frame", "lan-prototype", "ble-frame", "ble-prototype"):
             ensure_wireless_base_resources(profile_id, mode)
         build_signature = prepare_build_dir(registry, profile, mode, build_dir)

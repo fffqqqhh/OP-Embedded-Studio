@@ -406,6 +406,56 @@
         "fallbackOnTimeout": true,
         "note": "LCD_TE is physically routed to GPIO13 and is used to align full-frame transfers."
       }
+    },
+    {
+      "id": "co5300_m5stack_stopwatch",
+      "displayName": "M5Stack StopWatch 466x466 CO5300",
+      "displayNameZh": "M5Stack StopWatch 466x466 圆形 AMOLED",
+      "screenType": "round_amoled",
+      "module": "M5Stack StopWatch",
+      "driverIc": "CO5300",
+      "controller": "CO5300",
+      "interface": "QSPI",
+      "flash": "16MB",
+      "logicalResolution": {
+        "width": 466,
+        "height": 466
+      },
+      "visibleArea": {
+        "shape": "round",
+        "description": "466 x 466 logical frame with a round AMOLED active area.",
+        "descriptionZh": "466 x 466 逻辑画布，实际可视区域为圆形 AMOLED。"
+      },
+      "physicalSize": {
+        "diagonalInch": 1.75
+      },
+      "verified": false,
+      "imageOnly": false,
+      "defaultsFile": "screen_profiles/co5300_m5stack_stopwatch.defaults",
+      "image": {
+        "pixelFormat": "RGB565",
+        "colorOrder": "RGB",
+        "byteOrder": "little",
+        "rotation": 0,
+        "xGap": 6,
+        "yGap": 0,
+        "transport": "QSPI"
+      },
+      "tearingEffect": {
+        "enabled": true,
+        "gpio": 38,
+        "fallbackOnTimeout": true,
+        "note": "StopWatch routes LCD_TE to GPIO38."
+      },
+      "boardBringup": {
+        "i2c": {
+          "scl": 48,
+          "sda": 47,
+          "address": "0x4F"
+        },
+        "displayPower": "M5IOE1 GPIO8",
+        "displayReset": "M5IOE1 GPIO5"
+      }
     }
   ]
 }

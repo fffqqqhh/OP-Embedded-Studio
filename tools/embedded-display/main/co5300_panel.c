@@ -6,21 +6,38 @@
 #include "display_presenter.h"
 
 #define CO5300_SPI_HOST SPI2_HOST
-#if CONFIG_OPENPENCIL_WIFI_LIVE_PREVIEW
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+#define CO5300_PCLK_HZ (30 * 1000 * 1000)
+#elif CONFIG_OPENPENCIL_WIFI_LIVE_PREVIEW
 // Realtime preview prioritizes a complete TE-synchronized frame over peak
 // throughput. The lower clock gives Wi-Fi and PSRAM DMA more scheduling margin.
 #define CO5300_PCLK_HZ (10 * 1000 * 1000)
 #else
 #define CO5300_PCLK_HZ (30 * 1000 * 1000)
 #endif
-#define CO5300_CS_GPIO 12
-#define CO5300_PCLK_GPIO 38
-#define CO5300_DATA0_GPIO 4
-#define CO5300_DATA1_GPIO 5
-#define CO5300_DATA2_GPIO 6
-#define CO5300_DATA3_GPIO 7
-#define CO5300_RESET_GPIO 1
+#define CO5300_CS_GPIO CONFIG_EXAMPLE_PIN_NUM_LCD_CS
+#define CO5300_PCLK_GPIO CONFIG_EXAMPLE_PIN_NUM_QSPI_PCLK
+#define CO5300_DATA0_GPIO CONFIG_EXAMPLE_PIN_NUM_QSPI_DATA0
+#define CO5300_DATA1_GPIO CONFIG_EXAMPLE_PIN_NUM_QSPI_DATA1
+#define CO5300_DATA2_GPIO CONFIG_EXAMPLE_PIN_NUM_QSPI_DATA2
+#define CO5300_DATA3_GPIO CONFIG_EXAMPLE_PIN_NUM_QSPI_DATA3
+#define CO5300_RESET_GPIO CONFIG_EXAMPLE_PIN_NUM_LCD_RST
 
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+// M5Stack StopWatch uses a different CO5300 command table from the Waveshare
+// 1.75C panel. In particular, TE is enabled with 0x35/0x80 and scanline 466.
+static const co5300_lcd_init_cmd_t co5300_init_cmds[] = {
+    {0x11, NULL, 0, 150},
+    {0xC4, (uint8_t[]){0x80}, 1, 0},
+    {0x35, (uint8_t[]){0x80}, 1, 0},
+    {0x44, (uint8_t[]){0x01, 0xD2}, 2, 0},
+    {0x53, (uint8_t[]){0x20}, 1, 0},
+    {0x20, NULL, 0, 0},
+    {0x36, (uint8_t[]){0x00}, 1, 0},
+    {0x51, (uint8_t[]){0xA0}, 1, 0},
+    {0x29, NULL, 0, 0},
+};
+#else
 static const co5300_lcd_init_cmd_t co5300_init_cmds[] = {
     {0xFE, (uint8_t[]){0x20}, 1, 0},
     {0x19, (uint8_t[]){0x10}, 1, 0},
@@ -37,6 +54,7 @@ static const co5300_lcd_init_cmd_t co5300_init_cmds[] = {
     {0x11, NULL, 0, 600},
     {0x29, NULL, 0, 0},
 };
+#endif
 
 esp_err_t example_co5300_new_panel(int max_transfer_sz,
                                    esp_lcd_panel_io_handle_t *ret_io,

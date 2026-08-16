@@ -44,6 +44,10 @@ menu "Example Configuration"
         bool "Enable the OP Embedded Studio USB content server"
         default n
 
+    config OPENPENCIL_BOARD_M5STACK_STOPWATCH
+        bool "Use M5Stack StopWatch board power and reset wiring"
+        default n
+
     config OPENPENCIL_BLE_REQUIRE_PAIRING
         bool "Require BLE link encryption before content writes"
         default y
@@ -106,6 +110,26 @@ menu "Example Configuration"
             Optional tearing-effect signal used to align full-frame transfers
             with the panel refresh cycle. The Waveshare CO5300 board routes
             LCD_TE to GPIO13.
+
+    config EXAMPLE_PIN_NUM_QSPI_PCLK
+        int "LCD QSPI clock GPIO"
+        default 38
+
+    config EXAMPLE_PIN_NUM_QSPI_DATA0
+        int "LCD QSPI data 0 GPIO"
+        default 4
+
+    config EXAMPLE_PIN_NUM_QSPI_DATA1
+        int "LCD QSPI data 1 GPIO"
+        default 5
+
+    config EXAMPLE_PIN_NUM_QSPI_DATA2
+        int "LCD QSPI data 2 GPIO"
+        default 6
+
+    config EXAMPLE_PIN_NUM_QSPI_DATA3
+        int "LCD QSPI data 3 GPIO"
+        default 7
 
     config EXAMPLE_PIN_NUM_BK_LIGHT
         int "LCD backlight GPIO (-1 if tied on)"

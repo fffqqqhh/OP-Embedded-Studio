@@ -20,10 +20,7 @@ function resolveArtifactUrl(path: string, manifestUrl: string): string {
   return new URL(path, manifestAbsoluteUrl).toString()
 }
 
-export async function loadFirmwareManifestParts(
-  manifestUrl: string,
-  onLog?: (message: string) => void
-): Promise<SerialFirmwarePart[]> {
+async function loadFirmwareManifest(manifestUrl: string, onLog?: (message: string) => void) {
   const response = await fetch(manifestUrl, {
     cache: 'no-store',
     headers: { Accept: 'application/json' }
@@ -34,11 +31,21 @@ export async function loadFirmwareManifestParts(
   if (!build?.parts.length) throw new Error('固件清单中缺少 ESP32-S3 分区')
 
   onLog?.(`正在下载 ${build.parts.length} 个固件分区…`)
-  return Promise.all(
-    build.parts.map((part) =>
-      fetchSerialFirmwarePart(resolveArtifactUrl(part.path, manifestUrl), part.offset)
+  return {
+    manifest,
+    parts: await Promise.all(
+      build.parts.map((part) =>
+        fetchSerialFirmwarePart(resolveArtifactUrl(part.path, manifestUrl), part.offset)
+      )
     )
-  )
+  }
+}
+
+export async function loadFirmwareManifestParts(
+  manifestUrl: string,
+  onLog?: (message: string) => void
+): Promise<SerialFirmwarePart[]> {
+  return (await loadFirmwareManifest(manifestUrl, onLog)).parts
 }
 
 export async function flashFirmwareManifest(
@@ -46,10 +53,10 @@ export async function flashFirmwareManifest(
   buildMode: 'usb-frame' | 'wifi-frame' | 'wifi-live' | 'ble-frame',
   options: Omit<SerialFlashOptions, 'flashSize'> = {}
 ): Promise<void> {
-  const parts = await loadFirmwareManifestParts(manifestUrl, options.onLog)
+  const { manifest, parts } = await loadFirmwareManifest(manifestUrl, options.onLog)
   await flashSerialFirmware(parts, {
     ...options,
-    flashSize: WIRELESS_FLASH_SIZE[buildMode] ?? 'detect',
+    flashSize: (manifest.flashSize as FlashSizeValues | undefined) ?? WIRELESS_FLASH_SIZE[buildMode] ?? 'detect',
     eraseAll: options.eraseAll ?? true
   })
 }

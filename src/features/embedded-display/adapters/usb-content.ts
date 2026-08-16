@@ -5,7 +5,10 @@ import { uploadUsbContent, type UsbContentTransferOptions } from './usb-content-
 import type { UsbImageSequencePayload } from './usb-sequence'
 import { encodeWirelessImage, encodeWirelessPrototype } from './wireless-content'
 
-const USB_FAST_PROFILES = new Set(['co5300_waveshare_amoled_1_75c'])
+const USB_FAST_PROFILES = new Set([
+  'co5300_waveshare_amoled_1_75c',
+  'co5300_m5stack_stopwatch'
+])
 
 export type UsbFlashOptions = UsbContentTransferOptions
 
