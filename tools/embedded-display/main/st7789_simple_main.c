@@ -137,6 +137,35 @@ static esp_err_t draw_wireless_image(esp_lcd_panel_handle_t panel,
     return ESP_OK;
 }
 #endif
+
+#if CONFIG_OPENPENCIL_BLE_SERVER && CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+static esp_lcd_panel_handle_t s_ble_direct_panel;
+static uint16_t *s_ble_direct_frame_buffer;
+
+static esp_err_t present_m5_ble_frame_without_restart(void)
+{
+    ESP_RETURN_ON_FALSE(s_ble_direct_panel && s_ble_direct_frame_buffer,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "M5 BLE direct display is not configured");
+    ESP_RETURN_ON_FALSE(!openpencil_content_is_sequence() &&
+                            !openpencil_content_is_prototype(),
+                        ESP_ERR_NOT_SUPPORTED,
+                        TAG,
+                        "M5 BLE content requires a runtime restart");
+    ESP_LOGI(TAG, "Present committed M5 BLE frame without restart");
+    return draw_wireless_image(s_ble_direct_panel, s_ble_direct_frame_buffer, NULL);
+}
+
+static void enable_m5_ble_direct_frame_updates(esp_lcd_panel_handle_t panel,
+                                                uint16_t *frame_buffer)
+{
+    s_ble_direct_panel = panel;
+    s_ble_direct_frame_buffer = frame_buffer;
+    openpencil_ble_server_set_content_ready_callback(present_m5_ble_frame_without_restart);
+}
+#endif
+
 static esp_err_t draw_generated_image(esp_lcd_panel_handle_t panel, uint16_t *frame_buffer)
 {
     if (LCD_GENERATED_IMAGE_WIDTH != CONFIG_EXAMPLE_LCD_H_RES ||
@@ -305,6 +334,9 @@ void app_main(void)
         return;
 #elif CONFIG_OPENPENCIL_BLE_SERVER
         // Keep BLE reachable after boot while leaving the persisted image on screen.
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+        enable_m5_ble_direct_frame_updates(panel_handle, frame_buffer);
+#endif
         ESP_ERROR_CHECK(openpencil_ble_server_start());
         return;
 #elif CONFIG_OPENPENCIL_USB_CONTENT_SERVER
@@ -347,6 +379,9 @@ void app_main(void)
         // this order; use it for the base status page as well.
         ESP_LOGI(TAG, "Present BLE transfer status view before BLE startup");
         ESP_ERROR_CHECK(openpencil_ble_status_view_present(panel_handle, frame_buffer));
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+        enable_m5_ble_direct_frame_updates(panel_handle, frame_buffer);
+#endif
         ESP_ERROR_CHECK(openpencil_ble_server_start());
         ESP_LOGI(TAG, "Continue BLE transfer status view");
         ESP_ERROR_CHECK(openpencil_ble_status_view_run(panel_handle, frame_buffer));

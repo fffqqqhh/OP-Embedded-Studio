@@ -7,6 +7,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -21,8 +22,6 @@
 #include "nvs_flash.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
-#include "soc/dport_reg.h"
-#include "m5ioe1.h"
 #include "wireless_content.h"
 
 static const char *TAG = "ble_server";
@@ -58,6 +57,7 @@ static size_t transfer_capacity;
 static size_t transfer_received;
 static size_t last_notified_received;
 static bool status_notify_enabled;
+static openpencil_ble_content_ready_callback_t content_ready_callback;
 static portMUX_TYPE ble_status_lock = portMUX_INITIALIZER_UNLOCKED;
 
 void ble_store_config_init(void);
@@ -67,28 +67,31 @@ static void ble_host_task(void *param);
 static void content_reboot_task(void *param)
 {
     (void)param;
-    ESP_LOGI(TAG, "content committed; restarting in 1000 ms to present it");
+    ESP_LOGI(TAG, "content committed; presenting it in 1000 ms");
     vTaskDelay(pdMS_TO_TICKS(1000));
 #if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
-    const esp_err_t display_power_down = openpencil_m5ioe1_display_power_down();
-    if (display_power_down != ESP_OK) {
+    if (content_ready_callback) {
+        const esp_err_t present_result = content_ready_callback();
+        if (present_result == ESP_OK) {
+            ESP_LOGI(TAG, "presented StopWatch BLE frame without restarting");
+            vTaskDelete(NULL);
+            return;
+        }
         ESP_LOGW(TAG,
-                 "cannot power-cycle StopWatch AMOLED before restart: %s",
-                 esp_err_to_name(display_power_down));
+                 "cannot present StopWatch BLE content in place: %s; restarting",
+                 esp_err_to_name(present_result));
     }
-#endif
+    // esp_restart() performs a CPU reset and deliberately leaves SPI2 and
+    // several other peripherals running. StopWatch drives its 80 MHz QSPI
+    // display from SPI2, so use a digital-system reset after each BLE upload.
+    ESP_LOGI(TAG, "restarting StopWatch digital system after BLE content commit");
+    esp_rom_software_reset_system();
+    while (true) {
+    }
+#else
     ESP_LOGI(TAG, "restarting after BLE content commit");
-#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
-    // ESP-IDF's normal restart cleanup resets SPI0/1 but not SPI2. StopWatch
-    // drives its CO5300 AMOLED through SPI2 QSPI, so clear both the host and
-    // its DMA engine before handing control to the regular restart sequence.
-    SET_PERI_REG_MASK(SYSTEM_PERIP_RST_EN1_REG, SYSTEM_SPI2_DMA_RST);
-    SET_PERI_REG_MASK(SYSTEM_PERIP_RST_EN0_REG, SYSTEM_SPI2_RST);
-    CLEAR_PERI_REG_MASK(SYSTEM_PERIP_RST_EN0_REG, SYSTEM_SPI2_RST);
-    CLEAR_PERI_REG_MASK(SYSTEM_PERIP_RST_EN1_REG, SYSTEM_SPI2_DMA_RST);
-    ESP_LOGI(TAG, "reset StopWatch SPI2 QSPI host before restart");
-#endif
     esp_restart();
+#endif
 }
 static void advertise(void);
 static void advertise_retry_task(void *param);
@@ -138,6 +141,11 @@ void openpencil_ble_server_get_status(openpencil_ble_status_t *status)
     taskENTER_CRITICAL(&ble_status_lock);
     *status = ble_status;
     taskEXIT_CRITICAL(&ble_status_lock);
+}
+
+void openpencil_ble_server_set_content_ready_callback(openpencil_ble_content_ready_callback_t callback)
+{
+    content_ready_callback = callback;
 }
 
 static void reset_transfer(bool failed)
@@ -307,7 +315,7 @@ static int receive_chunk(struct os_mbuf *om)
         ESP_LOGI(TAG, "BLE content received: %u bytes", (unsigned)transfer_capacity);
         const BaseType_t reboot_task_created = xTaskCreate(content_reboot_task,
                                                             "ble_content_reboot",
-                                                            2048,
+                                                            4096,
                                                             NULL,
                                                             5,
                                                             NULL);

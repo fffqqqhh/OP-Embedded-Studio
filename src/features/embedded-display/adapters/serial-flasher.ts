@@ -2,6 +2,13 @@ import { ESPLoader, Transport } from 'esptool-js'
 import type { FlashSizeValues } from 'esptool-js'
 
 const DEFAULT_BAUD_RATE = 921600
+const DEVICE_STARTUP_DELAY_MS = 1500
+
+export const PREBUILT_IMAGE_FLASH_PARAMS = {
+  flashMode: 'keep',
+  flashFreq: 'keep',
+  flashSize: 'keep'
+} as const
 
 export interface SerialFirmwarePart {
   address: number
@@ -33,12 +40,16 @@ function delay(milliseconds: number): Promise<void> {
   })
 }
 
-async function resetDevice(transport: Transport, loader: ESPLoader): Promise<void> {
+export async function resetDevice(
+  transport: Pick<Transport, 'setDTR' | 'setRTS'>,
+  loader: Pick<ESPLoader, 'after'>,
+  wait: (milliseconds: number) => Promise<void> = delay
+): Promise<void> {
   await transport.setDTR(false)
   await transport.setRTS(true)
-  await delay(120)
-  await loader.after('hard_reset')
-  await delay(300)
+  await loader.after('hard_reset', true)
+  await transport.setDTR(false)
+  await wait(DEVICE_STARTUP_DELAY_MS)
 }
 
 export async function fetchSerialFirmwarePart(
@@ -89,9 +100,7 @@ export async function flashSerialFirmware(
     options.onLog?.(options.connectedMessage ?? '已连接，正在写入固件。')
     await loader.writeFlash({
       fileArray: firmwareParts,
-      flashMode: 'dio',
-      flashFreq: '80m',
-      flashSize: options.flashSize,
+      ...PREBUILT_IMAGE_FLASH_PARAMS,
       eraseAll: options.eraseAll ?? false,
       compress: true,
       reportProgress: (fileIndex, written) => {

@@ -147,6 +147,14 @@ esp_err_t openpencil_ble_status_view_run(esp_lcd_panel_handle_t panel, uint16_t 
     while (true) {
         openpencil_ble_status_t current = {0};
         openpencil_ble_server_get_status(&current);
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+        // The StopWatch presents committed single-frame content in place.
+        // Leave the status loop before it can overwrite the uploaded image.
+        if (current.completed) {
+            ESP_LOGI(TAG, "BLE content committed; leaving StopWatch status view");
+            return ESP_OK;
+        }
+#endif
         const bool status_changed = memcmp(&current, &previous, sizeof(current)) != 0;
         // The BLE receive callback writes the image buffer from the NimBLE task.
         // Avoid full-frame LCD DMA transfers while receiving; CO5300 can

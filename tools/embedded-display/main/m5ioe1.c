@@ -9,6 +9,7 @@
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #define M5IOE1_I2C_ADDRESS_PRIMARY 0x4F
 #define M5IOE1_I2C_ADDRESS_SECONDARY 0x6F
@@ -80,8 +81,8 @@ static esp_err_t configure_display_outputs(void)
                                                   (1u << M5IOE1_DISPLAY_RESET_PIN));
     const uint16_t power_only = (uint16_t)(1u << M5IOE1_DISPLAY_POWER_PIN);
 
-    // M5IOE1 GPIO registers are 16-bit little-endian registers.  Configure
-    // the complete register, as the official M5Stack driver does.
+    // M5IOE1 GPIO registers are 16-bit little-endian registers. Configure
+    // the complete register, as the stable USB baseline does.
     ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_PU_L, 0), TAG, "clear GPIO pull-up failed");
     ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_PD_L, 0), TAG, "clear GPIO pull-down failed");
     // GPIO_DRV uses 0 for push-pull and 1 for open-drain.
@@ -100,11 +101,18 @@ static esp_err_t configure_display_outputs(void)
         return ESP_FAIL;
     }
 
+#if CONFIG_OPENPENCIL_BLE_SERVER
+    // Web flashing resets the ESP32-S3 but leaves the external M5IOE1 and
+    // AMOLED rail running. Give BLE firmware a deterministic cold panel start.
+    ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, 0),
+                        TAG,
+                        "turn off display before BLE cold start failed");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+#endif
     ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, power_only), TAG, "enable display power and assert reset failed");
     vTaskDelay(pdMS_TO_TICKS(80));
     ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, display_gpio_mask), TAG, "release display reset failed");
     vTaskDelay(pdMS_TO_TICKS(50));
-
     uint16_t output = 0;
     ESP_RETURN_ON_ERROR(read_register16(M5IOE1_REG_GPIO_OUT_L, &output), TAG, "read display output failed");
     ESP_LOGI(TAG, "M5IOE1 GPIO_OUT=0x%04x (power=%d reset=%d)", output,
