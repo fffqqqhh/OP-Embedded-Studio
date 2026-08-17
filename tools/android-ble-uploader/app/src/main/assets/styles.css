@@ -62,7 +62,7 @@ button:disabled { cursor: default; opacity: 0.38; }
 
 .preview-wrap {
   position: relative;
-  width: min(100%, calc(100dvh - 274px));
+  width: min(100%, calc(100dvh - 320px));
   max-width: 390px;
   min-width: 0;
   aspect-ratio: 1;
@@ -100,8 +100,9 @@ button:disabled { cursor: default; opacity: 0.38; }
 #progressBar { width: 0; height: 100%; border-radius: inherit; background: #007aff; }
 .diagnostic { width: 100%; min-width: 0; overflow: hidden; height: 14px; margin-top: 6px; color: #8e8e93; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
 
-.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 8px 2px 4px; color: #636366; font-size: 12px; }
-.settings-row select { min-width: 130px; min-height: 34px; border: 1px solid #d1d1d6; border-radius: 10px; background: #fff; color: #1c1c1e; padding: 0 8px; }
+.settings-panel { display: grid; gap: 2px; padding: 4px 2px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; color: #636366; font-size: 12px; }
+.settings-row select { flex: 1 1 auto; min-width: 130px; max-width: 240px; min-height: 34px; border: 1px solid #d1d1d6; border-radius: 10px; background: #fff; color: #1c1c1e; padding: 0 8px; }
 
 .action-bar { display: flex; min-width: 0; align-items: stretch; gap: 8px; padding-top: 2px; }
 .action-bar > * { height: 52px; }
@@ -118,9 +119,11 @@ button:disabled { cursor: default; opacity: 0.38; }
   h1 { font-size: 21px; }
   .subtitle { display: none; }
   .editor-card { padding: 11px; }
-  .preview-wrap { width: min(100%, calc(100dvh - 238px)); }
+  .preview-wrap { width: min(100%, calc(100dvh - 276px)); }
   .transfer-status { min-height: 58px; padding-top: 7px; padding-bottom: 4px; }
-  .settings-row { min-height: 40px; padding-top: 4px; }
+  .settings-panel { gap: 0; padding-top: 2px; }
+  .settings-row { min-height: 32px; }
+  .settings-row select { min-height: 30px; }
   .action-bar > * { height: 46px; min-height: 46px; }
   .action-bar { gap: 7px; }
   .action-bar .action-icon { flex-basis: 44px; }

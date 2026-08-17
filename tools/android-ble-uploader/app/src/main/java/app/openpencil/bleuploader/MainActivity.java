@@ -590,8 +590,8 @@ public final class MainActivity extends Activity {
 
     private void beginPayload(int totalBytes) throws IOException {
         closePayloadOutput();
-        if (totalBytes <= 24 || totalBytes > 0x1cf0000) {
-            throw new IOException("内容大小必须在 24 字节至 28.94 MiB 之间");
+        if (totalBytes <= 24 || totalBytes > 0x0cf0000) {
+            throw new IOException("内容大小必须在 24 字节至 12.94 MiB 之间");
         }
         payloadFile = new File(getCacheDir(), "openpencil-content.bin");
         payloadOutput = new FileOutputStream(payloadFile, false);

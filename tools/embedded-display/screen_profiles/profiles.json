@@ -416,8 +416,9 @@
       "driverIc": "CO5300",
       "controller": "CO5300",
       "interface": "QSPI",
-      "flash": "16MB",
-      "logicalResolution": {
+        "flash": "16MB",
+        "wirelessContentBytes": 13565952,
+        "logicalResolution": {
         "width": 466,
         "height": 466
       },

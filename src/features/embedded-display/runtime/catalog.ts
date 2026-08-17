@@ -12,10 +12,10 @@ interface EmbeddedProfileRegistry {
 export const DEFAULT_EMBEDDED_DISPLAY_PROFILE_ID = 'co5300_waveshare_amoled_1_75c'
 
 const BUNDLED_FIRMWARE_PROFILES: Partial<Record<EmbeddedBuildMode, ReadonlySet<string>>> = {
-  'usb-frame': new Set(['co5300_waveshare_amoled_1_75c']),
-  'wifi-frame': new Set(['co5300_waveshare_amoled_1_75c']),
-  'wifi-live': new Set(['co5300_waveshare_amoled_1_75c']),
-  'ble-frame': new Set(['co5300_waveshare_amoled_1_75c'])
+  'usb-frame': new Set(['co5300_waveshare_amoled_1_75c', 'co5300_m5stack_stopwatch']),
+  'wifi-frame': new Set(['co5300_waveshare_amoled_1_75c', 'co5300_m5stack_stopwatch']),
+  'wifi-live': new Set(['co5300_waveshare_amoled_1_75c', 'co5300_m5stack_stopwatch']),
+  'ble-frame': new Set(['co5300_waveshare_amoled_1_75c', 'co5300_m5stack_stopwatch'])
 }
 
 function profileFromRegistry(profile: Record<string, unknown>): EmbeddedDisplayProfile {
@@ -36,6 +36,8 @@ function profileFromRegistry(profile: Record<string, unknown>): EmbeddedDisplayP
     visibleArea,
     module: typeof profile.module === 'string' ? profile.module : undefined,
     driverIc: typeof profile.driverIc === 'string' ? profile.driverIc : undefined,
+    wirelessContentBytes:
+      typeof profile.wirelessContentBytes === 'number' ? profile.wirelessContentBytes : undefined,
     imageOnly: Boolean(profile.imageOnly),
     image: profile.image as EmbeddedDisplayProfile['image']
   }

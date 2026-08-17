@@ -2,11 +2,11 @@ import type { EmbeddedDisplayProfile, EmbeddedImagePayload } from '../model/type
 import {
   encodeUsbSequenceFrames,
   imageFilesToUsbSequence,
+  sequenceContentCapacityBytes,
   type SequenceEncodingOptions,
   type UsbImageSequencePayload
 } from './usb-sequence'
 
-const WIRELESS_SEQUENCE_CONTENT_BYTES = 0x1cf0000
 const WIRELESS_SEQUENCE_ENCODING = { allowPatches: false } as const
 
 type WirelessSequenceOptions = Omit<SequenceEncodingOptions, 'allowPatches'>
@@ -43,7 +43,7 @@ export function encodeWifiSequenceFrames(
       ...options,
       ...WIRELESS_SEQUENCE_ENCODING
     }),
-    WIRELESS_SEQUENCE_CONTENT_BYTES
+    sequenceContentCapacityBytes(profile)
   )
 }
 
@@ -58,7 +58,7 @@ export function encodeBleSequenceFrames(
       ...options,
       ...WIRELESS_SEQUENCE_ENCODING
     }),
-    WIRELESS_SEQUENCE_CONTENT_BYTES
+    sequenceContentCapacityBytes(profile)
   )
 }
 
@@ -72,7 +72,7 @@ export async function imageFilesToWifiSequence(
       ...options,
       ...WIRELESS_SEQUENCE_ENCODING
     }),
-    WIRELESS_SEQUENCE_CONTENT_BYTES
+    sequenceContentCapacityBytes(profile)
   )
 }
 
@@ -86,6 +86,6 @@ export async function imageFilesToBleSequence(
       ...options,
       ...WIRELESS_SEQUENCE_ENCODING
     }),
-    WIRELESS_SEQUENCE_CONTENT_BYTES
+    sequenceContentCapacityBytes(profile)
   )
 }

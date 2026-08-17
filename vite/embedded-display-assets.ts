@@ -13,11 +13,16 @@ const FIRMWARE_PARTS = [
   { path: './content-reset.bin', offset: 0x310000 }
 ]
 
+const FIRMWARE_FLASH_SIZES: Record<string, string> = {
+  co5300_m5stack_stopwatch: '16MB'
+}
+
 function firmwareManifest(mode: string, profileId: string) {
   return {
     name: `OP Embedded Studio ${mode}`,
     version: profileId,
     buildMode: mode,
+    flashSize: FIRMWARE_FLASH_SIZES[profileId] ?? '32MB',
     new_install_prompt_erase: true,
     builds: [{ chipFamily: 'ESP32-S3', parts: FIRMWARE_PARTS }]
   }

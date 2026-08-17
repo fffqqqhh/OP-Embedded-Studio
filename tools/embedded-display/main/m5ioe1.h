@@ -7,6 +7,7 @@ extern "C" {
 #endif
 
 esp_err_t openpencil_m5ioe1_display_init(void);
+esp_err_t openpencil_m5ioe1_display_power_down(void);
 
 #ifdef __cplusplus
 }

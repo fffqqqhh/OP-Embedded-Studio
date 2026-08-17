@@ -11,6 +11,8 @@ export interface EmbeddedDisplayProfile {
   visibleArea?: { shape?: string; description?: string; descriptionZh?: string }
   module?: string
   driverIc?: string
+  /** Total bytes available to persisted Wi-Fi/BLE content in this firmware layout. */
+  wirelessContentBytes?: number
   imageOnly?: boolean
   image?: {
     pixelFormat: 'RGB565' | string

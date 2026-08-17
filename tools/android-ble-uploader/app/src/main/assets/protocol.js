@@ -4,7 +4,7 @@
   const CONTENT_MAGIC = 0x4f504331
   const CONTENT_VERSION = 1
   const HEADER_BYTES = 24
-  const MAX_CONTENT_BYTES = 0x1cf0000
+  const MAX_CONTENT_BYTES = 0x0cf0000
   const SEQUENCE_HEADER_BYTES = 12
   const RESOURCE_BYTES = 12
 
@@ -29,7 +29,7 @@
     view.setUint32(16, payload.byteLength, true)
     view.setUint32(20, crc32(payload), true)
     content.set(payload, HEADER_BYTES)
-    if (content.byteLength > MAX_CONTENT_BYTES) throw new Error('内容超过 28.94 MiB 上限')
+    if (content.byteLength > MAX_CONTENT_BYTES) throw new Error('内容超过 12.94 MiB 上限')
     return content
   }
 
@@ -78,17 +78,20 @@
       : { codec: 0, bytes: frame }
   }
 
-  function encodeSequence(frames, frameDelayMs = 50) {
-    if (frames.length < 2) throw new Error('PNG 序列至少需要两张图片')
-    const encoded = frames.map(encodeRle)
+  function sequenceContentBytes(encoded) {
+    return HEADER_BYTES + SEQUENCE_HEADER_BYTES + encoded.length * RESOURCE_BYTES +
+      encoded.reduce((total, frame) => total + frame.bytes.byteLength, 0)
+  }
+
+  function buildSequence(encoded, frameDelayMs) {
     const dataBytes = encoded.reduce((total, frame) => total + frame.bytes.byteLength, 0)
-    const payload = new Uint8Array(SEQUENCE_HEADER_BYTES + frames.length * RESOURCE_BYTES + dataBytes)
+    const payload = new Uint8Array(SEQUENCE_HEADER_BYTES + encoded.length * RESOURCE_BYTES + dataBytes)
     const view = new DataView(payload.buffer)
     view.setUint32(0, WIDTH * HEIGHT * 2, true)
     view.setUint16(4, Math.min(0xffff, Math.max(1, Math.round(frameDelayMs))), true)
-    view.setUint16(6, frames.length, true)
+    view.setUint16(6, encoded.length, true)
     view.setUint32(8, dataBytes, true)
-    const dataOffset = SEQUENCE_HEADER_BYTES + frames.length * RESOURCE_BYTES
+    const dataOffset = SEQUENCE_HEADER_BYTES + encoded.length * RESOURCE_BYTES
     let storedOffset = 0
     encoded.forEach((frame, index) => {
       const resourceOffset = SEQUENCE_HEADER_BYTES + index * RESOURCE_BYTES
@@ -98,8 +101,48 @@
       payload.set(frame.bytes, dataOffset + storedOffset)
       storedOffset += frame.bytes.byteLength
     })
-    return envelope(2, frames.length, payload)
+    return envelope(2, encoded.length, payload)
   }
 
-  window.OpenPencilProtocol = { WIDTH, HEIGHT, MAX_CONTENT_BYTES, rgb565, encodeFrame, encodeSequence }
+  function encodeSequence(frames, frameDelayMs = 50) {
+    if (frames.length < 2) throw new Error('PNG 序列至少需要两张图片')
+    return buildSequence(frames.map(encodeRle), frameDelayMs)
+  }
+
+  function selectedFrameIndexes(totalFrames, targetFrames, strategy) {
+    if (strategy === 'trim') return Array.from({ length: targetFrames }, (_, index) => index)
+    return Array.from(
+      { length: targetFrames },
+      (_, index) => Math.floor(index * (totalFrames - 1) / (targetFrames - 1))
+    )
+  }
+
+  function encodeSequenceToFit(frames, frameDelayMs = 50, strategy = 'speed') {
+    if (frames.length < 2) throw new Error('PNG 序列至少需要两张图片')
+    const encodedFrames = frames.map(encodeRle)
+    for (let targetFrames = encodedFrames.length; targetFrames >= 2; targetFrames -= 1) {
+      const indexes = selectedFrameIndexes(encodedFrames.length, targetFrames, strategy)
+      const selected = indexes.map((index) => encodedFrames[index])
+      if (sequenceContentBytes(selected) <= MAX_CONTENT_BYTES) {
+        return {
+          content: buildSequence(selected, frameDelayMs),
+          frameCount: selected.length,
+          sourceFrameCount: encodedFrames.length,
+          strategy,
+          reduced: selected.length !== encodedFrames.length
+        }
+      }
+    }
+    throw new Error('至少两帧内容仍超过 12.94 MiB 上限，请缩短视频或降低帧率')
+  }
+
+  window.OpenPencilProtocol = {
+    WIDTH,
+    HEIGHT,
+    MAX_CONTENT_BYTES,
+    rgb565,
+    encodeFrame,
+    encodeSequence,
+    encodeSequenceToFit
+  }
 })()

@@ -16,10 +16,11 @@
 
 #if CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK
 static const char *TAG = "sequence_player";
+static portMUX_TYPE s_metrics_lock = portMUX_INITIALIZER_UNLOCKED;
+static openpencil_sequence_player_metrics_t s_metrics;
 
 typedef struct {
     uint16_t frame_index;
-    const uint16_t *previous_frame;
     uint16_t *destination;
 } sequence_decode_request_t;
 
@@ -44,6 +45,11 @@ static uint16_t *allocate_frame_buffer(size_t frame_bytes)
     return buffer;
 }
 
+static void sequence_frame_timer_callback(void *argument)
+{
+    xTaskNotifyGive((TaskHandle_t)argument);
+}
+
 static bool sequence_region_is_full_frame(const openpencil_sequence_region_t *region,
                                           int width,
                                           int height)
@@ -66,10 +72,12 @@ static void sequence_decoder_task(void *argument)
             }
             result = openpencil_content_sequence_region(request.frame_index, &region);
             if (result == ESP_OK) {
-                result = openpencil_content_reconstruct_sequence_frame(request.frame_index,
-                                                                       request.previous_frame,
-                                                                       request.destination,
-                                                                       decoder->frame_pixels);
+                // For a patch, load_frame decodes only the changed rectangle
+                // into a contiguous buffer. The presenter then sends only
+                // that rectangle, so there is no full-frame PSRAM copy.
+                result = openpencil_content_load_frame(request.frame_index,
+                                                        request.destination,
+                                                        decoder->frame_pixels);
             }
             openpencil_content_read_end();
             if (!openpencil_content_write_in_progress()) break;
@@ -87,6 +95,20 @@ static void sequence_decoder_task(void *argument)
 }
 
 #endif
+
+bool openpencil_sequence_player_get_metrics(openpencil_sequence_player_metrics_t *metrics)
+{
+    if (!metrics) return false;
+#if CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK
+    portENTER_CRITICAL(&s_metrics_lock);
+    *metrics = s_metrics;
+    portEXIT_CRITICAL(&s_metrics_lock);
+    return metrics->active;
+#else
+    *metrics = (openpencil_sequence_player_metrics_t){0};
+    return false;
+#endif
+}
 
 esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                                       uint16_t *primary_frame_buffer,
@@ -166,17 +188,30 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
 
     uint16_t current_frame = 0;
     uint16_t *current_buffer = primary_frame_buffer;
+    openpencil_sequence_region_t current_region = initial_region;
     uint16_t next_frame = 1;
     uint16_t *next_buffer = secondary_frame_buffer;
     sequence_decode_request_t request = {
         .frame_index = next_frame,
-        .previous_frame = current_buffer,
         .destination = next_buffer,
     };
     xQueueSend(decoder.requests, &request, portMAX_DELAY);
 
-    const TickType_t frame_delay = pdMS_TO_TICKS(openpencil_content_frame_delay_ms());
-    TickType_t next_deadline = xTaskGetTickCount();
+    const uint16_t frame_delay_ms = openpencil_content_frame_delay_ms();
+    esp_timer_handle_t frame_timer = NULL;
+    const esp_timer_create_args_t frame_timer_config = {
+        .callback = sequence_frame_timer_callback,
+        .arg = xTaskGetCurrentTaskHandle(),
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "sequence_frame",
+    };
+    ESP_RETURN_ON_ERROR(esp_timer_create(&frame_timer_config, &frame_timer),
+                        TAG,
+                        "create sequence frame timer failed");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(frame_timer,
+                                                 (uint64_t)frame_delay_ms * 1000ULL),
+                        TAG,
+                        "start sequence frame timer failed");
     int64_t stats_started_us = esp_timer_get_time();
     int64_t load_total_us = 0;
     int64_t decoder_wait_total_us = 0;
@@ -187,13 +222,33 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
     uint32_t stats_frames = 0;
     uint32_t dropped_frames = 0;
 
+    portENTER_CRITICAL(&s_metrics_lock);
+    s_metrics = (openpencil_sequence_player_metrics_t){
+        .active = true,
+        .target_delay_ms = openpencil_content_frame_delay_ms(),
+    };
+    portEXIT_CRITICAL(&s_metrics_lock);
+
     while (true) {
         openpencil_display_presenter_metrics_t present_metrics = {0};
-        const esp_err_t present_result = openpencil_display_presenter_draw_measured(panel,
-                                                                                      width,
-                                                                                      height,
-                                                                                      current_buffer,
-                                                                                      &present_metrics);
+        const bool draw_full_frame = sequence_region_is_full_frame(&current_region, width, height);
+        const size_t presented_pixel_count = draw_full_frame
+            ? (size_t)width * height
+            : (size_t)current_region.width * current_region.height;
+        const uint16_t *present_pixels = current_buffer;
+        const esp_err_t present_result = draw_full_frame
+            ? openpencil_display_presenter_draw_measured(panel,
+                                                         width,
+                                                         height,
+                                                         current_buffer,
+                                                         &present_metrics)
+            : openpencil_display_presenter_draw_region_measured(panel,
+                                                                 current_region.x,
+                                                                 current_region.y,
+                                                                 current_region.width,
+                                                                 current_region.height,
+                                                                 present_pixels,
+                                                                 &present_metrics);
         if (present_result != ESP_OK) {
             // Do not turn a transient QSPI DMA fault into an application reset.
             // The next decoded frame is already independent and can be presented
@@ -221,13 +276,67 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                             TAG,
                             "decoded sequence frame order mismatch");
 
+        // Present a complete reconstructed frame on the StopWatch panel. The
+        // CO5300's small-region continuation path can tear when a patch window
+        // changes during scanout; rebuilding into the already decoded buffer
+        // keeps the display transaction and TE boundary frame-wide.
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+        if (!sequence_region_is_full_frame(&decoded.region, width, height)) {
+            ESP_RETURN_ON_ERROR(openpencil_content_reconstruct_sequence_frame(
+                                    decoded.frame_index,
+                                    current_buffer,
+                                    decoded.destination,
+                                    frame_pixels),
+                                TAG,
+                                "reconstruct sequence display frame failed");
+        }
+        decoded.region = (openpencil_sequence_region_t){
+            .x = 0,
+            .y = 0,
+            .width = (uint16_t)width,
+            .height = (uint16_t)height,
+        };
+#endif
+
         uint16_t *following_decode_buffer = current_buffer;
-        current_buffer = decoded.destination;
+        if (present_result != ESP_OK) {
+            // Patch buffers contain only a changed rectangle. Rebuild the
+            // upcoming logical frame after a failed presentation so the next
+            // update can safely resynchronize the panel with a full draw.
+            uint16_t *recovery_previous = current_buffer;
+            uint16_t *recovery_destination = decoded.destination;
+            ESP_RETURN_ON_ERROR(openpencil_content_load_frame(0,
+                                                              recovery_previous,
+                                                              frame_pixels),
+                                TAG,
+                                "load sequence recovery keyframe failed");
+            for (uint16_t index = 1; index <= next_frame; index++) {
+                ESP_RETURN_ON_ERROR(openpencil_content_reconstruct_sequence_frame(index,
+                                                                                   recovery_previous,
+                                                                                   recovery_destination,
+                                                                                   frame_pixels),
+                                    TAG,
+                                    "reconstruct sequence recovery frame failed");
+                uint16_t *completed = recovery_previous;
+                recovery_previous = recovery_destination;
+                recovery_destination = completed;
+            }
+            current_buffer = recovery_previous;
+            current_region = (openpencil_sequence_region_t){
+                .x = 0,
+                .y = 0,
+                .width = (uint16_t)width,
+                .height = (uint16_t)height,
+            };
+            following_decode_buffer = recovery_destination;
+        } else {
+            current_buffer = decoded.destination;
+            current_region = decoded.region;
+        }
 
         const uint16_t following_frame =
             (uint16_t)((next_frame + 1) % content->frame_count);
         request.frame_index = following_frame;
-        request.previous_frame = current_buffer;
         request.destination = following_decode_buffer;
         xQueueSend(decoder.requests, &request, portMAX_DELAY);
 
@@ -237,11 +346,25 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
         transfer_total_us += present_metrics.transfer_us;
         present_total_us += present_metrics.total_us;
         if (present_result == ESP_OK) {
-            transferred_pixels += (uint64_t)width * height;
+            transferred_pixels += presented_pixel_count;
         }
         stats_frames++;
 
-        vTaskDelayUntil(&next_deadline, frame_delay > 0 ? frame_delay : 1);
+        const int64_t elapsed_us = esp_timer_get_time() - stats_started_us;
+        portENTER_CRITICAL(&s_metrics_lock);
+        s_metrics.fps_milli = elapsed_us > 0
+                                  ? (uint32_t)((uint64_t)stats_frames * 1000000000ULL / (uint64_t)elapsed_us)
+                                  : 0;
+        s_metrics.transfer_us = (uint32_t)(transfer_total_us / stats_frames);
+        s_metrics.present_us = (uint32_t)(present_total_us / stats_frames);
+        s_metrics.dropped_frames = dropped_frames;
+        portEXIT_CRITICAL(&s_metrics_lock);
+
+        // FreeRTOS runs at 100 Hz in the USB firmware, so vTaskDelayUntil()
+        // rounds a 16 ms animation interval down to 10 ms. esp_timer keeps
+        // the content format's millisecond duration exact without changing
+        // global scheduler settings for every firmware profile.
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         current_frame = next_frame;
         current_load_us = decoded.load_us;
@@ -249,7 +372,6 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
         next_buffer = request.destination;
 
         if (stats_frames >= SEQUENCE_STATS_FRAMES) {
-            const int64_t elapsed_us = esp_timer_get_time() - stats_started_us;
             const double actual_fps = elapsed_us > 0
                                           ? (double)stats_frames * 1000000.0 / elapsed_us
                                           : 0.0;

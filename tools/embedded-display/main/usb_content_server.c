@@ -14,6 +14,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sequence_player.h"
 #include "wireless_content.h"
 
 #define USB_PROTOCOL_PREFIX "OPUSB/1"
@@ -178,6 +179,23 @@ static esp_err_t handle_finish(void)
     return ESP_OK;
 }
 
+static esp_err_t handle_stats(void)
+{
+    openpencil_sequence_player_metrics_t metrics = {0};
+    const bool active = openpencil_sequence_player_get_metrics(&metrics);
+    char response[USB_CONTENT_LINE_BYTES];
+    snprintf(response,
+             sizeof(response),
+             USB_PROTOCOL_PREFIX " STATS %u %u %u %u %u %u\n",
+             active ? 1U : 0U,
+             (unsigned)metrics.fps_milli,
+             (unsigned)metrics.transfer_us,
+             (unsigned)metrics.present_us,
+             (unsigned)metrics.dropped_frames,
+             (unsigned)metrics.target_delay_ms);
+    return usb_write_line(response);
+}
+
 static void usb_content_server_task(void *argument)
 {
     (void)argument;
@@ -235,6 +253,9 @@ static void usb_content_server_task(void *argument)
         } else if (strcmp(line, USB_PROTOCOL_PREFIX " END") == 0) {
             operation = "finish";
             result = handle_finish();
+        } else if (strcmp(line, USB_PROTOCOL_PREFIX " STATS") == 0) {
+            operation = "stats";
+            result = handle_stats();
         } else if (strcmp(line, USB_PROTOCOL_PREFIX " ABORT") == 0) {
             openpencil_content_write_abort();
             operation = "abort";

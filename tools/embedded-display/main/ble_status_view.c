@@ -132,6 +132,14 @@ static esp_err_t draw(esp_lcd_panel_handle_t panel, uint16_t *buffer,
     return openpencil_display_presenter_draw(panel, VIEW_WIDTH, VIEW_HEIGHT, buffer);
 }
 
+esp_err_t openpencil_ble_status_view_present(esp_lcd_panel_handle_t panel,
+                                             uint16_t *frame_buffer)
+{
+    openpencil_ble_status_t status = {0};
+    openpencil_ble_server_get_status(&status);
+    return draw(panel, frame_buffer, &status);
+}
+
 esp_err_t openpencil_ble_status_view_run(esp_lcd_panel_handle_t panel, uint16_t *frame_buffer)
 {
     openpencil_ble_status_t previous = {0};
@@ -145,7 +153,7 @@ esp_err_t openpencil_ble_status_view_run(esp_lcd_panel_handle_t panel, uint16_t 
         // otherwise underflow the DMA engine and reboot the device.
         const bool can_draw = first_frame || !current.receiving;
         if (can_draw && (first_frame || status_changed)) {
-            const esp_err_t draw_result = draw(panel, frame_buffer, &current);
+            const esp_err_t draw_result = openpencil_ble_status_view_present(panel, frame_buffer);
             if (draw_result != ESP_OK) {
                 ESP_LOGW(TAG, "status frame draw failed: %s", esp_err_to_name(draw_result));
             } else {

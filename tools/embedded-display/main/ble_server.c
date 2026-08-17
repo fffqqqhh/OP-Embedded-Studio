@@ -1,5 +1,6 @@
 #include "ble_server.h"
 
+#include <inttypes.h>
 #include <string.h>
 #include <stdlib.h>
 #include "sdkconfig.h"
@@ -20,6 +21,8 @@
 #include "nvs_flash.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "soc/dport_reg.h"
+#include "m5ioe1.h"
 #include "wireless_content.h"
 
 static const char *TAG = "ble_server";
@@ -64,7 +67,27 @@ static void ble_host_task(void *param);
 static void content_reboot_task(void *param)
 {
     (void)param;
+    ESP_LOGI(TAG, "content committed; restarting in 1000 ms to present it");
     vTaskDelay(pdMS_TO_TICKS(1000));
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    const esp_err_t display_power_down = openpencil_m5ioe1_display_power_down();
+    if (display_power_down != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "cannot power-cycle StopWatch AMOLED before restart: %s",
+                 esp_err_to_name(display_power_down));
+    }
+#endif
+    ESP_LOGI(TAG, "restarting after BLE content commit");
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    // ESP-IDF's normal restart cleanup resets SPI0/1 but not SPI2. StopWatch
+    // drives its CO5300 AMOLED through SPI2 QSPI, so clear both the host and
+    // its DMA engine before handing control to the regular restart sequence.
+    SET_PERI_REG_MASK(SYSTEM_PERIP_RST_EN1_REG, SYSTEM_SPI2_DMA_RST);
+    SET_PERI_REG_MASK(SYSTEM_PERIP_RST_EN0_REG, SYSTEM_SPI2_RST);
+    CLEAR_PERI_REG_MASK(SYSTEM_PERIP_RST_EN0_REG, SYSTEM_SPI2_RST);
+    CLEAR_PERI_REG_MASK(SYSTEM_PERIP_RST_EN1_REG, SYSTEM_SPI2_DMA_RST);
+    ESP_LOGI(TAG, "reset StopWatch SPI2 QSPI host before restart");
+#endif
     esp_restart();
 }
 static void advertise(void);
@@ -207,9 +230,31 @@ static int receive_chunk(struct os_mbuf *om)
 
         const openpencil_content_header_t *header =
             (const openpencil_content_header_t *)transfer_header;
-        if (!validate_header(header, &transfer_capacity) ||
-            transfer_capacity > openpencil_content_capacity() ||
-            openpencil_content_write_begin(header, transfer_capacity) != ESP_OK) {
+        if (!validate_header(header, &transfer_capacity)) {
+            ESP_LOGW(TAG,
+                     "rejecting BLE content header: magic=%08" PRIx32 ", version=%u, mode=%u, "
+                     "frames=%u, %ux%u, payload=%u",
+                     header->magic,
+                     header->version,
+                     header->mode,
+                     header->frame_count,
+                     header->width,
+                     header->height,
+                     (unsigned)header->payload_bytes);
+            reset_transfer(true);
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (transfer_capacity > openpencil_content_capacity()) {
+            ESP_LOGW(TAG,
+                     "rejecting BLE content: %u bytes exceeds partition capacity %u bytes",
+                     (unsigned)transfer_capacity,
+                     (unsigned)openpencil_content_capacity());
+            reset_transfer(true);
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        const esp_err_t begin_result = openpencil_content_write_begin(header, transfer_capacity);
+        if (begin_result != ESP_OK) {
+            ESP_LOGE(TAG, "starting BLE content write failed: %s", esp_err_to_name(begin_result));
             reset_transfer(true);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
@@ -260,7 +305,16 @@ static int receive_chunk(struct os_mbuf *om)
         taskEXIT_CRITICAL(&ble_status_lock);
         notify_status(true);
         ESP_LOGI(TAG, "BLE content received: %u bytes", (unsigned)transfer_capacity);
-        xTaskCreate(content_reboot_task, "ble_content_reboot", 2048, NULL, 1, NULL);
+        const BaseType_t reboot_task_created = xTaskCreate(content_reboot_task,
+                                                            "ble_content_reboot",
+                                                            2048,
+                                                            NULL,
+                                                            5,
+                                                            NULL);
+        if (reboot_task_created != pdPASS) {
+            ESP_LOGE(TAG, "cannot schedule BLE content reboot; restarting now");
+            esp_restart();
+        }
     }
     return 0;
 }

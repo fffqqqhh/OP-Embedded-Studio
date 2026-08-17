@@ -157,3 +157,18 @@ esp_err_t openpencil_m5ioe1_display_init(void)
 
     return configure_display_outputs();
 }
+
+esp_err_t openpencil_m5ioe1_display_power_down(void)
+{
+    ESP_RETURN_ON_FALSE(s_device, ESP_ERR_INVALID_STATE, TAG, "M5IOE1 is not initialized");
+
+    // esp_restart() resets the ESP32-S3 but leaves the M5IOE1 and AMOLED rail
+    // powered. Force the panel into the same known-off state used by a real
+    // board reset before the next boot reinitializes it.
+    ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, 0),
+                        TAG,
+                        "turn off display power failed");
+    vTaskDelay(pdMS_TO_TICKS(120));
+    ESP_LOGI(TAG, "AMOLED power and reset held low before restart");
+    return ESP_OK;
+}

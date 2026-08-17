@@ -41,13 +41,22 @@
         </div>
       </section>
 
-      <section class="settings-row" aria-label="视频设置">
-        <span>视频帧率</span>
-        <select id="fpsInput">
-          <option value="8">省空间 · 8 FPS</option>
-          <option value="12" selected>均衡 · 12 FPS</option>
-          <option value="20">流畅 · 20 FPS</option>
-        </select>
+      <section class="settings-panel" aria-label="视频设置">
+        <label class="settings-row">
+          <span>视频帧率</span>
+          <select id="fpsInput">
+            <option value="8">省空间 · 8 FPS</option>
+            <option value="12" selected>均衡 · 12 FPS</option>
+            <option value="20">流畅 · 20 FPS</option>
+          </select>
+        </label>
+        <label class="settings-row">
+          <span>容量不足时</span>
+          <select id="overflowStrategyInput">
+            <option value="speed">保留完整内容 · 加快播放</option>
+            <option value="trim">保持播放速度 · 裁切结尾</option>
+          </select>
+        </label>
       </section>
 
       <section class="transfer-status">

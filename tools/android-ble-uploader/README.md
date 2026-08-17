@@ -7,7 +7,7 @@
 - 将网页生成的内容临时写入 App 缓存；
 - 使用现有 offset + payload 分包协议上传到 ESP32。
 
-支持当前 Waveshare 1.75C 的 `466 × 466` RGB565 单图和 20 FPS PNG 序列，内容上限为约 28.94 MiB。
+支持 Waveshare 1.75C 和 M5Stack StopWatch 的 `466 × 466` RGB565 单图与 20 FPS PNG 序列。Waveshare 的内容上限为约 28.94 MiB，StopWatch 的 16MB Flash 布局上限为约 12.94 MiB。两款设备使用相同的 OP Embedded BLE 内容协议；请先为对应开发板刷入匹配的 BLE 基础固件。
 
 ## 构建
 
@@ -33,6 +33,8 @@ dist/android/OP-Embedded-BLE-debug.apk
 4. 选择图片、裁切并上传，App 会自动连接 OP Embedded BLE。
 
 应用不访问网络，图片处理和传输均在手机本地完成。
+
+视频或 PNG 序列超过设备内容分区时，手机端会按“容量不足时”设置自动适配：默认均匀抽帧并保持所选 FPS，使完整内容以更快速度播放；也可以选择保留开头连续帧并裁切结尾，维持原播放速度。
 
 ## 发布标签
 

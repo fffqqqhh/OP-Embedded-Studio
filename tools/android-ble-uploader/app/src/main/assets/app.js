@@ -5,6 +5,7 @@
   const fileInput = document.getElementById('fileInput')
   const cameraButton = document.getElementById('cameraButton')
   const fpsInput = document.getElementById('fpsInput')
+  const overflowStrategyInput = document.getElementById('overflowStrategyInput')
   const editButton = document.getElementById('editButton')
   const uploadButton = document.getElementById('uploadButton')
   const backgroundInput = document.getElementById('backgroundInput')
@@ -46,6 +47,14 @@
     return Number(fpsInput.value) || 12
   }
 
+  function selectedOverflowStrategy() {
+    return overflowStrategyInput.value === 'trim' ? 'trim' : 'speed'
+  }
+
+  function videoFileSummary() {
+    return `短视频 · ${selectedFps()} FPS · 最多 ${MAX_VIDEO_SECONDS} 秒`
+  }
+
   function setStatus(message, type = '') {
     statusText.textContent = message
     statusText.className = `status ${type}`
@@ -75,6 +84,7 @@
     fileInput.disabled = busy
     cameraButton.disabled = busy
     fpsInput.disabled = busy
+    overflowStrategyInput.disabled = busy
     editButton.disabled = files.length === 0 || busy
     uploadButton.disabled = files.length === 0 || busy
     editButton.textContent = editing ? '完成' : '编辑'
@@ -376,16 +386,26 @@
           frames.push(await renderFile(sorted[index]))
         }
       }
-      const content = frames.length === 1
-        ? protocol.encodeFrame(frames[0])
-        : protocol.encodeSequence(frames, 1000 / (videoDetails?.fps || 20))
+      const frameDelayMs = 1000 / (videoDetails?.fps || 20)
+      const sequence = frames.length === 1
+        ? null
+        : protocol.encodeSequenceToFit(frames, frameDelayMs, selectedOverflowStrategy())
+      const content = sequence ? sequence.content : protocol.encodeFrame(frames[0])
+      const playbackFrames = sequence?.frameCount || frames.length
+      const overflowDetail = sequence?.reduced
+        ? sequence.strategy === 'speed'
+          ? `完整内容加快 ${(sequence.sourceFrameCount / sequence.frameCount).toFixed(1)} 倍`
+          : `已裁切结尾，保留前 ${(playbackFrames * frameDelayMs / 1000).toFixed(1)} 秒`
+        : ''
       payloadSummary.textContent = videoDetails
-        ? `${frames.length} 帧 · ${videoDetails.fps} FPS · ${videoDetails.duration.toFixed(1)} 秒 · ${(content.byteLength / 1024 / 1024).toFixed(2)} MiB`
-        : `${frames.length} 帧 · ${(content.byteLength / 1024 / 1024).toFixed(2)} MiB`
+        ? `${playbackFrames} 帧 · ${videoDetails.fps} FPS · ${(playbackFrames * frameDelayMs / 1000).toFixed(1)} 秒 · ${(content.byteLength / 1024 / 1024).toFixed(2)} MiB${overflowDetail ? ` · ${overflowDetail}` : ''}`
+        : `${playbackFrames} 帧 · ${(content.byteLength / 1024 / 1024).toFixed(2)} MiB${overflowDetail ? ` · ${overflowDetail}` : ''}`
       setStatus(
         videoDetails
-          ? `视频已转换为 ${frames.length} 帧，正在查找设备…`
-          : '内容已准备，正在查找设备…'
+          ? overflowDetail
+            ? `内容已适配容量：${overflowDetail}，正在查找设备…`
+            : `视频已转换为 ${playbackFrames} 帧，正在查找设备…`
+          : overflowDetail ? `序列已适配容量：${overflowDetail}，正在查找设备…` : '内容已准备，正在查找设备…'
       )
       sendPayloadToNative(content)
       if (connected) {
@@ -448,7 +468,7 @@
     }
     fileSummary.textContent = files.length
       ? isVideoFile(files[0])
-        ? `短视频 · ${selectedFps()} FPS · 最多 ${MAX_VIDEO_SECONDS} 秒`
+        ? videoFileSummary()
         : files.length === 1
           ? '单帧图片 · 466 × 466'
           : `${files.length} 帧 PNG 序列 · 20 FPS`
@@ -487,8 +507,12 @@
   fpsInput.addEventListener('change', () => {
     localStorage.setItem('openpencil-video-fps', fpsInput.value)
     if (files.length && isVideoFile(files[0])) {
-      fileSummary.textContent = `短视频 · ${selectedFps()} FPS · 最多 ${MAX_VIDEO_SECONDS} 秒`
+      fileSummary.textContent = videoFileSummary()
     }
+  })
+  overflowStrategyInput.value = localStorage.getItem('openpencil-overflow-strategy') || 'speed'
+  overflowStrategyInput.addEventListener('change', () => {
+    localStorage.setItem('openpencil-overflow-strategy', selectedOverflowStrategy())
   })
 
   editButton.addEventListener('click', () => setEditing(!editing))
@@ -548,7 +572,7 @@
         const file = new File([blob], mimeType.startsWith('video/') ? 'captured-video.mp4' : 'captured-image.jpg', { type: mimeType })
         files = [file]
         fileSummary.textContent = isVideoFile(file)
-          ? `短视频 · ${selectedFps()} FPS · 最多 ${MAX_VIDEO_SECONDS} 秒`
+          ? videoFileSummary()
           : '单帧图片 · 466 × 466'
         payloadSummary.textContent = '媒体已载入，点击上传到设备'
         await loadPreview()

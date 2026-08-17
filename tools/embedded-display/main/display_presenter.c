@@ -1,9 +1,12 @@
 #include "display_presenter.h"
+#include "co5300_panel.h"
 
 #include "driver/gpio.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "sdkconfig.h"
@@ -12,12 +15,24 @@
 #define TRANSFER_DONE_TIMEOUT_MS 500
 #define CO5300_RECOVERY_RETRIES 2
 #define CO5300_RECOVERY_DELAY_MS 20
+// M5GFX's StopWatch driver uses 8192-pixel transfers. Matching that block
+// size keeps queue overhead low without reading the frame directly from PSRAM.
+#define CO5300_STREAM_CHUNK_PIXELS 16384
+#define CO5300_STREAM_BUFFER_COUNT (OPENPENCIL_CO5300_STREAM_QUEUE_DEPTH + 1)
+#define CO5300_STREAM_MAX_CHUNKS \
+    (((CONFIG_EXAMPLE_LCD_H_RES * CONFIG_EXAMPLE_LCD_V_RES) + CO5300_STREAM_CHUNK_PIXELS - 1) / \
+     CO5300_STREAM_CHUNK_PIXELS)
 
 static const char *TAG = "display_presenter";
 static SemaphoreHandle_t s_te_signal;
 static SemaphoreHandle_t s_transfer_done;
 static SemaphoreHandle_t s_draw_lock;
 static bool s_te_enabled;
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+static esp_lcd_panel_io_handle_t s_co5300_stream_io;
+static uint16_t *s_co5300_stream_buffers;
+static size_t s_co5300_stream_chunk_pixels;
+#endif
 
 #if CONFIG_EXAMPLE_LCD_CONTROLLER_CO5300 && CONFIG_EXAMPLE_PIN_NUM_LCD_TE >= 0
 static void IRAM_ATTR te_gpio_isr(void *argument)
@@ -86,6 +101,60 @@ static esp_err_t submit_region(esp_lcd_panel_handle_t panel,
     return ESP_OK;
 }
 
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+static esp_err_t submit_streamed_region(esp_lcd_panel_handle_t panel,
+                                        int x,
+                                        int y,
+                                        int width,
+                                        int height,
+                                        const uint16_t *pixels)
+{
+    ESP_RETURN_ON_FALSE(s_co5300_stream_io && s_co5300_stream_buffers && s_co5300_stream_chunk_pixels > 0,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "CO5300 DMA stream buffers are unavailable");
+
+    (void)panel;
+    // A completed frame from a previous draw must never satisfy this frame's
+    // completion count. Keep every color-DMA callback below, then wait for all
+    // chunks after they have been queued.
+    while (xSemaphoreTake(s_transfer_done, 0) == pdTRUE) {
+    }
+    ESP_RETURN_ON_ERROR(example_co5300_stream_begin(s_co5300_stream_io, x, y, width, height),
+                        TAG,
+                        "set CO5300 streamed window failed");
+
+    const size_t total_pixels = (size_t)width * (size_t)height;
+    size_t pixel_offset = 0;
+    size_t chunk_index = 0;
+    while (pixel_offset < total_pixels) {
+        const size_t chunk_pixels = (total_pixels - pixel_offset < s_co5300_stream_chunk_pixels)
+                                        ? total_pixels - pixel_offset
+                                        : s_co5300_stream_chunk_pixels;
+        uint16_t *chunk = s_co5300_stream_buffers +
+                          (chunk_index % CO5300_STREAM_BUFFER_COUNT) * s_co5300_stream_chunk_pixels;
+        memcpy(chunk, pixels + pixel_offset, chunk_pixels * sizeof(*chunk));
+        ESP_RETURN_ON_ERROR(example_co5300_stream_color(s_co5300_stream_io,
+                                                         chunk,
+                                                         chunk_pixels * sizeof(*chunk),
+                                                         pixel_offset == 0),
+                            TAG,
+                            "queue CO5300 streamed color failed");
+        pixel_offset += chunk_pixels;
+        chunk_index++;
+    }
+
+    for (size_t index = 0; index < chunk_index; index++) {
+        ESP_RETURN_ON_FALSE(xSemaphoreTake(s_transfer_done,
+                                           pdMS_TO_TICKS(TRANSFER_DONE_TIMEOUT_MS)) == pdTRUE,
+                            ESP_ERR_TIMEOUT,
+                            TAG,
+                            "streamed frame transfer completion timed out");
+    }
+    return ESP_OK;
+}
+#endif
+
 bool openpencil_display_presenter_on_color_done(esp_lcd_panel_io_handle_t panel_io,
                                                 esp_lcd_panel_io_event_data_t *event_data,
                                                 void *user_context)
@@ -103,13 +172,35 @@ bool openpencil_display_presenter_on_color_done(esp_lcd_panel_io_handle_t panel_
     return should_yield == pdTRUE;
 }
 
-esp_err_t openpencil_display_presenter_init(void)
+esp_err_t openpencil_display_presenter_init(esp_lcd_panel_io_handle_t panel_io)
 {
     s_draw_lock = xSemaphoreCreateMutex();
     ESP_RETURN_ON_FALSE(s_draw_lock, ESP_ERR_NO_MEM, TAG, "create draw mutex failed");
 
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    s_transfer_done = xSemaphoreCreateCounting(CO5300_STREAM_MAX_CHUNKS, 0);
+#else
     s_transfer_done = xSemaphoreCreateBinary();
+#endif
     ESP_RETURN_ON_FALSE(s_transfer_done, ESP_ERR_NO_MEM, TAG, "create transfer semaphore failed");
+
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    s_co5300_stream_io = panel_io;
+    s_co5300_stream_chunk_pixels = CO5300_STREAM_CHUNK_PIXELS;
+    const size_t stream_buffer_bytes = s_co5300_stream_chunk_pixels * sizeof(uint16_t) *
+                                       CO5300_STREAM_BUFFER_COUNT;
+    s_co5300_stream_buffers = heap_caps_malloc(stream_buffer_bytes,
+                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    ESP_RETURN_ON_FALSE(s_co5300_stream_buffers,
+                        ESP_ERR_NO_MEM,
+                        TAG,
+                        "allocate CO5300 internal DMA stream buffers failed");
+    ESP_LOGI(TAG,
+             "CO5300 internal DMA stream: %u bytes (%d x %u-pixel buffers)",
+             (unsigned)stream_buffer_bytes,
+             CO5300_STREAM_BUFFER_COUNT,
+             (unsigned)s_co5300_stream_chunk_pixels);
+#endif
 
 #if CONFIG_EXAMPLE_LCD_CONTROLLER_CO5300 && CONFIG_EXAMPLE_PIN_NUM_LCD_TE >= 0
     s_te_signal = xSemaphoreCreateBinary();
@@ -204,7 +295,11 @@ esp_err_t openpencil_display_presenter_draw_region_measured(
     do {
         wait_for_te(&te_wait_us);
         transfer_started_us = esp_timer_get_time();
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+        result = submit_streamed_region(panel, x, y, width, height, pixels);
+#else
         result = submit_region(panel, x, y, x + width, y + height, pixels);
+#endif
         if (!should_retry_display_submit(result) || attempt >= CO5300_RECOVERY_RETRIES) break;
 
         ESP_LOGW(TAG,

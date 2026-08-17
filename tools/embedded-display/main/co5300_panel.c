@@ -1,13 +1,14 @@
 #include "co5300_panel.h"
 
 #include "driver/spi_master.h"
+#include "esp_check.h"
 #include "esp_lcd_co5300.h"
 #include "esp_lcd_panel_vendor.h"
 #include "display_presenter.h"
 
 #define CO5300_SPI_HOST SPI2_HOST
 #if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
-#define CO5300_PCLK_HZ (30 * 1000 * 1000)
+#define CO5300_PCLK_HZ (80 * 1000 * 1000)
 #elif CONFIG_OPENPENCIL_WIFI_LIVE_PREVIEW
 // Realtime preview prioritizes a complete TE-synchronized frame over peak
 // throughput. The lower clock gives Wi-Fi and PSRAM DMA more scheduling margin.
@@ -22,6 +23,12 @@
 #define CO5300_DATA2_GPIO CONFIG_EXAMPLE_PIN_NUM_QSPI_DATA2
 #define CO5300_DATA3_GPIO CONFIG_EXAMPLE_PIN_NUM_QSPI_DATA3
 #define CO5300_RESET_GPIO CONFIG_EXAMPLE_PIN_NUM_LCD_RST
+#define CO5300_WRITE_CMD_OPCODE 0x02U
+#define CO5300_WRITE_COLOR_OPCODE 0x32U
+#define CO5300_CMD_CASET 0x2AU
+#define CO5300_CMD_RASET 0x2BU
+#define CO5300_CMD_RAMWR 0x2CU
+#define CO5300_CMD_RAMWRC 0x3CU
 
 #if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
 // M5Stack StopWatch uses a different CO5300 command table from the Waveshare
@@ -72,7 +79,11 @@ esp_err_t example_co5300_new_panel(int max_transfer_sz,
     esp_lcd_panel_io_spi_config_t io_config =
         CO5300_PANEL_IO_QSPI_CONFIG(CO5300_CS_GPIO, NULL, NULL);
     io_config.pclk_hz = CO5300_PCLK_HZ;
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    io_config.trans_queue_depth = OPENPENCIL_CO5300_STREAM_QUEUE_DEPTH;
+#else
     io_config.trans_queue_depth = 10;
+#endif
     io_config.on_color_trans_done = openpencil_display_presenter_on_color_done;
 
     co5300_vendor_config_t vendor_config = {
@@ -106,4 +117,77 @@ esp_err_t example_co5300_new_panel(int max_transfer_sz,
     if (ret_io) *ret_io = io_handle;
     if (ret_panel) *ret_panel = panel_handle;
     return ESP_OK;
+}
+
+static int co5300_qspi_command(uint8_t opcode, uint8_t command)
+{
+    return ((int)opcode << 24) | ((int)command << 8);
+}
+
+esp_err_t example_co5300_stream_begin(esp_lcd_panel_io_handle_t io,
+                                      int x,
+                                      int y,
+                                      int width,
+                                      int height)
+{
+    ESP_RETURN_ON_FALSE(io && x >= 0 && y >= 0 && width > 0 && height > 0,
+                        ESP_ERR_INVALID_ARG,
+                        "co5300",
+                        "invalid streamed window");
+
+    const int x_start = x + CONFIG_EXAMPLE_LCD_X_GAP;
+    const int y_start = y + CONFIG_EXAMPLE_LCD_Y_GAP;
+    const int x_end = x_start + width - 1;
+    const int y_end = y_start + height - 1;
+    const uint8_t column[] = {
+        (uint8_t)(x_start >> 8),
+        (uint8_t)x_start,
+        (uint8_t)(x_end >> 8),
+        (uint8_t)x_end,
+    };
+    const uint8_t row[] = {
+        (uint8_t)(y_start >> 8),
+        (uint8_t)y_start,
+        (uint8_t)(y_end >> 8),
+        (uint8_t)y_end,
+    };
+
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io,
+                                                   co5300_qspi_command(CO5300_WRITE_CMD_OPCODE, CO5300_CMD_CASET),
+                                                   column,
+                                                   sizeof(column)),
+                        "co5300",
+                        "set streamed column window failed");
+    return esp_lcd_panel_io_tx_param(io,
+                                     co5300_qspi_command(CO5300_WRITE_CMD_OPCODE, CO5300_CMD_RASET),
+                                     row,
+                                     sizeof(row));
+}
+
+esp_err_t example_co5300_stream_color(esp_lcd_panel_io_handle_t io,
+                                      const void *pixels,
+                                      size_t byte_count,
+                                      bool first_chunk)
+{
+    ESP_RETURN_ON_FALSE(io && pixels && byte_count > 0,
+                        ESP_ERR_INVALID_ARG,
+                        "co5300",
+                        "invalid streamed color chunk");
+
+    const int command = co5300_qspi_command(
+        CO5300_WRITE_COLOR_OPCODE,
+        first_chunk ? CO5300_CMD_RAMWR : CO5300_CMD_RAMWRC);
+    return esp_lcd_panel_io_tx_color(io, command, pixels, byte_count);
+}
+
+esp_err_t example_co5300_stream_wait(esp_lcd_panel_io_handle_t io)
+{
+    ESP_RETURN_ON_FALSE(io, ESP_ERR_INVALID_ARG, "co5300", "invalid streamed IO handle");
+    // tx_param() does not recycle queued color transactions. A color command
+    // does, before it is issued, which makes this a transport-safe frame
+    // boundary without relying on private panel-IO internals.
+    return esp_lcd_panel_io_tx_color(io,
+                                     co5300_qspi_command(CO5300_WRITE_COLOR_OPCODE, CO5300_CMD_RAMWRC),
+                                     NULL,
+                                     0);
 }

@@ -11,7 +11,7 @@ const SEQUENCE_PATCH_HEADER_BYTES = 12;
 const SEQUENCE_CODEC_RAW_RGB565 = 0;
 const SEQUENCE_CODEC_RLE16 = 1;
 const SEQUENCE_CODEC_PATCH_RGB565 = 2;
-const USB_SEQUENCE_CONTENT_BYTES = 0x1cf0000;
+const DEFAULT_SEQUENCE_CONTENT_BYTES = 0x1cf0000;
 const USB_SEQUENCE_FPS = 20;
 
 export interface SequenceEncodingOptions {
@@ -39,6 +39,10 @@ export interface UsbImageSequencePayload {
 interface EncodedFrame {
   codec: number;
   bytes: Uint8Array;
+}
+
+export function sequenceContentCapacityBytes(profile: EmbeddedDisplayProfile): number {
+  return profile.wirelessContentBytes ?? DEFAULT_SEQUENCE_CONTENT_BYTES;
 }
 
 function bytesFromBase64(value: string): Uint8Array {
@@ -201,9 +205,10 @@ function buildUsbSequencePayload(
     encodedFrames.length * SEQUENCE_RESOURCE_BYTES +
     dataBytes;
   const contentBytes = CONTENT_HEADER_BYTES + payloadBytes;
-  if (contentBytes > USB_SEQUENCE_CONTENT_BYTES) {
+  const contentCapacity = sequenceContentCapacityBytes(profile);
+  if (contentBytes > contentCapacity) {
     throw new Error(
-      `PNG 序列压缩后为 ${(contentBytes / 1024 / 1024).toFixed(2)} MiB，超过 28.94 MiB 内容分区`,
+      `PNG 序列压缩后为 ${(contentBytes / 1024 / 1024).toFixed(2)} MiB，超过 ${(contentCapacity / 1024 / 1024).toFixed(2)} MiB 内容分区`,
     );
   }
 

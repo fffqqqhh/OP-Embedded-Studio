@@ -251,7 +251,7 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Turn on LCD backlight");
     backlight_set(true);
-    ESP_ERROR_CHECK(openpencil_display_presenter_init());
+    ESP_ERROR_CHECK(openpencil_display_presenter_init(io_handle));
 #if CONFIG_OPENPENCIL_EXTERNAL_CONTENT_ONLY || CONFIG_OPENPENCIL_WIFI_SERVER || CONFIG_OPENPENCIL_BLE_SERVER
     ESP_ERROR_CHECK(openpencil_content_init());
 #endif
@@ -342,8 +342,13 @@ void app_main(void)
 #endif
 #if CONFIG_OPENPENCIL_BLE_SERVER
     if (LCD_GENERATED_IMAGE_PIXEL_COUNT == 0) {
+        // The first QSPI frame must finish before NimBLE allocates controller
+        // buffers and starts radio work. Persisted content already follows
+        // this order; use it for the base status page as well.
+        ESP_LOGI(TAG, "Present BLE transfer status view before BLE startup");
+        ESP_ERROR_CHECK(openpencil_ble_status_view_present(panel_handle, frame_buffer));
         ESP_ERROR_CHECK(openpencil_ble_server_start());
-        ESP_LOGI(TAG, "Start BLE transfer status view");
+        ESP_LOGI(TAG, "Continue BLE transfer status view");
         ESP_ERROR_CHECK(openpencil_ble_status_view_run(panel_handle, frame_buffer));
         return;
     } else

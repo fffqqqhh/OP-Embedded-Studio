@@ -16,7 +16,7 @@ typedef struct {
     int64_t total_us;
 } openpencil_display_presenter_metrics_t;
 
-esp_err_t openpencil_display_presenter_init(void);
+esp_err_t openpencil_display_presenter_init(esp_lcd_panel_io_handle_t panel_io);
 esp_err_t openpencil_display_presenter_draw(esp_lcd_panel_handle_t panel,
                                             int width,
                                             int height,

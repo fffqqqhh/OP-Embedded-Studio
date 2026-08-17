@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   encodeUsbSequenceFrame,
-  encodeUsbSequenceFrames
+  encodeUsbSequenceFrames,
+  sequenceContentCapacityBytes
 } from '@/features/embedded-display/adapters/usb-sequence'
 import { encodeWirelessImage } from '@/features/embedded-display/adapters/wireless-content'
 import {
@@ -141,6 +142,19 @@ describe('USB PNG sequence content', () => {
     expect(wifi.storedBytes).toBeGreaterThan(5 * 1024 * 1024)
     expect(ble.storedBytes).toBe(wifi.storedBytes)
     expect(wifi.patchFrames).toBe(0)
+  })
+
+  test('uses the selected board wireless content partition capacity', () => {
+    const smallPartitionProfile = {
+      id: 'small-wireless-partition',
+      resolution: { width: 4, height: 1 },
+      wirelessContentBytes: 32
+    } as EmbeddedDisplayProfile
+
+    expect(sequenceContentCapacityBytes(smallPartitionProfile)).toBe(32)
+    expect(() =>
+      encodeBleSequenceFrames(smallPartitionProfile, [new Uint8Array(8), new Uint8Array(8)])
+    ).toThrow('超过 0.00 MiB 内容分区')
   })
 
   test('keeps Wi-Fi and BLE on full frames while USB uses patches', () => {

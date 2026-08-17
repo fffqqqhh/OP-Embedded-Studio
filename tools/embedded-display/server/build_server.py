@@ -56,6 +56,9 @@ BUILD_MODES = {
 PROFILE_PARTITION_TABLES = {
     "co5300_m5stack_stopwatch": {
         "usb-frame": "partitions_16mb_usb_frame.csv",
+        "wifi-frame": "partitions_16mb_wireless.csv",
+        "wifi-live": "partitions_16mb_wireless.csv",
+        "ble-frame": "partitions_16mb_wireless.csv",
     },
 }
 
