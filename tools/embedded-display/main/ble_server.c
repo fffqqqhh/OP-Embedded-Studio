@@ -73,7 +73,7 @@ static void content_reboot_task(void *param)
     if (content_ready_callback) {
         const esp_err_t present_result = content_ready_callback();
         if (present_result == ESP_OK) {
-            ESP_LOGI(TAG, "presented StopWatch BLE frame without restarting");
+            ESP_LOGI(TAG, "presented StopWatch BLE content without restarting");
             vTaskDelete(NULL);
             return;
         }
@@ -315,7 +315,7 @@ static int receive_chunk(struct os_mbuf *om)
         ESP_LOGI(TAG, "BLE content received: %u bytes", (unsigned)transfer_capacity);
         const BaseType_t reboot_task_created = xTaskCreate(content_reboot_task,
                                                             "ble_content_reboot",
-                                                            4096,
+                                                            8192,
                                                             NULL,
                                                             5,
                                                             NULL);

@@ -4,11 +4,12 @@
   const context = canvas.getContext('2d', { willReadFrequently: true })
   const fileInput = document.getElementById('fileInput')
   const cameraButton = document.getElementById('cameraButton')
-  const fpsInput = document.getElementById('fpsInput')
-  const overflowStrategyInput = document.getElementById('overflowStrategyInput')
+  const fpsControl = document.getElementById('fpsControl')
+  const overflowStrategyControl = document.getElementById('overflowStrategyControl')
   const editButton = document.getElementById('editButton')
   const uploadButton = document.getElementById('uploadButton')
   const backgroundInput = document.getElementById('backgroundInput')
+  const backgroundPalette = document.getElementById('backgroundPalette')
   const resetButton = document.getElementById('resetButton')
   const statusText = document.getElementById('statusText')
   const progressBar = document.getElementById('progressBar')
@@ -44,11 +45,31 @@
   }
 
   function selectedFps() {
-    return Number(fpsInput.value) || 12
+    return Number(fpsControl.dataset.value) || 12
   }
 
   function selectedOverflowStrategy() {
-    return overflowStrategyInput.value === 'trim' ? 'trim' : 'speed'
+    return overflowStrategyControl.dataset.value === 'trim' ? 'trim' : 'speed'
+  }
+
+  function setSegmentValue(control, value) {
+    const button = control.querySelector(`[data-value="${value}"]`) || control.querySelector('button')
+    if (!button) return
+    control.dataset.value = button.dataset.value
+    control.querySelectorAll('button').forEach((candidate) => {
+      const selected = candidate === button
+      candidate.classList.toggle('selected', selected)
+      candidate.setAttribute('aria-pressed', String(selected))
+    })
+  }
+
+  function bindSegmentedControl(control, onChange) {
+    control.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-value]')
+      if (!button || button.disabled || button.classList.contains('selected')) return
+      setSegmentValue(control, button.dataset.value)
+      onChange(button.dataset.value)
+    })
   }
 
   function videoFileSummary() {
@@ -83,8 +104,9 @@
   function updateActions() {
     fileInput.disabled = busy
     cameraButton.disabled = busy
-    fpsInput.disabled = busy
-    overflowStrategyInput.disabled = busy
+    fpsControl.querySelectorAll('button').forEach((button) => { button.disabled = busy })
+    overflowStrategyControl.querySelectorAll('button').forEach((button) => { button.disabled = busy })
+    backgroundPalette.querySelectorAll('button').forEach((button) => { button.disabled = busy })
     editButton.disabled = files.length === 0 || busy
     uploadButton.disabled = files.length === 0 || busy
     editButton.textContent = editing ? '完成' : '编辑'
@@ -503,22 +525,32 @@
       window.OpenPencilNative.pickMedia()
     }
   })
-  fpsInput.value = localStorage.getItem('openpencil-video-fps') || '12'
-  fpsInput.addEventListener('change', () => {
-    localStorage.setItem('openpencil-video-fps', fpsInput.value)
+  setSegmentValue(fpsControl, localStorage.getItem('openpencil-video-fps') || '12')
+  bindSegmentedControl(fpsControl, (value) => {
+    localStorage.setItem('openpencil-video-fps', value)
     if (files.length && isVideoFile(files[0])) {
       fileSummary.textContent = videoFileSummary()
     }
   })
-  overflowStrategyInput.value = localStorage.getItem('openpencil-overflow-strategy') || 'speed'
-  overflowStrategyInput.addEventListener('change', () => {
+  setSegmentValue(overflowStrategyControl, localStorage.getItem('openpencil-overflow-strategy') || 'speed')
+  bindSegmentedControl(overflowStrategyControl, () => {
     localStorage.setItem('openpencil-overflow-strategy', selectedOverflowStrategy())
   })
 
   editButton.addEventListener('click', () => setEditing(!editing))
   uploadButton.addEventListener('click', processAndUpload)
   resetButton.addEventListener('click', resetCrop)
-  backgroundInput.addEventListener('input', renderPreview)
+  backgroundPalette.addEventListener('click', (event) => {
+    const swatch = event.target.closest('.color-swatch')
+    if (!swatch || swatch.disabled) return
+    backgroundInput.value = swatch.dataset.color
+    backgroundPalette.querySelectorAll('.color-swatch').forEach((candidate) => {
+      const selected = candidate === swatch
+      candidate.classList.toggle('selected', selected)
+      candidate.setAttribute('aria-pressed', String(selected))
+    })
+    renderPreview()
+  })
 
   previewWrap.addEventListener('pointerdown', (event) => {
     if (!editing || !previewBitmap) return

@@ -148,8 +148,8 @@ esp_err_t openpencil_ble_status_view_run(esp_lcd_panel_handle_t panel, uint16_t 
         openpencil_ble_status_t current = {0};
         openpencil_ble_server_get_status(&current);
 #if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
-        // The StopWatch presents committed single-frame content in place.
-        // Leave the status loop before it can overwrite the uploaded image.
+        // The StopWatch presents committed frame and sequence content in place.
+        // Leave the status loop before it can overwrite the uploaded content.
         if (current.completed) {
             ESP_LOGI(TAG, "BLE content committed; leaving StopWatch status view");
             return ESP_OK;

@@ -142,18 +142,20 @@ static esp_err_t draw_wireless_image(esp_lcd_panel_handle_t panel,
 static esp_lcd_panel_handle_t s_ble_direct_panel;
 static uint16_t *s_ble_direct_frame_buffer;
 
-static esp_err_t present_m5_ble_frame_without_restart(void)
+static esp_err_t present_m5_ble_content_without_restart(void)
 {
     ESP_RETURN_ON_FALSE(s_ble_direct_panel && s_ble_direct_frame_buffer,
                         ESP_ERR_INVALID_STATE,
                         TAG,
                         "M5 BLE direct display is not configured");
-    ESP_RETURN_ON_FALSE(!openpencil_content_is_sequence() &&
-                            !openpencil_content_is_prototype(),
+    ESP_RETURN_ON_FALSE(!openpencil_content_is_prototype(),
                         ESP_ERR_NOT_SUPPORTED,
                         TAG,
-                        "M5 BLE content requires a runtime restart");
-    ESP_LOGI(TAG, "Present committed M5 BLE frame without restart");
+                        "M5 BLE prototype requires a runtime restart");
+
+    ESP_LOGI(TAG,
+             "Present committed M5 BLE %s without restart",
+             openpencil_content_is_sequence() ? "sequence" : "frame");
     return draw_wireless_image(s_ble_direct_panel, s_ble_direct_frame_buffer, NULL);
 }
 
@@ -162,7 +164,7 @@ static void enable_m5_ble_direct_frame_updates(esp_lcd_panel_handle_t panel,
 {
     s_ble_direct_panel = panel;
     s_ble_direct_frame_buffer = frame_buffer;
-    openpencil_ble_server_set_content_ready_callback(present_m5_ble_frame_without_restart);
+    openpencil_ble_server_set_content_ready_callback(present_m5_ble_content_without_restart);
 }
 #endif
 

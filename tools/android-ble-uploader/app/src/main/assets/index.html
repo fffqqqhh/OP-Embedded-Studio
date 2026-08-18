@@ -33,30 +33,44 @@
         </div>
 
         <div id="editControls" class="edit-controls" aria-hidden="true">
-          <label class="color-control">
+          <div class="color-control">
             <span>背景颜色</span>
-            <input id="backgroundInput" type="color" value="#000000" />
-          </label>
+            <input id="backgroundInput" type="hidden" value="#000000" />
+            <div id="backgroundPalette" class="color-palette" role="group" aria-label="背景颜色">
+              <button class="color-swatch selected" type="button" data-color="#000000" aria-label="黑色" aria-pressed="true"></button>
+              <button class="color-swatch" type="button" data-color="#ffffff" aria-label="白色" aria-pressed="false"></button>
+              <button class="color-swatch" type="button" data-color="#8e8e93" aria-label="灰色" aria-pressed="false"></button>
+              <button class="color-swatch" type="button" data-color="#ff453a" aria-label="红色" aria-pressed="false"></button>
+              <button class="color-swatch" type="button" data-color="#0a84ff" aria-label="蓝色" aria-pressed="false"></button>
+            </div>
+          </div>
           <button id="resetButton" class="text-button">重置画面</button>
         </div>
       </section>
 
       <section class="settings-panel" aria-label="视频设置">
-        <label class="settings-row">
-          <span>视频帧率</span>
-          <select id="fpsInput">
-            <option value="8">省空间 · 8 FPS</option>
-            <option value="12" selected>均衡 · 12 FPS</option>
-            <option value="20">流畅 · 20 FPS</option>
-          </select>
-        </label>
-        <label class="settings-row">
-          <span>容量不足时</span>
-          <select id="overflowStrategyInput">
-            <option value="speed">保留完整内容 · 加快播放</option>
-            <option value="trim">保持播放速度 · 裁切结尾</option>
-          </select>
-        </label>
+        <div class="settings-row">
+          <div class="setting-label">
+            <span>视频帧率</span>
+            <small>帧数越高，占用越大</small>
+          </div>
+          <div id="fpsControl" class="segmented-control compact" role="group" aria-label="视频帧率" data-value="12">
+            <button type="button" data-value="8" aria-pressed="false">8</button>
+            <button class="selected" type="button" data-value="12" aria-pressed="true">12</button>
+            <button type="button" data-value="20" aria-pressed="false">20</button>
+          </div>
+        </div>
+        <div class="settings-divider"></div>
+        <div class="settings-row strategy-row">
+          <div class="setting-label">
+            <span>容量不足时</span>
+            <small>决定超限内容如何处理</small>
+          </div>
+          <div id="overflowStrategyControl" class="segmented-control strategy-control" role="group" aria-label="容量不足时" data-value="speed">
+            <button class="selected" type="button" data-value="speed" aria-pressed="true">完整加速</button>
+            <button type="button" data-value="trim" aria-pressed="false">裁切结尾</button>
+          </div>
+        </div>
       </section>
 
       <section class="transfer-status">

@@ -58,9 +58,14 @@ public final class MainActivity extends Activity {
     private static final UUID STATUS_UUID = UUID.fromString("a310207d-8f4d-559b-8e4a-4791892b127d");
     private static final UUID CLIENT_CONFIG_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final int DEFAULT_PAYLOAD_CHUNK_BYTES = 16;
-    private static final int MAX_PAYLOAD_CHUNK_BYTES = 508;
+    private static final int MAX_PAYLOAD_CHUNK_BYTES = 505;
     private static final int FALLBACK_PAYLOAD_CHUNK_BYTES = 240;
-    private static final int STATUS_CHECKPOINT_BYTES = 12 * 1024;
+    // Checkpoints confirm the stream and recover offsets after a failure. They
+    // do not need to run for every small batch of BLE packets.
+    private static final int STATUS_CHECKPOINT_BYTES = 64 * 1024;
+    private static final long STATUS_READ_SETTLE_MS = 80L;
+    private static final long WRITE_CALLBACK_TIMEOUT_MS = 1200L;
+    private static final String CONTENT_COMPLETE_MESSAGE = "内容已接收，正在切换画面";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private WebView webView;
@@ -82,19 +87,20 @@ public final class MainActivity extends Activity {
     private int payloadExpectedBytes;
     private int payloadWrittenBytes;
     private RandomAccessFile uploadInput;
-    private int uploadOffset;
     private int uploadTotal;
     private int lastProgressBytes;
     private int payloadChunkBytes = DEFAULT_PAYLOAD_CHUNK_BYTES;
     private boolean uploading;
     private int queuedOffset;
     private int confirmedOffset;
-    private int packetsPerBurst;
     private int checkpointReadAttempts;
     private int completionReadAttempts;
     private boolean checkpointPending;
     private boolean statusReadPending;
     private boolean awaitingCompletion;
+    private boolean writePending;
+    private int pendingWriteOffset;
+    private int pendingWriteLength;
     private long statusReadNotBefore;
     private long statusReadDeadline;
 
@@ -428,17 +434,56 @@ public final class MainActivity extends Activity {
             handleStatusNotification(characteristic.getValue());
         }
 
+        @Override
+        public void onCharacteristicWrite(BluetoothGatt nextGatt,
+                                          BluetoothGattCharacteristic characteristic,
+                                          int status) {
+            if (!uploading || characteristic == null
+                    || !TRANSFER_UUID.equals(characteristic.getUuid()) || !writePending) return;
+            mainHandler.removeCallbacks(writeTimeoutRunnable);
+            writePending = false;
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                emitDiagnostic("WRITE: callback failed status=" + status
+                        + " offset=" + pendingWriteOffset);
+                pendingWriteLength = 0;
+                if (payloadChunkBytes > FALLBACK_PAYLOAD_CHUNK_BYTES) {
+                    payloadChunkBytes = FALLBACK_PAYLOAD_CHUNK_BYTES;
+                    emitEvent("status", "连接较慢，已切换到兼容传输档", -1, -1);
+                    mainHandler.post(uploadRunnable);
+                } else {
+                    stopUpload("手机蓝牙栈未能发送内容数据 (" + status + ")");
+                }
+                return;
+            }
+
+            queuedOffset = pendingWriteOffset + pendingWriteLength;
+            pendingWriteLength = 0;
+            if (queuedOffset <= payloadChunkBytes) {
+                emitDiagnostic("WRITE: first packet confirmed bytes=" + queuedOffset);
+            }
+            if (queuedOffset - confirmedOffset >= STATUS_CHECKPOINT_BYTES
+                    || queuedOffset >= uploadTotal) {
+                checkpointPending = true;
+                statusReadNotBefore = System.currentTimeMillis() + STATUS_READ_SETTLE_MS;
+                emitDiagnostic("WRITE: checkpoint queued=" + queuedOffset
+                        + " confirmed=" + confirmedOffset);
+                mainHandler.postDelayed(uploadRunnable, STATUS_READ_SETTLE_MS);
+            } else {
+                mainHandler.post(uploadRunnable);
+            }
+        }
+
     };
 
     private void handleStatusNotification(byte[] value) {
         if (value == null || value.length < 14) return;
         if (value[4] != 0) {
-            stopUpload("设备拒绝内容，校验失败");
+            stopUpload("设备拒绝内容，请检查尺寸或格式");
             return;
         }
         if (value[3] != 0 && awaitingCompletion) {
             stopUpload(null);
-            emitEvent("complete", "内容已校验，设备正在重启", uploadTotal, uploadTotal);
+            emitEvent("complete", CONTENT_COMPLETE_MESSAGE, uploadTotal, uploadTotal);
             return;
         }
         int received = parseReceivedOffset(value);
@@ -469,13 +514,13 @@ public final class MainActivity extends Activity {
             return;
         }
         if (value[4] != 0) {
-            stopUpload("设备拒绝内容，校验失败");
+            stopUpload("设备拒绝内容，请检查尺寸或格式");
             return;
         }
         int received = Math.max(0, Math.min(uploadTotal, parseReceivedOffset(value)));
         if (value[3] != 0) {
             stopUpload(null);
-            emitEvent("complete", "内容已校验，设备正在重启", uploadTotal, uploadTotal);
+            emitEvent("complete", CONTENT_COMPLETE_MESSAGE, uploadTotal, uploadTotal);
             return;
         }
         if (awaitingCompletion && received == uploadTotal) {
@@ -500,11 +545,11 @@ public final class MainActivity extends Activity {
         // Only a direct read may move the replay position. Notifications are display-only.
         confirmedOffset = received;
         queuedOffset = received;
-        uploadOffset = received;
+        mainHandler.removeCallbacks(writeTimeoutRunnable);
+        writePending = false;
+        pendingWriteLength = 0;
         checkpointPending = false;
         checkpointReadAttempts = 0;
-        packetsPerBurst = Math.min(payloadChunkBytes > FALLBACK_PAYLOAD_CHUNK_BYTES ? 48 : 20,
-                packetsPerBurst + 2);
         if (received >= lastProgressBytes + 4096 || received == uploadTotal) {
             lastProgressBytes = received;
             emitEvent("progress", "设备已接收", received, uploadTotal);
@@ -528,9 +573,10 @@ public final class MainActivity extends Activity {
         }
         if (payloadChunkBytes > FALLBACK_PAYLOAD_CHUNK_BYTES) {
             payloadChunkBytes = FALLBACK_PAYLOAD_CHUNK_BYTES;
-            packetsPerBurst = 4;
             queuedOffset = confirmedOffset;
-            uploadOffset = confirmedOffset;
+            mainHandler.removeCallbacks(writeTimeoutRunnable);
+            writePending = false;
+            pendingWriteLength = 0;
             checkpointPending = false;
             checkpointReadAttempts = 0;
             emitEvent("status", "连接较慢，已切换到兼容传输档", -1, -1);
@@ -636,18 +682,19 @@ public final class MainActivity extends Activity {
         stopUpload(null);
         try {
             uploadInput = new RandomAccessFile(payloadFile, "r");
-            uploadOffset = 0;
             queuedOffset = 0;
             confirmedOffset = 0;
             uploadTotal = payloadExpectedBytes;
             lastProgressBytes = 0;
             uploading = true;
-            packetsPerBurst = payloadChunkBytes > FALLBACK_PAYLOAD_CHUNK_BYTES ? 8 : 4;
             checkpointReadAttempts = 0;
             completionReadAttempts = 0;
             checkpointPending = false;
             statusReadPending = false;
             awaitingCompletion = false;
+            writePending = false;
+            pendingWriteOffset = 0;
+            pendingWriteLength = 0;
             transferCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
             emitDiagnostic("UPLOAD: start MTU=" + negotiatedMtu + " payload=" + payloadChunkBytes
                     + " total=" + uploadTotal);
@@ -668,6 +715,7 @@ public final class MainActivity extends Activity {
                 stopUpload("上传过程中 BLE 已断开");
                 return;
             }
+            if (writePending) return;
             if (checkpointPending) {
                 if (System.currentTimeMillis() < statusReadNotBefore) {
                     mainHandler.postDelayed(this, 20L);
@@ -695,44 +743,45 @@ public final class MainActivity extends Activity {
                 return;
             }
             try {
-                int sent = 0;
-                while (sent < packetsPerBurst
-                        && queuedOffset < uploadTotal
-                        && queuedOffset - confirmedOffset < STATUS_CHECKPOINT_BYTES) {
-                    int length = Math.min(payloadChunkBytes, uploadTotal - queuedOffset);
-                    byte[] content = new byte[length];
-                    uploadInput.seek(queuedOffset);
-                    uploadInput.readFully(content);
-                    byte[] packet = new byte[length + 4];
-                    ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN).putInt(queuedOffset).put(content);
-                    transferCharacteristic.setValue(packet);
-                    if (!gatt.writeCharacteristic(transferCharacteristic)) {
-                        emitDiagnostic("WRITE: rejected offset=" + queuedOffset + " burst=" + sent);
-                        packetsPerBurst = Math.max(1, packetsPerBurst / 2);
-                        mainHandler.postDelayed(this, 4L);
-                        return;
-                    }
-                    queuedOffset += length;
-                    sent += 1;
-                    if (queuedOffset == length) {
-                        emitDiagnostic("WRITE: first packet accepted bytes=" + length);
-                    }
-                }
-                if (queuedOffset - confirmedOffset >= STATUS_CHECKPOINT_BYTES
-                        || queuedOffset >= uploadTotal) {
+                if (queuedOffset >= uploadTotal) {
                     checkpointPending = true;
                     statusReadNotBefore = System.currentTimeMillis() + 150L;
-                    emitDiagnostic("WRITE: checkpoint queued=" + queuedOffset
-                            + " confirmed=" + confirmedOffset);
-                    // Resume after the controller has had time to drain no-response writes.
                     mainHandler.postDelayed(this, 150L);
-                } else {
-                    mainHandler.post(this);
+                    return;
                 }
+
+                int length = Math.min(payloadChunkBytes, uploadTotal - queuedOffset);
+                byte[] content = new byte[length];
+                uploadInput.seek(queuedOffset);
+                uploadInput.readFully(content);
+                byte[] packet = new byte[length + 4];
+                ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN).putInt(queuedOffset).put(content);
+                transferCharacteristic.setValue(packet);
+                pendingWriteOffset = queuedOffset;
+                pendingWriteLength = length;
+                writePending = true;
+                if (!gatt.writeCharacteristic(transferCharacteristic)) {
+                    writePending = false;
+                    pendingWriteLength = 0;
+                    emitDiagnostic("WRITE: rejected offset=" + queuedOffset);
+                    mainHandler.postDelayed(this, 4L);
+                    return;
+                }
+                mainHandler.postDelayed(writeTimeoutRunnable, WRITE_CALLBACK_TIMEOUT_MS);
             } catch (IOException error) {
                 stopUpload(error.getMessage());
             }
         }
+    };
+
+    private final Runnable writeTimeoutRunnable = () -> {
+        if (!uploading || !writePending) return;
+        emitDiagnostic("WRITE: callback timeout offset=" + pendingWriteOffset);
+        writePending = false;
+        pendingWriteLength = 0;
+        checkpointPending = true;
+        statusReadNotBefore = System.currentTimeMillis() + 120L;
+        mainHandler.postDelayed(uploadRunnable, 120L);
     };
 
     private void stopUpload(String errorMessage) {
@@ -740,7 +789,10 @@ public final class MainActivity extends Activity {
         checkpointPending = false;
         statusReadPending = false;
         awaitingCompletion = false;
+        writePending = false;
+        pendingWriteLength = 0;
         mainHandler.removeCallbacks(uploadRunnable);
+        mainHandler.removeCallbacks(writeTimeoutRunnable);
         if (uploadInput != null) {
             try {
                 uploadInput.close();
