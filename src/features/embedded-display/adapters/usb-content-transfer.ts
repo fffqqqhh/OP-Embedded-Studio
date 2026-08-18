@@ -201,7 +201,7 @@ async function handshakeUsbDevice(
     }
   } catch (error) {
     if (options.timeoutIsMissing) {
-      throw new UsbContentFirmwareError('missing', '设备未运行兼容的 USB 高速基础固件')
+      throw new UsbContentFirmwareError('missing', '设备未运行兼容的 USB 高速模式固件')
     }
     throw new UsbContentDeviceUnavailableError(
       error instanceof Error ? error.message : 'USB 设备尚未准备好'
@@ -236,7 +236,7 @@ async function handshakeUsbDevice(
   ) {
     throw new UsbContentFirmwareError(
       'protocol',
-      '设备正在运行旧版 USB 内容固件，请让 Studio 自动刷新统一 USB 基础固件后重试'
+      '设备正在运行旧版 USB 内容固件，请让 Studio 自动更新 USB 模式固件后重试'
     )
   }
   if (contentBytes > capacity) {

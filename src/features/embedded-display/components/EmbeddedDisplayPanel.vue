@@ -248,6 +248,11 @@ const transportOptions = computed(() =>
     disabled: modeSwitchLocked.value && option.value !== transportMode.value
   }))
 )
+const transportModeLabel = computed(
+  () =>
+    transportOptions.value.find((option) => option.value === transportMode.value)?.label ?? '当前'
+)
+const firmwareActionLabel = computed(() => `写入 ${transportModeLabel.value} 模式固件`)
 const profileOptions = computed(() =>
   profiles.value.map((profile) => ({ value: profile.id, label: profile.name }))
 )
@@ -476,7 +481,7 @@ async function resolveUsbFirmwareManifestUrl(): Promise<string> {
     manifestUrl = usbManifestUrl.value
   }
   if (selectedProfile.value?.id !== profileId || !manifestUrl) {
-    throw new Error('USB 基础固件未就绪，请稍后重试或刷新基础固件')
+    throw new Error('USB 模式固件未就绪，请稍后重试或重新写入 USB 模式固件')
   }
   return manifestUrl
 }
@@ -986,7 +991,7 @@ async function handleInitializeUsbFirmware() {
 
   state.status = 'uploading'
   state.progress = 0
-  state.message = '正在准备 USB 高速基础固件…'
+  state.message = '正在准备 USB 模式固件…'
   buildStatus.value = 'uploading'
   buildMessage.value = state.message
   buildLog.value = []
@@ -996,7 +1001,7 @@ async function handleInitializeUsbFirmware() {
       flashFirmwareManifest(manifestUrl, 'usb-frame', {
         port,
         preparingMessage: state.message,
-        connectedMessage: '已连接，正在初始化 USB 高速内容服务。',
+        connectedMessage: '已连接，正在写入 USB 高速传输固件。',
         onLog: (message) => {
           const normalized = message.trim()
           if (!normalized) return
@@ -1006,7 +1011,7 @@ async function handleInitializeUsbFirmware() {
         },
         onProgress: ({ percent, written, total }) => {
           state.progress = percent
-          state.message = `正在写入 USB 基础固件：${percent}%（${written} / ${total} 字节）`
+          state.message = `正在写入 USB 模式固件：${percent}%（${written} / ${total} 字节）`
           buildMessage.value = state.message
         }
       })
@@ -1014,13 +1019,13 @@ async function handleInitializeUsbFirmware() {
     clearActiveUsbPort(port as UsbContentSerialPort)
     state.status = 'success'
     state.progress = 100
-    state.message = 'USB 高速基础固件刷新完成；后续可直接传输内容。'
+    state.message = 'USB 模式固件已写入；可以传输内容。'
     buildStatus.value = 'ready'
     buildMessage.value = state.message
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     state.status = 'error'
-    state.message = `基础固件刷新失败：${message}`
+    state.message = `USB 模式固件写入失败：${message}`
     buildStatus.value = 'error'
     buildMessage.value = state.message
     buildLog.value.push(message)
@@ -1057,7 +1062,7 @@ async function handleInitializeWirelessFirmware(mode: WirelessTransportMode) {
 
   state.status = 'uploading'
   state.progress = 0
-  state.message = `正在准备 ${modeLabel} 基础固件…`
+  state.message = `正在准备 ${modeLabel} 模式固件…`
   buildStatus.value = 'uploading'
   buildMessage.value = state.message
   buildLog.value = []
@@ -1077,7 +1082,7 @@ async function handleInitializeWirelessFirmware(mode: WirelessTransportMode) {
     await flashFirmwareManifest(firmwareManifestUrl, buildMode, {
       port,
       preparingMessage: state.message,
-      connectedMessage: `已连接，正在初始化 ${modeLabel} 设备。`,
+      connectedMessage: `已连接，正在写入 ${modeLabel} 模式固件。`,
       onLog: (message) => {
         const normalized = message.trim()
         if (!normalized) return
@@ -1087,13 +1092,13 @@ async function handleInitializeWirelessFirmware(mode: WirelessTransportMode) {
       },
       onProgress: ({ percent, written, total }) => {
         state.progress = percent
-        state.message = `正在写入基础固件：${percent}%（${written} / ${total} 字节）`
+        state.message = `正在写入 ${modeLabel} 模式固件：${percent}%（${written} / ${total} 字节）`
         buildMessage.value = state.message
       }
     })
     state.status = 'success'
     state.progress = 100
-    state.message = `${modeLabel} 设备初始化完成，设备正在重启。`
+    state.message = `${modeLabel} 模式固件已写入，设备正在重启。`
     buildStatus.value = 'ready'
     buildMessage.value = state.message
     if (mode === 'wifi') {
@@ -1110,7 +1115,7 @@ async function handleInitializeWirelessFirmware(mode: WirelessTransportMode) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     state.status = 'error'
-    state.message = `初始化失败：${message}`
+    state.message = `${modeLabel} 模式固件写入失败：${message}`
     buildStatus.value = 'error'
     buildMessage.value = state.message
     buildLog.value.push(message)
@@ -1384,6 +1389,22 @@ watch([wifiSsid, wifiPassword], () => {
           class="mt-panel rounded-panel border border-border bg-panel-field p-2"
         >
           <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-medium text-surface">传输方式</span>
+            <span class="truncate text-[10px] text-muted">{{ firmwareActionLabel }}</span>
+          </div>
+          <SegmentedControl
+            v-model="transportMode"
+            class="mt-2 w-full"
+            :options="transportOptions"
+            label="选择传输方式"
+          />
+        </div>
+
+        <div
+          v-if="selectedProfile"
+          class="mt-panel rounded-panel border border-border bg-panel-field p-2"
+        >
+          <div class="flex items-center justify-between gap-2">
             <div class="flex min-w-0 items-center gap-2">
               <span
                 class="size-2 shrink-0 rounded-full"
@@ -1424,8 +1445,8 @@ watch([wifiSsid, wifiPassword], () => {
           >
             {{
               activeFirmwareInitialization.status === 'uploading'
-                ? `正在刷新基础固件 ${activeFirmwareInitialization.progress}%`
-                : '刷新基础固件'
+                ? `正在写入 ${transportModeLabel} 模式固件 ${activeFirmwareInitialization.progress}%`
+                : firmwareActionLabel
             }}
           </button>
           <div
@@ -1494,15 +1515,6 @@ watch([wifiSsid, wifiPassword], () => {
             />
           </div>
         </div>
-      </PanelSection>
-
-      <PanelSection class="order-[20]" label="传输">
-        <SegmentedControl
-          v-model="transportMode"
-          class="w-full"
-          :options="transportOptions"
-          label="选择传输方式"
-        />
       </PanelSection>
 
       <PanelSection class="order-[70]" label="画面适配">
@@ -2083,7 +2095,7 @@ watch([wifiSsid, wifiPassword], () => {
         <p class="mt-1 text-[10px] leading-relaxed text-muted">
           {{
             transportMode === 'ble'
-              ? 'BLE 上传会重新烘焙全部画面，基础固件不会嵌入交互内容。'
+              ? 'BLE 上传会重新烘焙全部画面，模式固件不会嵌入交互内容。'
               : '此步骤可选；生成固件时会自动重新烘焙全部画面。'
           }}
         </p>

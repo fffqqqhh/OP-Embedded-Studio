@@ -45,7 +45,13 @@ function profileFromRegistry(profile: Record<string, unknown>): EmbeddedDisplayP
 
 export function bundledDisplayProfiles(): EmbeddedDisplayProfile[] {
   const registry = profileRegistry as EmbeddedProfileRegistry
-  return (registry.profiles || []).map(profileFromRegistry).filter((profile) => profile.id)
+  return (registry.profiles || [])
+    .map(profileFromRegistry)
+    .filter(
+      (profile) =>
+        profile.id &&
+        Object.values(BUNDLED_FIRMWARE_PROFILES).some((profileIds) => profileIds?.has(profile.id))
+    )
 }
 
 export function bundledFirmwareManifestUrl(

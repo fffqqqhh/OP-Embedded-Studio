@@ -315,7 +315,7 @@ async function deployContent(
     onLog: (message) => appendLog(plan, message),
     onProgress: ({ percent }) => {
       plan.progress = 5 + Math.round(percent * 0.55)
-      plan.message = `正在自动更新 USB 基础固件 ${percent}%`
+      plan.message = `正在自动更新 USB 模式固件 ${percent}%`
     },
     onStage: (stage, message) => {
       if (stage === 'checking') plan.status = 'checking-firmware'
@@ -627,7 +627,7 @@ export async function executeUsbFrameDeployment(
     await deployContent(plan, port, options)
     plan.progress = 100
     plan.status = 'success'
-    plan.message = `基础固件与${deploymentContentLabel(plan.mode)}已部署完成`
+    plan.message = `USB 模式固件与${deploymentContentLabel(plan.mode)}已部署完成`
     plan.completedAt = Date.now()
     try {
       await options.onSuccess?.(plan)

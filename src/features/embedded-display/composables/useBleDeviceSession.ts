@@ -159,7 +159,7 @@ function createBleDeviceSession() {
   function setBaseFirmwareReady(ready: boolean) {
     baseFirmwareReady.value = ready
     if (ready && status.value === 'idle') {
-      message.value = '已找到 BLE 基础固件，可连接设备或通过 USB 重新烧录'
+      message.value = '已找到 BLE 模式固件，可连接设备或通过 USB 重新写入'
     }
   }
 
@@ -256,9 +256,9 @@ function createBleDeviceSession() {
         message.value =
           '当前设备运行 BLE ' +
           firmwareModeLabel(remoteStatus.firmwareMode) +
-          ' 基础固件；请通过 USB 初始化 BLE ' +
+          ' 模式固件；请通过 USB 写入 BLE ' +
           firmwareModeLabel(expectedMode) +
-          ' 基础固件'
+          ' 模式固件'
         return connection
       }
       status.value = 'success'
@@ -269,7 +269,7 @@ function createBleDeviceSession() {
           firmwareModeLabel(remoteStatus.firmwareMode)
         : '已连接 ' +
           (device.name || 'OP Embedded BLE') +
-          '，建议重新初始化基础固件以启用模式检测'
+          '，建议重新写入 BLE 模式固件以启用模式检测'
       return connection
     } catch (error) {
       deviceReady.value = false
@@ -298,9 +298,9 @@ function createBleDeviceSession() {
       message.value =
         '当前设备运行 BLE ' +
         firmwareModeLabel(modeStatus.firmwareMode) +
-        ' 基础固件，不能接收 ' +
+        ' 模式固件，不能接收 ' +
         firmwareModeLabel(expectedMode) +
-        ' 内容；请先通过 USB 初始化正确的基础固件'
+        ' 内容；请先通过 USB 写入正确的模式固件'
       return 'error'
     } catch (error) {
       if (isDisconnectedError(error)) return 'disconnected'

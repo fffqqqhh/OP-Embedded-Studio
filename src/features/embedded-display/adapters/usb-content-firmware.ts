@@ -125,7 +125,7 @@ async function reconnectAndTransferUsbContent(
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error('USB 基础固件更新后未能重新连接设备')
+  throw lastError instanceof Error ? lastError : new Error('USB 模式固件更新后未能重新连接设备')
 }
 
 export async function transferUsbContentWithFirmwareFallback(
@@ -173,7 +173,7 @@ async function transferUsbContentWithFirmwareFallbackUnlocked(
     }
   }
 
-  options.onStage?.('flashing', '正在自动更新 USB 基础固件')
+  options.onStage?.('flashing', '正在自动更新 USB 模式固件')
   await dependencies.flashManifest(options.manifestUrl, options.firmwareBuildMode ?? 'usb-frame', {
     port: firmwarePort as SerialPortLike,
     onLog: options.onLog,
@@ -181,6 +181,6 @@ async function transferUsbContentWithFirmwareFallbackUnlocked(
   })
   clearActiveUsbPort(firmwarePort)
 
-  options.onStage?.('reconnecting', '基础固件已更新，正在等待设备重启并恢复连接')
+  options.onStage?.('reconnecting', 'USB 模式固件已更新，正在等待设备重启并恢复连接')
   return reconnectAndTransferUsbContent(options, dependencies, Boolean(sessionPort))
 }
