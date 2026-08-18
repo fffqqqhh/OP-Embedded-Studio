@@ -11,13 +11,30 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#include <stdatomic.h>
 
 #define SEQUENCE_STATS_FRAMES 120
 
 #if CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK
 static const char *TAG = "sequence_player";
 static portMUX_TYPE s_metrics_lock = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_player_lock = portMUX_INITIALIZER_UNLOCKED;
 static openpencil_sequence_player_metrics_t s_metrics;
+static atomic_bool s_stop_requested = ATOMIC_VAR_INIT(false);
+static TaskHandle_t s_player_task;
+static bool s_player_starting;
+static bool s_player_exited_during_start;
+
+typedef struct {
+    esp_lcd_panel_handle_t panel;
+    uint16_t *primary_frame_buffer;
+    size_t frame_pixels;
+    int width;
+    int height;
+    openpencil_sequence_ready_callback_t on_first_frame;
+} sequence_player_context_t;
+
+static sequence_player_context_t s_player_context;
 
 typedef struct {
     uint16_t frame_index;
@@ -37,6 +54,55 @@ typedef struct {
     QueueHandle_t results;
     size_t frame_pixels;
 } sequence_decoder_t;
+
+static bool sequence_stop_requested(void)
+{
+    return atomic_load_explicit(&s_stop_requested, memory_order_acquire);
+}
+
+static bool sequence_abort_requested(void)
+{
+    return sequence_stop_requested() || openpencil_content_write_in_progress();
+}
+
+static void sequence_metrics_set_inactive(void)
+{
+    portENTER_CRITICAL(&s_metrics_lock);
+    s_metrics.active = false;
+    portEXIT_CRITICAL(&s_metrics_lock);
+}
+
+static esp_err_t sequence_load_frame_with_region(uint16_t frame_index,
+                                                 openpencil_sequence_region_t *region,
+                                                 uint16_t *destination,
+                                                 size_t frame_pixels)
+{
+    while (!openpencil_content_read_begin()) {
+        if (sequence_abort_requested()) return ESP_ERR_INVALID_STATE;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    esp_err_t result = openpencil_content_sequence_region(frame_index, region);
+    if (result == ESP_OK) {
+        result = openpencil_content_load_frame(frame_index, destination, frame_pixels);
+    }
+    openpencil_content_read_end();
+    return result;
+}
+
+static esp_err_t sequence_reconstruct_frame(uint16_t frame_index,
+                                            uint16_t *previous_frame,
+                                            uint16_t *destination,
+                                            size_t frame_pixels)
+{
+    while (!openpencil_content_read_begin()) {
+        if (sequence_abort_requested()) return ESP_ERR_INVALID_STATE;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    const esp_err_t result = openpencil_content_reconstruct_sequence_frame(
+        frame_index, previous_frame, destination, frame_pixels);
+    openpencil_content_read_end();
+    return result;
+}
 
 static uint16_t *allocate_frame_buffer(size_t frame_bytes)
 {
@@ -67,9 +133,18 @@ static void sequence_decoder_task(void *argument)
         openpencil_sequence_region_t region = {0};
         esp_err_t result = ESP_OK;
         while (true) {
+            if (sequence_abort_requested()) {
+                result = ESP_ERR_INVALID_STATE;
+                break;
+            }
             while (!openpencil_content_read_begin()) {
+                if (sequence_abort_requested()) {
+                    result = ESP_ERR_INVALID_STATE;
+                    break;
+                }
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
+            if (result != ESP_OK) break;
             result = openpencil_content_sequence_region(request.frame_index, &region);
             if (result == ESP_OK) {
                 // For a patch, load_frame decodes only the changed rectangle
@@ -80,7 +155,11 @@ static void sequence_decoder_task(void *argument)
                                                         decoder->frame_pixels);
             }
             openpencil_content_read_end();
-            if (!openpencil_content_write_in_progress()) break;
+            if (sequence_abort_requested()) {
+                result = ESP_ERR_INVALID_STATE;
+                break;
+            }
+            break;
         }
         const sequence_decode_result_t decoded = {
             .frame_index = request.frame_index,
@@ -90,6 +169,7 @@ static void sequence_decoder_task(void *argument)
             .result = result,
         };
         xQueueSend(decoder->results, &decoded, portMAX_DELAY);
+        if (sequence_abort_requested()) break;
     }
     vTaskDelete(NULL);
 }
@@ -107,6 +187,122 @@ bool openpencil_sequence_player_get_metrics(openpencil_sequence_player_metrics_t
 #else
     *metrics = (openpencil_sequence_player_metrics_t){0};
     return false;
+#endif
+}
+
+#if CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK
+static void sequence_player_task(void *argument)
+{
+    sequence_player_context_t *context = argument;
+    const esp_err_t result = openpencil_sequence_player_run(
+        context->panel,
+        context->primary_frame_buffer,
+        context->frame_pixels,
+        context->width,
+        context->height,
+        context->on_first_frame);
+    if (result != ESP_OK && !sequence_abort_requested()) {
+        ESP_LOGW(TAG, "sequence player stopped: %s", esp_err_to_name(result));
+    }
+    sequence_metrics_set_inactive();
+    portENTER_CRITICAL(&s_player_lock);
+    if (s_player_starting) {
+        // xTaskCreatePinnedToCore() can schedule the new task before the
+        // caller receives and publishes its handle. Preserve that outcome so
+        // start() does not publish a stale handle after the task has exited.
+        s_player_exited_during_start = true;
+    } else {
+        s_player_task = NULL;
+    }
+    portEXIT_CRITICAL(&s_player_lock);
+    vTaskDelete(NULL);
+}
+#endif
+
+esp_err_t openpencil_sequence_player_start(esp_lcd_panel_handle_t panel,
+                                           uint16_t *primary_frame_buffer,
+                                           size_t frame_pixels,
+                                           int width,
+                                           int height,
+                                           openpencil_sequence_ready_callback_t on_first_frame)
+{
+#if !CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK
+    (void)panel;
+    (void)primary_frame_buffer;
+    (void)frame_pixels;
+    (void)width;
+    (void)height;
+    (void)on_first_frame;
+    return ESP_ERR_NOT_SUPPORTED;
+#else
+    portENTER_CRITICAL(&s_player_lock);
+    const bool already_running = s_player_task != NULL || s_player_starting;
+    if (!already_running) {
+        s_player_starting = true;
+        s_player_exited_during_start = false;
+    }
+    portEXIT_CRITICAL(&s_player_lock);
+    ESP_RETURN_ON_FALSE(!already_running,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "sequence player is already running");
+
+    s_player_context = (sequence_player_context_t){
+        .panel = panel,
+        .primary_frame_buffer = primary_frame_buffer,
+        .frame_pixels = frame_pixels,
+        .width = width,
+        .height = height,
+        .on_first_frame = on_first_frame,
+    };
+    atomic_store_explicit(&s_stop_requested, false, memory_order_release);
+    TaskHandle_t task = NULL;
+    const BaseType_t created = xTaskCreatePinnedToCore(sequence_player_task,
+                                                       "sequence_player",
+                                                       6144,
+                                                       &s_player_context,
+                                                       6,
+                                                       &task,
+                                                       1);
+    if (created != pdPASS) {
+        portENTER_CRITICAL(&s_player_lock);
+        s_player_starting = false;
+        s_player_exited_during_start = false;
+        portEXIT_CRITICAL(&s_player_lock);
+        ESP_LOGE(TAG, "create sequence player task failed");
+        return ESP_ERR_NO_MEM;
+    }
+    portENTER_CRITICAL(&s_player_lock);
+    s_player_starting = false;
+    const bool exited_during_start = s_player_exited_during_start;
+    if (!exited_during_start) s_player_task = task;
+    portEXIT_CRITICAL(&s_player_lock);
+    return exited_during_start ? ESP_ERR_INVALID_STATE : ESP_OK;
+#endif
+}
+
+esp_err_t openpencil_sequence_player_stop_and_wait(void)
+{
+#if !CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK
+    return ESP_OK;
+#else
+    atomic_store_explicit(&s_stop_requested, true, memory_order_release);
+    portENTER_CRITICAL(&s_player_lock);
+    TaskHandle_t task = s_player_task;
+    portEXIT_CRITICAL(&s_player_lock);
+    if (task) xTaskNotifyGive(task);
+
+    for (int attempt = 0; attempt < 200; attempt++) {
+        portENTER_CRITICAL(&s_player_lock);
+        const bool task_running = s_player_task != NULL;
+        const bool task_starting = s_player_starting;
+        portEXIT_CRITICAL(&s_player_lock);
+        openpencil_sequence_player_metrics_t metrics = {0};
+        openpencil_sequence_player_get_metrics(&metrics);
+        if (!task_running && !task_starting && !metrics.active) return ESP_OK;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return ESP_ERR_TIMEOUT;
 #endif
 }
 
@@ -136,6 +332,13 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                         TAG,
                         "sequence content is not ready");
 
+    portENTER_CRITICAL(&s_metrics_lock);
+    s_metrics = (openpencil_sequence_player_metrics_t){
+        .active = true,
+        .target_delay_ms = openpencil_content_frame_delay_ms(),
+    };
+    portEXIT_CRITICAL(&s_metrics_lock);
+
     const size_t frame_bytes = frame_pixels * sizeof(uint16_t);
     uint16_t *secondary_frame_buffer = allocate_frame_buffer(frame_bytes);
     ESP_RETURN_ON_FALSE(secondary_frame_buffer,
@@ -154,6 +357,7 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                         "create sequence decoder queues failed");
 
     TaskHandle_t decoder_task = NULL;
+    esp_timer_handle_t frame_timer = NULL;
     ESP_RETURN_ON_FALSE(xTaskCreatePinnedToCore(sequence_decoder_task,
                                                 "sequence_decode",
                                                 4096,
@@ -162,8 +366,10 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                                                 &decoder_task,
                                                 1) == pdPASS,
                         ESP_ERR_NO_MEM,
-                        TAG,
-                        "create sequence decoder task failed");
+                                                TAG,
+                                                "create sequence decoder task failed");
+
+    if (sequence_abort_requested()) goto stop_cleanup;
 
     ESP_LOGI(TAG,
              "sequence player ready: %ux%u, %u frames, %u ms",
@@ -174,16 +380,17 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
 
     int64_t initial_load_started_us = esp_timer_get_time();
     openpencil_sequence_region_t initial_region = {0};
-    ESP_RETURN_ON_ERROR(openpencil_content_sequence_region(0, &initial_region),
+    ESP_RETURN_ON_ERROR(sequence_load_frame_with_region(0,
+                                                        &initial_region,
+                                                        primary_frame_buffer,
+                                                        frame_pixels),
                         TAG,
-                        "load initial sequence region failed");
+                        "load initial sequence frame failed");
     ESP_RETURN_ON_FALSE(sequence_region_is_full_frame(&initial_region, width, height),
                         ESP_ERR_INVALID_STATE,
                         TAG,
                         "first sequence frame must be a full keyframe");
-    ESP_RETURN_ON_ERROR(openpencil_content_load_frame(0, primary_frame_buffer, frame_pixels),
-                        TAG,
-                        "load initial sequence frame failed");
+    if (sequence_abort_requested()) goto stop_cleanup;
     int64_t current_load_us = esp_timer_get_time() - initial_load_started_us;
 
     uint16_t current_frame = 0;
@@ -198,7 +405,6 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
     xQueueSend(decoder.requests, &request, portMAX_DELAY);
 
     const uint16_t frame_delay_ms = openpencil_content_frame_delay_ms();
-    esp_timer_handle_t frame_timer = NULL;
     const esp_timer_create_args_t frame_timer_config = {
         .callback = sequence_frame_timer_callback,
         .arg = xTaskGetCurrentTaskHandle(),
@@ -222,14 +428,8 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
     uint32_t stats_frames = 0;
     uint32_t dropped_frames = 0;
 
-    portENTER_CRITICAL(&s_metrics_lock);
-    s_metrics = (openpencil_sequence_player_metrics_t){
-        .active = true,
-        .target_delay_ms = openpencil_content_frame_delay_ms(),
-    };
-    portEXIT_CRITICAL(&s_metrics_lock);
-
     while (true) {
+        if (sequence_abort_requested()) goto stop_cleanup;
         openpencil_display_presenter_metrics_t present_metrics = {0};
         const bool draw_full_frame = sequence_region_is_full_frame(&current_region, width, height);
         const size_t presented_pixel_count = draw_full_frame
@@ -263,6 +463,8 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
             on_first_frame = NULL;
         }
 
+        if (sequence_abort_requested()) goto stop_cleanup;
+
         const int64_t decoder_wait_started_us = esp_timer_get_time();
         sequence_decode_result_t decoded;
         ESP_RETURN_ON_FALSE(xQueueReceive(decoder.results, &decoded, portMAX_DELAY) == pdTRUE,
@@ -270,6 +472,7 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                             TAG,
                             "wait for decoded sequence frame failed");
         const int64_t decoder_wait_us = esp_timer_get_time() - decoder_wait_started_us;
+        if (decoded.result != ESP_OK && sequence_abort_requested()) goto stop_cleanup;
         ESP_RETURN_ON_ERROR(decoded.result, TAG, "decode sequence frame failed");
         ESP_RETURN_ON_FALSE(decoded.frame_index == next_frame && decoded.destination == next_buffer,
                             ESP_ERR_INVALID_STATE,
@@ -282,11 +485,10 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
         // keeps the display transaction and TE boundary frame-wide.
 #if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
         if (!sequence_region_is_full_frame(&decoded.region, width, height)) {
-            ESP_RETURN_ON_ERROR(openpencil_content_reconstruct_sequence_frame(
-                                    decoded.frame_index,
-                                    current_buffer,
-                                    decoded.destination,
-                                    frame_pixels),
+            ESP_RETURN_ON_ERROR(sequence_reconstruct_frame(decoded.frame_index,
+                                                            current_buffer,
+                                                            decoded.destination,
+                                                            frame_pixels),
                                 TAG,
                                 "reconstruct sequence display frame failed");
         }
@@ -298,6 +500,8 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
         };
 #endif
 
+        if (sequence_abort_requested()) goto stop_cleanup;
+
         uint16_t *following_decode_buffer = current_buffer;
         if (present_result != ESP_OK) {
             // Patch buffers contain only a changed rectangle. Rebuild the
@@ -305,16 +509,18 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
             // update can safely resynchronize the panel with a full draw.
             uint16_t *recovery_previous = current_buffer;
             uint16_t *recovery_destination = decoded.destination;
-            ESP_RETURN_ON_ERROR(openpencil_content_load_frame(0,
-                                                              recovery_previous,
-                                                              frame_pixels),
+            openpencil_sequence_region_t recovery_region = {0};
+            ESP_RETURN_ON_ERROR(sequence_load_frame_with_region(0,
+                                                                 &recovery_region,
+                                                                 recovery_previous,
+                                                                 frame_pixels),
                                 TAG,
                                 "load sequence recovery keyframe failed");
             for (uint16_t index = 1; index <= next_frame; index++) {
-                ESP_RETURN_ON_ERROR(openpencil_content_reconstruct_sequence_frame(index,
-                                                                                   recovery_previous,
-                                                                                   recovery_destination,
-                                                                                   frame_pixels),
+                ESP_RETURN_ON_ERROR(sequence_reconstruct_frame(index,
+                                                                recovery_previous,
+                                                                recovery_destination,
+                                                                frame_pixels),
                                     TAG,
                                     "reconstruct sequence recovery frame failed");
                 uint16_t *completed = recovery_previous;
@@ -366,6 +572,8 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
         // global scheduler settings for every firmware profile.
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+        if (sequence_abort_requested()) goto stop_cleanup;
+
         current_frame = next_frame;
         current_load_us = decoded.load_us;
         next_frame = following_frame;
@@ -402,5 +610,17 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
 
         (void)current_frame;
     }
+
+stop_cleanup:
+    if (frame_timer) {
+        esp_timer_stop(frame_timer);
+        esp_timer_delete(frame_timer);
+    }
+    if (decoder_task) vTaskDelete(decoder_task);
+    if (decoder.requests) vQueueDelete(decoder.requests);
+    if (decoder.results) vQueueDelete(decoder.results);
+    free(secondary_frame_buffer);
+    sequence_metrics_set_inactive();
+    return ESP_ERR_INVALID_STATE;
 #endif
 }

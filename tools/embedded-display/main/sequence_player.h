@@ -26,6 +26,13 @@ esp_err_t openpencil_sequence_player_run(esp_lcd_panel_handle_t panel,
                                       int width,
                                       int height,
                                       openpencil_sequence_ready_callback_t on_first_frame);
+esp_err_t openpencil_sequence_player_start(esp_lcd_panel_handle_t panel,
+                                           uint16_t *primary_frame_buffer,
+                                           size_t frame_pixels,
+                                           int width,
+                                           int height,
+                                           openpencil_sequence_ready_callback_t on_first_frame);
+esp_err_t openpencil_sequence_player_stop_and_wait(void);
 bool openpencil_sequence_player_get_metrics(openpencil_sequence_player_metrics_t *metrics);
 
 #ifdef __cplusplus

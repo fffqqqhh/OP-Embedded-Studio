@@ -116,12 +116,12 @@ static esp_err_t draw_wireless_image(esp_lcd_panel_handle_t panel,
     }
 
     if (openpencil_content_is_sequence()) {
-        return openpencil_sequence_player_run(panel,
-                                           frame_buffer,
-                                           LCD_FRAME_PIXELS,
-                                           CONFIG_EXAMPLE_LCD_H_RES,
-                                           CONFIG_EXAMPLE_LCD_V_RES,
-                                           on_sequence_ready);
+        return openpencil_sequence_player_start(panel,
+                                                frame_buffer,
+                                                LCD_FRAME_PIXELS,
+                                                CONFIG_EXAMPLE_LCD_H_RES,
+                                                CONFIG_EXAMPLE_LCD_V_RES,
+                                                on_sequence_ready);
     }
 
     ESP_LOGI(TAG, "Draw wireless image (%ux%u)", content->width, content->height);
@@ -142,20 +142,29 @@ static esp_err_t draw_wireless_image(esp_lcd_panel_handle_t panel,
 static esp_lcd_panel_handle_t s_ble_direct_panel;
 static uint16_t *s_ble_direct_frame_buffer;
 
-static esp_err_t present_m5_ble_content_without_restart(void)
+static esp_err_t present_m5_ble_frame_without_restart(void)
 {
     ESP_RETURN_ON_FALSE(s_ble_direct_panel && s_ble_direct_frame_buffer,
                         ESP_ERR_INVALID_STATE,
                         TAG,
                         "M5 BLE direct display is not configured");
+    const esp_err_t stop_result = openpencil_sequence_player_stop_and_wait();
+    ESP_RETURN_ON_ERROR(stop_result, TAG, "stop previous sequence player failed");
+
+    if (openpencil_content_is_sequence()) {
+        ESP_LOGI(TAG, "Start committed M5 BLE sequence after stopping previous player");
+        return openpencil_sequence_player_start(s_ble_direct_panel,
+                                                s_ble_direct_frame_buffer,
+                                                LCD_FRAME_PIXELS,
+                                                CONFIG_EXAMPLE_LCD_H_RES,
+                                                CONFIG_EXAMPLE_LCD_V_RES,
+                                                NULL);
+    }
     ESP_RETURN_ON_FALSE(!openpencil_content_is_prototype(),
                         ESP_ERR_NOT_SUPPORTED,
                         TAG,
-                        "M5 BLE prototype requires a runtime restart");
-
-    ESP_LOGI(TAG,
-             "Present committed M5 BLE %s without restart",
-             openpencil_content_is_sequence() ? "sequence" : "frame");
+                        "M5 BLE prototype presentation is not supported in place");
+    ESP_LOGI(TAG, "Present committed M5 BLE frame without restart");
     return draw_wireless_image(s_ble_direct_panel, s_ble_direct_frame_buffer, NULL);
 }
 
@@ -164,7 +173,7 @@ static void enable_m5_ble_direct_frame_updates(esp_lcd_panel_handle_t panel,
 {
     s_ble_direct_panel = panel;
     s_ble_direct_frame_buffer = frame_buffer;
-    openpencil_ble_server_set_content_ready_callback(present_m5_ble_content_without_restart);
+    openpencil_ble_server_set_content_ready_callback(present_m5_ble_frame_without_restart);
 }
 #endif
 
@@ -326,7 +335,15 @@ void app_main(void)
             sequence_ready = openpencil_usb_content_server_start;
 #endif
         }
+#if CONFIG_OPENPENCIL_BLE_SERVER && CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+        enable_m5_ble_direct_frame_updates(panel_handle, frame_buffer);
+#endif
         ESP_ERROR_CHECK(draw_wireless_image(panel_handle, frame_buffer, sequence_ready));
+        if (openpencil_content_is_sequence()) {
+            // The sequence task starts the transport after its first frame.
+            // Do not start a second server from the app_main task.
+            return;
+        }
 #if CONFIG_OPENPENCIL_WIFI_SERVER
         // Present persisted content before starting Wi-Fi. On CO5300 hardware,
         // the first full-frame QSPI DMA transfer can underflow when it competes
@@ -336,9 +353,6 @@ void app_main(void)
         return;
 #elif CONFIG_OPENPENCIL_BLE_SERVER
         // Keep BLE reachable after boot while leaving the persisted image on screen.
-#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
-        enable_m5_ble_direct_frame_updates(panel_handle, frame_buffer);
-#endif
         ESP_ERROR_CHECK(openpencil_ble_server_start());
         return;
 #elif CONFIG_OPENPENCIL_USB_CONTENT_SERVER
