@@ -46,20 +46,23 @@ static void IRAM_ATTR te_gpio_isr(void *argument)
 }
 #endif
 
-static void wait_for_te(int64_t *waited_us)
+static esp_err_t wait_for_te(int64_t *waited_us)
 {
     *waited_us = 0;
-    if (!s_te_enabled) return;
+    if (!s_te_enabled) return ESP_OK;
 
     // Discard a stale pulse so this frame waits for a TE edge that happened
-    // after the frame was fully prepared. The timeout remains a fallback for
-    // panels or boot phases where the TE signal is temporarily unavailable.
+    // after the frame was fully prepared. A missing TE edge is a hard failure:
+    // submitting without synchronization would allow a torn frame.
     (void)xSemaphoreTake(s_te_signal, 0);
     const int64_t started_us = esp_timer_get_time();
     if (xSemaphoreTake(s_te_signal, pdMS_TO_TICKS(TE_WAIT_TIMEOUT_MS)) != pdTRUE) {
-        ESP_LOGW(TAG, "TE wait timed out; presenting the frame without synchronization");
+        ESP_LOGW(TAG, "TE wait timed out; holding the current frame");
+        *waited_us = esp_timer_get_time() - started_us;
+        return ESP_ERR_TIMEOUT;
     }
     *waited_us = esp_timer_get_time() - started_us;
+    return ESP_OK;
 }
 
 static bool should_retry_display_submit(esp_err_t result)
@@ -140,16 +143,16 @@ static esp_err_t submit_streamed_region(esp_lcd_panel_handle_t panel,
                                                          pixel_offset == 0),
                             TAG,
                             "queue CO5300 streamed color failed");
-        pixel_offset += chunk_pixels;
-        chunk_index++;
-    }
-
-    for (size_t index = 0; index < chunk_index; index++) {
+        // Keep at most one color transaction in flight. If a QSPI DMA
+        // completion is lost, this bounded wait returns an error instead of
+        // allowing the next tx_color() call to block forever on a full queue.
         ESP_RETURN_ON_FALSE(xSemaphoreTake(s_transfer_done,
                                            pdMS_TO_TICKS(TRANSFER_DONE_TIMEOUT_MS)) == pdTRUE,
                             ESP_ERR_TIMEOUT,
                             TAG,
-                            "streamed frame transfer completion timed out");
+                            "streamed chunk transfer completion timed out");
+        pixel_offset += chunk_pixels;
+        chunk_index++;
     }
     return ESP_OK;
 }
@@ -206,9 +209,8 @@ esp_err_t openpencil_display_presenter_init(esp_lcd_panel_io_handle_t panel_io)
     s_te_signal = xSemaphoreCreateBinary();
     ESP_RETURN_ON_FALSE(s_te_signal, ESP_ERR_NO_MEM, TAG, "create TE semaphore failed");
 
-    // The Waveshare schematic routes LCD_TE to GPIO13. The panel's 0x35 init
-    // command enables this signal; the GPIO edge only chooses a safe time to
-    // submit a complete frame and never becomes a hard dependency.
+    // The panel's 0x35 init command enables this signal. The GPIO edge chooses
+    // the only safe time to submit a complete frame and is a hard dependency.
     const gpio_config_t input_config = {
         .pin_bit_mask = 1ULL << CONFIG_EXAMPLE_PIN_NUM_LCD_TE,
         .mode = GPIO_MODE_INPUT,
@@ -231,7 +233,7 @@ esp_err_t openpencil_display_presenter_init(esp_lcd_panel_io_handle_t panel_io)
                         "install TE ISR failed");
     s_te_enabled = true;
     ESP_LOGI(TAG,
-             "TE sync enabled on GPIO%d (%s edge, timeout fallback active)",
+             "TE sync enabled on GPIO%d (%s edge, timeout is frame hold)",
              CONFIG_EXAMPLE_PIN_NUM_LCD_TE,
              edge == GPIO_INTR_NEGEDGE ? "falling" : "rising");
 #else
@@ -293,7 +295,11 @@ esp_err_t openpencil_display_presenter_draw_region_measured(
     esp_err_t result = ESP_FAIL;
     int attempt = 0;
     do {
-        wait_for_te(&te_wait_us);
+        const esp_err_t te_result = wait_for_te(&te_wait_us);
+        if (te_result != ESP_OK) {
+            result = te_result;
+            break;
+        }
         transfer_started_us = esp_timer_get_time();
 #if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
         result = submit_streamed_region(panel, x, y, width, height, pixels);

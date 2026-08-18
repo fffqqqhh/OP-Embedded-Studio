@@ -445,7 +445,7 @@
       "tearingEffect": {
         "enabled": true,
         "gpio": 38,
-        "fallbackOnTimeout": true,
+        "fallbackOnTimeout": false,
         "note": "StopWatch routes LCD_TE to GPIO38."
       },
       "boardBringup": {
