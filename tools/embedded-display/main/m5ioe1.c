@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#include "m5pm1.h"
 
 #define M5IOE1_I2C_ADDRESS_PRIMARY 0x4F
 #define M5IOE1_I2C_ADDRESS_SECONDARY 0x6F
@@ -136,6 +137,14 @@ esp_err_t openpencil_m5ioe1_display_init(void)
         .flags.enable_internal_pullup = true,
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &s_bus), TAG, "create M5IOE1 I2C bus failed");
+
+    // The PM1 controls the power-key shutdown/wake cycle and the 3.3 V rail.
+    // Initialize it on the same bus before touching the IO expander.
+    const esp_err_t pm1_result = openpencil_m5pm1_init(s_bus);
+    if (pm1_result != ESP_OK) {
+        ESP_LOGW(TAG, "M5PM1 initialization failed: %s; continuing with display-only mode",
+                 esp_err_to_name(pm1_result));
+    }
 
     i2c_device_config_t device_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,

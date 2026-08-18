@@ -226,7 +226,11 @@ void app_main(void)
     ESP_LOGI(TAG, "Initialize M5IOE1 display power and reset");
     const esp_err_t m5ioe1_result = openpencil_m5ioe1_display_init();
     if (m5ioe1_result != ESP_OK) {
-        ESP_LOGE(TAG, "M5IOE1 display power initialization failed: %s; continuing", esp_err_to_name(m5ioe1_result));
+        ESP_LOGE(TAG, "M5IOE1 display power initialization failed: %s", esp_err_to_name(m5ioe1_result));
+        // A powered-off AMOLED cannot recover by continuing into CO5300 init.
+        // Fail early so a watchdog/hardware reset retries the complete power
+        // and panel sequence instead of leaving a misleading black screen.
+        ESP_ERROR_CHECK(m5ioe1_result);
     }
 #endif
 
