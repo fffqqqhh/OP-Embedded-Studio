@@ -66,6 +66,8 @@ public final class MainActivity extends Activity {
     private static final long STATUS_READ_SETTLE_MS = 80L;
     private static final long WRITE_CALLBACK_TIMEOUT_MS = 1200L;
     private static final String CONTENT_COMPLETE_MESSAGE = "内容已接收，正在切换画面";
+    private static final int PRIMARY_MTU_REQUEST = 517;
+    private static final int FALLBACK_MTU_REQUEST = 247;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private WebView webView;
@@ -81,6 +83,7 @@ public final class MainActivity extends Activity {
     private boolean statusSubscriptionPending;
     private boolean initialStatusReadPending;
     private int negotiatedMtu = 23;
+    private int mtuRequestIndex;
     private Uri cameraCaptureUri;
     private File payloadFile;
     private FileOutputStream payloadOutput;
@@ -103,6 +106,7 @@ public final class MainActivity extends Activity {
     private int pendingWriteLength;
     private long statusReadNotBefore;
     private long statusReadDeadline;
+    private long uploadStartedAt;
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
@@ -296,6 +300,7 @@ public final class MainActivity extends Activity {
                 initialStatusReadPending = false;
                 negotiatedMtu = 23;
                 payloadChunkBytes = DEFAULT_PAYLOAD_CHUNK_BYTES;
+                mtuRequestIndex = 0;
                 emitDiagnostic("LINK: connected, discovering services");
                 nextGatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -313,6 +318,7 @@ public final class MainActivity extends Activity {
             statusSubscriptionPending = false;
             initialStatusReadPending = false;
             payloadChunkBytes = DEFAULT_PAYLOAD_CHUNK_BYTES;
+            mtuRequestIndex = 0;
             transferCharacteristic = null;
             statusCharacteristic = null;
             stopUpload("BLE 已断开");
@@ -343,9 +349,7 @@ public final class MainActivity extends Activity {
                 emitError("设备固件不支持手机传输");
                 return;
             }
-            boolean mtuRequestAccepted = nextGatt.requestMtu(517);
-            emitDiagnostic("SERVICES: ready; MTU 517 request=" + mtuRequestAccepted);
-            if (!mtuRequestAccepted) configureReady(nextGatt);
+            requestNextMtu(nextGatt);
         }
 
         @Override
@@ -358,7 +362,12 @@ public final class MainActivity extends Activity {
             }
             emitDiagnostic("MTU: result=" + mtu + " status=" + status
                     + " payload=" + payloadChunkBytes);
-            configureReady(nextGatt);
+            if ((status != BluetoothGatt.GATT_SUCCESS || mtu <= 23)
+                    && mtuRequestIndex < 2) {
+                requestNextMtu(nextGatt);
+            } else {
+                configureReady(nextGatt);
+            }
         }
 
         @Override
@@ -475,6 +484,23 @@ public final class MainActivity extends Activity {
 
     };
 
+    @SuppressLint("MissingPermission")
+    private void requestNextMtu(BluetoothGatt nextGatt) {
+        if (!connected || nextGatt == null || linkReady) return;
+        int requestedMtu = mtuRequestIndex == 0 ? PRIMARY_MTU_REQUEST : FALLBACK_MTU_REQUEST;
+        mtuRequestIndex += 1;
+        boolean accepted = nextGatt.requestMtu(requestedMtu);
+        emitDiagnostic("SERVICES: MTU " + requestedMtu + " request=" + accepted
+                + " attempt=" + mtuRequestIndex);
+        if (!accepted) {
+            if (mtuRequestIndex < 2) {
+                mainHandler.postDelayed(() -> requestNextMtu(nextGatt), 100L);
+            } else {
+                configureReady(nextGatt);
+            }
+        }
+    }
+
     private void handleStatusNotification(byte[] value) {
         if (value == null || value.length < 14) return;
         if (value[4] != 0) {
@@ -482,8 +508,7 @@ public final class MainActivity extends Activity {
             return;
         }
         if (value[3] != 0 && awaitingCompletion) {
-            stopUpload(null);
-            emitEvent("complete", CONTENT_COMPLETE_MESSAGE, uploadTotal, uploadTotal);
+            completeUpload();
             return;
         }
         int received = parseReceivedOffset(value);
@@ -519,8 +544,7 @@ public final class MainActivity extends Activity {
         }
         int received = Math.max(0, Math.min(uploadTotal, parseReceivedOffset(value)));
         if (value[3] != 0) {
-            stopUpload(null);
-            emitEvent("complete", CONTENT_COMPLETE_MESSAGE, uploadTotal, uploadTotal);
+            completeUpload();
             return;
         }
         if (awaitingCompletion && received == uploadTotal) {
@@ -686,6 +710,7 @@ public final class MainActivity extends Activity {
             confirmedOffset = 0;
             uploadTotal = payloadExpectedBytes;
             lastProgressBytes = 0;
+            uploadStartedAt = System.currentTimeMillis();
             uploading = true;
             checkpointReadAttempts = 0;
             completionReadAttempts = 0;
@@ -805,6 +830,21 @@ public final class MainActivity extends Activity {
 
     private void emitError(String message) {
         emitEvent("error", message == null ? "未知错误" : message, -1, -1);
+    }
+
+    private void completeUpload() {
+        emitUploadRate();
+        stopUpload(null);
+        emitEvent("complete", CONTENT_COMPLETE_MESSAGE, uploadTotal, uploadTotal);
+    }
+
+    private void emitUploadRate() {
+        if (uploadStartedAt <= 0 || uploadTotal <= 0) return;
+        long elapsedMs = Math.max(1L, System.currentTimeMillis() - uploadStartedAt);
+        long kibPerSecond = Math.round(uploadTotal * 1000.0 / elapsedMs / 1024.0);
+        emitDiagnostic("UPLOAD: complete bytes=" + uploadTotal
+                + " elapsed=" + elapsedMs + "ms rate=" + kibPerSecond + "KiB/s"
+                + " mtu=" + negotiatedMtu + " payload=" + payloadChunkBytes);
     }
 
     private void emitDiagnostic(String message) {
