@@ -12,6 +12,7 @@
 #include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "generated_prototype.h"
 
 static const char *TAG = "wireless_content";
 static const esp_partition_t *content_partition;
@@ -218,7 +219,7 @@ static esp_err_t validate_transitions(const openpencil_content_header_t *header,
                 "read prototype transition failed");
         }
         if (transition.from_state >= state_count ||
-            transition.to_state >= state_count || transition.event > 5) {
+            transition.to_state >= state_count || transition.event >= OPENPENCIL_EVENT_COUNT) {
             return ESP_ERR_INVALID_ARG;
         }
     }

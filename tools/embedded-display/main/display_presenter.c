@@ -15,9 +15,15 @@
 #define TRANSFER_DONE_TIMEOUT_MS 500
 #define CO5300_RECOVERY_RETRIES 2
 #define CO5300_RECOVERY_DELAY_MS 20
-// M5GFX's StopWatch driver uses 8192-pixel transfers. Matching that block
-// size keeps queue overhead low without reading the frame directly from PSRAM.
+#if CONFIG_OPENPENCIL_DISPLAY_BACKEND_M5GFX
+// Keep the M5GFX variant's smaller transfer blocks, but retain the TE-safe
+// serialized completion rule from the stable StopWatch repair. A new DMA
+// transaction is submitted only after the previous callback is observed.
+#define CO5300_STREAM_CHUNK_PIXELS 8192
+#else
+// The baseline path uses larger blocks and waits for each one to complete.
 #define CO5300_STREAM_CHUNK_PIXELS 16384
+#endif
 #define CO5300_STREAM_BUFFER_COUNT (OPENPENCIL_CO5300_STREAM_QUEUE_DEPTH + 1)
 #define CO5300_STREAM_MAX_CHUNKS \
     (((CONFIG_EXAMPLE_LCD_H_RES * CONFIG_EXAMPLE_LCD_V_RES) + CO5300_STREAM_CHUNK_PIXELS - 1) / \
@@ -156,6 +162,7 @@ static esp_err_t submit_streamed_region(esp_lcd_panel_handle_t panel,
     }
     return ESP_OK;
 }
+
 #endif
 
 bool openpencil_display_presenter_on_color_done(esp_lcd_panel_io_handle_t panel_io,
@@ -302,7 +309,12 @@ esp_err_t openpencil_display_presenter_draw_region_measured(
         }
         transfer_started_us = esp_timer_get_time();
 #if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+#if CONFIG_OPENPENCIL_DISPLAY_BACKEND_M5GFX
+        ESP_LOGI(TAG, "M5GFX backend: TE-safe serialized CO5300 QSPI framebuffer submit");
         result = submit_streamed_region(panel, x, y, width, height, pixels);
+#else
+        result = submit_streamed_region(panel, x, y, width, height, pixels);
+#endif
 #else
         result = submit_region(panel, x, y, x + width, y + height, pixels);
 #endif

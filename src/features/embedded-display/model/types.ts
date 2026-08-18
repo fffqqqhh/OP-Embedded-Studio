@@ -60,6 +60,8 @@ export type EmbeddedPrototypeEventId =
   | 'screen_triple_click'
   | 'boot_click'
   | 'boot_long_press'
+  | 'stopwatch_button_a_click'
+  | 'stopwatch_button_b_click'
 
 export interface EmbeddedPrototypeBakeResult {
   id: string
@@ -155,6 +157,7 @@ export interface EmbeddedWifiCredentials {
 
 export type EmbeddedBuildMode =
   | 'usb-frame'
+  | 'usb-frame-m5gfx'
   | 'usb-prototype'
   | 'wifi-frame'
   | 'wifi-prototype'

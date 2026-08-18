@@ -19,7 +19,7 @@ import type {
   DevicePrototypeFrameRender,
   DevicePrototypeMode
 } from '../model/types'
-import { DEVICE_PROTOTYPE_MAX_STATES } from '../model/types'
+import { DEVICE_PROTOTYPE_MAX_STATES, devicePrototypeEventsForProfile } from '../model/types'
 
 const {
   active = true,
@@ -41,7 +41,6 @@ const previewOpen = ref(false)
 const animationFileInput = ref<HTMLInputElement>()
 const animationImportError = ref('')
 const {
-  events,
   interactions,
   selectedInteractionId,
   selectedInteraction,
@@ -103,8 +102,9 @@ const transitionOptions = computed(() => [
   { value: NO_TRANSITION_VALUE, label: '不跳转' },
   ...states.value.map((state) => ({ value: state.id, label: state.name }))
 ])
+const availableEvents = computed(() => devicePrototypeEventsForProfile(displayProfile.value.id))
 const eventOptions = computed(() =>
-  events.map((event) => ({ value: event.id, label: event.label }))
+  availableEvents.value.map((event) => ({ value: event.id, label: event.label }))
 )
 const modeOptions = [
   { value: 'manual', label: '手动' },
@@ -438,7 +438,7 @@ function handleAnimationLoopChange(event: Event) {
         </p>
         <div v-else class="grid gap-1.5">
           <div
-            v-for="event in events"
+            v-for="event in availableEvents"
             :key="event.id"
             class="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-panel"
           >

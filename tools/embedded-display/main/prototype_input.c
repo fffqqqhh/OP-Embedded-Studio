@@ -8,15 +8,19 @@
 #include "esp_lcd_touch_cst9217.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "m5ioe1.h"
 #include "sdkconfig.h"
 
 #define BOOT_BUTTON_GPIO GPIO_NUM_0
+#define STOPWATCH_BUTTON_A_GPIO GPIO_NUM_2
+#define STOPWATCH_BUTTON_B_GPIO GPIO_NUM_1
 #define TOUCH_I2C_SCL GPIO_NUM_14
 #define TOUCH_I2C_SDA GPIO_NUM_15
 #define TOUCH_RESET_GPIO GPIO_NUM_2
 #define TOUCH_INTERRUPT_GPIO GPIO_NUM_11
 #define LONG_PRESS_MS 600
 #define MULTI_CLICK_WINDOW_MS 320
+#define BUTTON_DEBOUNCE_MS 25
 
 typedef struct {
     bool pressed;
@@ -26,11 +30,24 @@ typedef struct {
     uint8_t click_count;
 } gesture_recognizer_t;
 
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+typedef struct {
+    bool raw_pressed;
+    bool stable_pressed;
+    int64_t changed_at_ms;
+} debounced_button_t;
+#endif
+
 static const char *TAG = "prototype_input";
 static gesture_recognizer_t s_screen;
 static gesture_recognizer_t s_boot;
 static esp_lcd_touch_handle_t s_touch;
 static bool s_screen_multi_click_enabled;
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+static debounced_button_t s_stopwatch_button_a;
+static debounced_button_t s_stopwatch_button_b;
+static i2c_master_dev_handle_t s_stopwatch_touch;
+#endif
 
 static int64_t now_ms(void)
 {
@@ -107,9 +124,107 @@ static esp_err_t init_boot_button(void)
     return gpio_config(&config);
 }
 
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+static esp_err_t init_stopwatch_touch(void)
+{
+    i2c_master_bus_handle_t bus = openpencil_m5ioe1_i2c_bus();
+    ESP_RETURN_ON_FALSE(bus, ESP_ERR_INVALID_STATE, TAG, "M5IOE1 I2C bus is unavailable");
+    ESP_RETURN_ON_ERROR(openpencil_m5ioe1_touch_reset(), TAG, "reset StopWatch touch failed");
+
+    const i2c_device_config_t device_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x15,
+        .scl_speed_hz = 100000,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &device_config, &s_stopwatch_touch),
+                        TAG,
+                        "add CST820 touch device failed");
+
+    uint8_t chip_id = 0;
+    uint8_t software_version = 0;
+    uint8_t chip_id_register = 0xA7;
+    uint8_t software_version_register = 0xA9;
+    ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(s_stopwatch_touch,
+                                                    &chip_id_register,
+                                                    1,
+                                                    &chip_id,
+                                                    1,
+                                                    100),
+                        TAG,
+                        "read CST820 chip ID failed");
+    ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(s_stopwatch_touch,
+                                                    &software_version_register,
+                                                    1,
+                                                    &software_version,
+                                                    1,
+                                                    100),
+                        TAG,
+                        "read CST820 software version failed");
+    ESP_RETURN_ON_FALSE(chip_id != 0 && software_version != 0,
+                        ESP_ERR_NOT_FOUND,
+                        TAG,
+                        "CST820 returned an invalid identity");
+    ESP_LOGI(TAG,
+             "StopWatch CST820 ready at 0x15 (chip=0x%02x, version=0x%02x; I2C SDA=47 SCL=48)",
+             chip_id,
+             software_version);
+    return ESP_OK;
+}
+
+static bool read_stopwatch_touch(void)
+{
+    if (!s_stopwatch_touch) return false;
+    uint8_t register_address = 0x00;
+    uint8_t data[7] = {0};
+    const esp_err_t result = i2c_master_transmit_receive(s_stopwatch_touch,
+                                                         &register_address,
+                                                         1,
+                                                         data,
+                                                         sizeof(data),
+                                                         100);
+    if (result != ESP_OK) return false;
+    const uint8_t finger_count = data[2];
+    const uint8_t event_status = (data[3] & 0xC0) >> 6;
+    return finger_count > 0 && (event_status == 0 || event_status == 2);
+}
+
+static esp_err_t init_stopwatch_buttons(void)
+{
+    const gpio_config_t config = {
+        .pin_bit_mask = (1ULL << STOPWATCH_BUTTON_A_GPIO) |
+                        (1ULL << STOPWATCH_BUTTON_B_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    return gpio_config(&config);
+}
+
+static bool update_stopwatch_button(gpio_num_t gpio,
+                                    debounced_button_t *button,
+                                    openpencil_input_event_t released_event,
+                                    openpencil_input_event_t *event)
+{
+    const int64_t now = now_ms();
+    const bool pressed = gpio_get_level(gpio) == 0;
+    if (pressed != button->raw_pressed) {
+        button->raw_pressed = pressed;
+        button->changed_at_ms = now;
+    }
+    if (pressed == button->stable_pressed || now - button->changed_at_ms < BUTTON_DEBOUNCE_MS) {
+        return false;
+    }
+    button->stable_pressed = pressed;
+    if (pressed) return false;
+    *event = released_event;
+    return true;
+}
+#endif
+
 static esp_err_t init_waveshare_touch(void)
 {
-#if CONFIG_EXAMPLE_LCD_CONTROLLER_CO5300
+#if CONFIG_EXAMPLE_LCD_CONTROLLER_CO5300 && !CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
     i2c_master_bus_handle_t bus = NULL;
     const i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_NUM_0,
@@ -143,10 +258,21 @@ static esp_err_t init_waveshare_touch(void)
 esp_err_t openpencil_input_init(void)
 {
     ESP_RETURN_ON_ERROR(init_boot_button(), TAG, "initialize BOOT button");
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    ESP_RETURN_ON_ERROR(init_stopwatch_buttons(), TAG, "initialize StopWatch buttons");
+#endif
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    const esp_err_t touch_result = init_stopwatch_touch();
+    if (touch_result != ESP_OK) {
+        ESP_LOGW(TAG, "StopWatch touch unavailable; physical buttons remain active: %s",
+                 esp_err_to_name(touch_result));
+    }
+#else
     const esp_err_t touch_result = init_waveshare_touch();
     if (touch_result != ESP_OK) {
         ESP_LOGW(TAG, "Touch unavailable; BOOT events remain active: %s", esp_err_to_name(touch_result));
     }
+#endif
     return ESP_OK;
 }
 
@@ -159,11 +285,29 @@ void openpencil_input_set_screen_multi_click(bool enabled)
 bool openpencil_input_poll(openpencil_input_event_t *event)
 {
     bool screen_pressed = false;
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    screen_pressed = read_stopwatch_touch();
+#else
     if (s_touch && esp_lcd_touch_read_data(s_touch) == ESP_OK) {
         esp_lcd_touch_point_data_t point = {0};
         uint8_t points = 0;
         screen_pressed = esp_lcd_touch_get_data(s_touch, &point, &points, 1) == ESP_OK && points > 0;
     }
+#endif
     if (update_screen_gesture(screen_pressed, event)) return true;
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
+    if (update_stopwatch_button(STOPWATCH_BUTTON_A_GPIO,
+                                &s_stopwatch_button_a,
+                                OPENPENCIL_EVENT_STOPWATCH_BUTTON_A_CLICK,
+                                event)) {
+        return true;
+    }
+    if (update_stopwatch_button(STOPWATCH_BUTTON_B_GPIO,
+                                &s_stopwatch_button_b,
+                                OPENPENCIL_EVENT_STOPWATCH_BUTTON_B_CLICK,
+                                event)) {
+        return true;
+    }
+#endif
     return update_boot_gesture(gpio_get_level(BOOT_BUTTON_GPIO) == 0, event);
 }

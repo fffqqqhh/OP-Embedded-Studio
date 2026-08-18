@@ -10,6 +10,8 @@ const USB_FAST_PROFILES = new Set([
   'co5300_m5stack_stopwatch'
 ])
 
+export type UsbContentBuildMode = 'usb-frame' | 'usb-frame-m5gfx'
+
 export type UsbFlashOptions = UsbContentTransferOptions
 
 export { requestSerialPort as requestUsbSerialPort }

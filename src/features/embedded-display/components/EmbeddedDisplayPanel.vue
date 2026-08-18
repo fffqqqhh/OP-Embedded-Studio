@@ -32,6 +32,7 @@ import {
   flashUsbPrototypeFirmware,
   flashUsbSequenceFirmware,
   supportsUsbFrameFastFlash,
+  type UsbContentBuildMode,
   type UsbFlashOptions
 } from '../adapters/usb-content'
 import type { UsbContentSerialPort } from '../adapters/usb-content-transfer'
@@ -67,6 +68,7 @@ const { bakeState, bakeFrame, bakeFrameById, bakePrototype, bakeAnimation, proto
 
 type BurnMode = 'frame' | 'prototype'
 type TransportMode = 'usb' | 'wifi' | 'ble' | 'wifi-live'
+type UsbDisplayBackend = 'standard' | 'm5gfx'
 type FrameResourceSource = 'baked' | 'uploaded' | null
 type WirelessTransportMode = 'wifi' | 'ble' | 'wifi-live'
 type FirmwareInitializationStatus = 'idle' | 'uploading' | 'success' | 'error'
@@ -83,6 +85,7 @@ type WifiUploadContent =
   | { kind: 'slideshow'; payload: WirelessImageSequencePayload }
 
 const transportMode = ref<TransportMode>('usb')
+const usbDisplayBackend = ref<UsbDisplayBackend>('standard')
 const burnModeByTransport = ref<Record<TransportMode, BurnMode>>({
   usb: 'frame',
   wifi: 'frame',
@@ -253,11 +256,34 @@ const transportModeLabel = computed(
     transportOptions.value.find((option) => option.value === transportMode.value)?.label ?? '当前'
 )
 const firmwareActionLabel = computed(() => `写入 ${transportModeLabel.value} 模式固件`)
+const M5_STOPWATCH_PROFILE_ID = 'co5300_m5stack_stopwatch'
+const M5GFX_DEVICE_OPTION_ID = `${M5_STOPWATCH_PROFILE_ID}:usb-frame-m5gfx`
 const profileOptions = computed(() =>
-  profiles.value.map((profile) => ({ value: profile.id, label: profile.name }))
+  profiles.value.flatMap((profile) => {
+    const baseOption = { value: profile.id, label: profile.name }
+    if (profile.id !== M5_STOPWATCH_PROFILE_ID) return [baseOption]
+    return [
+      baseOption,
+      { value: M5GFX_DEVICE_OPTION_ID, label: `${profile.name}（M5GFX USB）` }
+    ]
+  })
 )
+const selectedDeviceOptionId = computed(() =>
+  selectedProfile.value?.id === M5_STOPWATCH_PROFILE_ID && usbDisplayBackend.value === 'm5gfx'
+    ? M5GFX_DEVICE_OPTION_ID
+    : selectedProfile.value?.id || ''
+)
+function selectDeviceOption(optionId: string): void {
+  const useM5Gfx = optionId === M5GFX_DEVICE_OPTION_ID
+  usbDisplayBackend.value = useM5Gfx ? 'm5gfx' : 'standard'
+  selectProfile(useM5Gfx ? M5_STOPWATCH_PROFILE_ID : optionId)
+}
 const bleBuildMode: EmbeddedBuildMode = 'ble-frame'
-const usbManifestUrl = computed(() => manifestUrlFor('usb-frame'))
+const isM5StopWatch = computed(() => selectedProfile.value?.id === M5_STOPWATCH_PROFILE_ID)
+const usbBuildMode = computed<UsbContentBuildMode>(() =>
+  isM5StopWatch.value && usbDisplayBackend.value === 'm5gfx' ? 'usb-frame-m5gfx' : 'usb-frame'
+)
+const usbManifestUrl = computed(() => manifestUrlFor(usbBuildMode.value))
 const bleManifestUrl = computed(() => manifestUrlFor(bleBuildMode))
 const wifiManifestUrl = computed(() => manifestUrlFor('wifi-frame'))
 const wifiLiveManifestUrl = computed(() => manifestUrlFor('wifi-live'))
@@ -477,7 +503,7 @@ async function resolveUsbFirmwareManifestUrl(): Promise<string> {
 
   let manifestUrl = usbManifestUrl.value
   if (!manifestUrl) {
-    await loadCachedFirmware('usb-frame')
+    await loadCachedFirmware(usbBuildMode.value)
     manifestUrl = usbManifestUrl.value
   }
   if (selectedProfile.value?.id !== profileId || !manifestUrl) {
@@ -496,6 +522,7 @@ async function transferPreparedUsbContent(
   const result = await transferUsbContentWithFirmwareFallback({
     port: port as UsbContentSerialPort,
     manifestUrl,
+    firmwareBuildMode: usbBuildMode.value,
     transfer: (activePort, firmwareUpdated) => {
       const progressStart = firmwareUpdated ? 70 : 10
       contentUploadProgress.value = progressStart
@@ -998,7 +1025,7 @@ async function handleInitializeUsbFirmware() {
 
   try {
     await withUsbDeploymentLock(() =>
-      flashFirmwareManifest(manifestUrl, 'usb-frame', {
+      flashFirmwareManifest(manifestUrl, usbBuildMode.value, {
         port,
         preparingMessage: state.message,
         connectedMessage: '已连接，正在写入 USB 高速传输固件。',
@@ -1298,7 +1325,7 @@ async function loadTransportFirmware(
   sequence: number
 ): Promise<void> {
   if (mode === 'usb') {
-    await loadCachedFirmware('usb-frame')
+    await loadCachedFirmware(usbBuildMode.value)
     return
   }
   if (mode === 'ble') {
@@ -1320,12 +1347,20 @@ async function loadTransportFirmware(
 }
 
 watch(
-  [transportMode, () => selectedProfile.value?.id],
+  [transportMode, () => selectedProfile.value?.id, usbBuildMode],
   async ([mode, profileId]) => {
     const sequence = ++firmwareLoadSequence
     resetTransportFirmwareState(mode)
     if (!profileId) return
     await loadTransportFirmware(mode, profileId, sequence)
+  },
+  { immediate: true }
+)
+
+watch(
+  () => selectedProfile.value?.id,
+  (profileId) => {
+    if (profileId !== M5_STOPWATCH_PROFILE_ID) usbDisplayBackend.value = 'standard'
   },
   { immediate: true }
 )
@@ -1376,11 +1411,11 @@ watch([wifiSsid, wifiPassword], () => {
 
         <AppSelect
           v-if="profiles.length"
-          :model-value="selectedProfile?.id || ''"
+          :model-value="selectedDeviceOptionId"
           :options="profileOptions"
           :disabled="modeSwitchLocked"
           label="设备型号"
-          @update:model-value="selectProfile"
+          @update:model-value="selectDeviceOption"
         />
         <p v-else class="text-[11px] text-muted">{{ buildMessage }}</p>
 

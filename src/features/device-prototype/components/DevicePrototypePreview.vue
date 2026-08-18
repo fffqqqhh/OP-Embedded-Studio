@@ -51,6 +51,7 @@ const currentState = computed(
 const resolvedTransitions = computed(() =>
   interaction ? resolveDevicePrototypeTransitions(interaction) : []
 )
+const isStopwatch = computed(() => profile.id === 'co5300_m5stack_stopwatch')
 
 function clearPreviewUrl() {
   if (!previewUrl.value) return
@@ -398,6 +399,24 @@ onUnmounted(() => {
             v-if="interaction?.mode !== 'slideshow'"
             class="flex shrink-0 flex-col items-center gap-2"
           >
+            <div v-if="isStopwatch" class="flex items-center gap-3">
+              <button
+                type="button"
+                title="触发 StopWatch A 键"
+                class="flex size-12 select-none items-center justify-center rounded-full border-4 border-border bg-panel text-xs font-semibold text-surface shadow active:scale-95"
+                @click="dispatch('stopwatch_button_a_click')"
+              >
+                A
+              </button>
+              <button
+                type="button"
+                title="触发 StopWatch B 键"
+                class="flex size-12 select-none items-center justify-center rounded-full border-4 border-border bg-panel text-xs font-semibold text-surface shadow active:scale-95"
+                @click="dispatch('stopwatch_button_b_click')"
+              >
+                B
+              </button>
+            </div>
             <button
               type="button"
               class="flex size-16 select-none items-center justify-center rounded-full border-4 border-border bg-panel text-xs font-semibold text-surface shadow active:scale-95"

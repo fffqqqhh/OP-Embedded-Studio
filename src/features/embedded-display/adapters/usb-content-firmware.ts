@@ -23,7 +23,7 @@ export type UsbContentFirmwareStage =
 export interface TransferUsbContentWithFirmwareFallbackOptions {
   port: UsbContentSerialPort
   manifestUrl: string
-  firmwareBuildMode?: 'usb-frame'
+  firmwareBuildMode?: 'usb-frame' | 'usb-frame-m5gfx'
   transfer: (port: UsbContentSerialPort, firmwareUpdated: boolean) => Promise<number>
   onLog?: (message: string) => void
   onProgress?: (progress: SerialFlashProgress) => void

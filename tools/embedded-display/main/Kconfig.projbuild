@@ -48,6 +48,11 @@ menu "Example Configuration"
         bool "Use M5Stack StopWatch board power and reset wiring"
         default n
 
+    config OPENPENCIL_DISPLAY_BACKEND_M5GFX
+        bool "Use the M5GFX-style StopWatch QSPI framebuffer backend"
+        depends on OPENPENCIL_BOARD_M5STACK_STOPWATCH
+        default n
+
     config OPENPENCIL_BLE_REQUIRE_PAIRING
         bool "Require BLE link encryption before content writes"
         default y

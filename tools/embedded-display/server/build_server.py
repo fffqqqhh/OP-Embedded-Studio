@@ -43,6 +43,7 @@ BUILD_LOCK = threading.Lock()
 DEFAULT_BUILD_MODE = "usb-frame"
 BUILD_MODES = {
     "usb-frame": {"partitionTable": "partitions_32mb_usb_frame.csv", "appPartitionBytes": 0x300000},
+    "usb-frame-m5gfx": {"partitionTable": "partitions_16mb_usb_frame.csv", "appPartitionBytes": 0x300000},
     "usb-prototype": {"partitionTable": "partitions_8mb_content.csv", "appPartitionBytes": 0x300000},
     "wifi-frame": {"partitionTable": "partitions_32mb_wireless.csv", "appPartitionBytes": 0x300000},
     "wifi-live": {"partitionTable": "partitions_8mb_wireless.csv", "appPartitionBytes": 0x300000},
@@ -56,6 +57,7 @@ BUILD_MODES = {
 PROFILE_PARTITION_TABLES = {
     "co5300_m5stack_stopwatch": {
         "usb-frame": "partitions_16mb_usb_frame.csv",
+        "usb-frame-m5gfx": "partitions_16mb_usb_frame.csv",
         "wifi-frame": "partitions_16mb_wireless.csv",
         "wifi-live": "partitions_16mb_wireless.csv",
         "ble-frame": "partitions_16mb_wireless.csv",
@@ -64,6 +66,7 @@ PROFILE_PARTITION_TABLES = {
 
 BUILD_DIRECTORY_ALIASES = {
     ("co5300_m5stack_stopwatch", "usb-frame"): Path("build") / "m5stopwatch_usb",
+    ("co5300_m5stack_stopwatch", "usb-frame-m5gfx"): Path("build") / "m5stopwatch_usb_m5gfx",
 }
 
 PROTOTYPE_EVENTS = {
@@ -73,6 +76,8 @@ PROTOTYPE_EVENTS = {
     "screen_triple_click": "OPENPENCIL_EVENT_SCREEN_TRIPLE_CLICK",
     "boot_click": "OPENPENCIL_EVENT_BOOT_CLICK",
     "boot_long_press": "OPENPENCIL_EVENT_BOOT_LONG_PRESS",
+    "stopwatch_button_a_click": "OPENPENCIL_EVENT_STOPWATCH_BUTTON_A_CLICK",
+    "stopwatch_button_b_click": "OPENPENCIL_EVENT_STOPWATCH_BUTTON_B_CLICK",
 }
 
 ARTIFACT_FILES = {
@@ -86,9 +91,11 @@ NVS_PARTITION_SIZE = 0x6000
 WIRELESS_CONTENT_RESET_ARTIFACT = "content-reset.bin"
 WIRELESS_CONTENT_OFFSET = 0x310000
 WIRELESS_CONTENT_RESET_BYTES = 0x1000
-PREBUILT_FIRMWARE_MODES = frozenset(("usb-frame", "wifi-frame", "wifi-live", "ble-frame"))
+PREBUILT_FIRMWARE_MODES = frozenset((
+    "usb-frame", "usb-frame-m5gfx", "wifi-frame", "wifi-live", "ble-frame",
+))
 EXTERNAL_CONTENT_BUILD_MODES = frozenset((
-    "usb-frame", "usb-prototype",
+    "usb-frame", "usb-frame-m5gfx", "usb-prototype",
     "wifi-frame", "wifi-prototype", "wifi-live", "lan-frame", "lan-prototype",
     "ble-frame", "ble-prototype",
 ))
@@ -347,23 +354,23 @@ def mode_defaults_path(profile, build_mode):
     path.parent.mkdir(parents=True, exist_ok=True)
     wireless_enabled = mode.startswith(("wifi-", "lan-"))
     external_content = mode in (
-        "usb-frame", "usb-prototype", "wifi-frame", "wifi-prototype", "wifi-live", "lan-frame",
+        "usb-frame", "usb-frame-m5gfx", "usb-prototype", "wifi-frame", "wifi-prototype", "wifi-live", "lan-frame",
         "ble-frame", "ble-prototype",
     )
-    external_prototype = mode in ("usb-frame", "usb-prototype", "wifi-frame", "wifi-prototype")
+    external_prototype = mode in ("usb-frame", "usb-frame-m5gfx", "usb-prototype", "wifi-frame", "wifi-prototype")
     live_preview = mode == "wifi-live"
     lan_status_screen = mode.startswith("lan-")
     setup_access_point = mode.startswith("wifi-")
     ble_enabled = mode.startswith("ble-")
-    usb_content_server = mode == "usb-frame"
+    usb_content_server = mode in ("usb-frame", "usb-frame-m5gfx")
     settings = [
         f'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="{partition_table}"',
         f'CONFIG_PARTITION_TABLE_FILENAME="{partition_table}"',
         f'CONFIG_OPENPENCIL_WIFI_SERVER={"y" if wireless_enabled else "n"}',
         f'CONFIG_OPENPENCIL_EXTERNAL_CONTENT_ONLY={"y" if external_content else "n"}',
         f'CONFIG_OPENPENCIL_EXTERNAL_PROTOTYPE={"y" if external_prototype else "n"}',
-        f'CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK={"y" if mode in ("usb-frame", "wifi-frame", "ble-frame") else "n"}',
-        f'CONFIG_OPENPENCIL_ANIMATED_PROTOTYPE={"y" if mode == "usb-frame" else "n"}',
+        f'CONFIG_OPENPENCIL_SEQUENCE_PLAYBACK={"y" if mode in ("usb-frame", "usb-frame-m5gfx", "wifi-frame", "ble-frame") else "n"}',
+        f'CONFIG_OPENPENCIL_ANIMATED_PROTOTYPE={"y" if mode in ("usb-frame", "usb-frame-m5gfx") else "n"}',
         f'CONFIG_OPENPENCIL_WIFI_LIVE_PREVIEW={"y" if live_preview else "n"}',
         f'CONFIG_OPENPENCIL_LAN_STATUS_SCREEN={"y" if lan_status_screen else "n"}',
         f'CONFIG_OPENPENCIL_SETUP_ACCESS_POINT={"y" if setup_access_point else "n"}',
@@ -387,6 +394,15 @@ def mode_defaults_path(profile, build_mode):
         ])
     if mode == "usb-frame":
         settings.extend([
+            "# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160 is not set",
+            "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y",
+            "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240",
+            "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y",
+            "# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set",
+        ])
+    if mode == "usb-frame-m5gfx":
+        settings.extend([
+            "CONFIG_OPENPENCIL_DISPLAY_BACKEND_M5GFX=y",
             "# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160 is not set",
             "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y",
             "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240",
@@ -962,7 +978,7 @@ def run_build(profile_id, wifi_credentials=None, build_mode=DEFAULT_BUILD_MODE):
     normalize_idf_env(env)
 
     with BUILD_LOCK:
-        if mode in ("usb-frame", "usb-prototype"):
+        if mode in ("usb-frame", "usb-frame-m5gfx", "usb-prototype"):
             content_dir = generated_content_dir(profile_id, mode)
             has_resources = (
                 (content_dir / GENERATED_IMAGE_HEADER.name).is_file()

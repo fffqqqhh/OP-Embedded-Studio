@@ -59,6 +59,7 @@ const previewInteraction = computed<DevicePrototypeInteraction | null>(() => {
 const previewProfile = computed<DevicePrototypePreviewProfile>(() => {
   const current = proposal.value
   return {
+    id: current?.profileId || '',
     name: current?.profileName || '设备预览',
     resolution: current?.resolution ?? { width: 1, height: 1 },
     visibleArea: { shape: current?.roundScreen ? 'round' : 'square' }

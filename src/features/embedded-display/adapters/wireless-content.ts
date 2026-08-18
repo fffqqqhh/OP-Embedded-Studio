@@ -19,7 +19,9 @@ const PROTOTYPE_EVENTS: Record<EmbeddedPrototypeEventId, number> = {
   screen_double_click: 2,
   screen_triple_click: 3,
   boot_click: 4,
-  boot_long_press: 5
+  boot_long_press: 5,
+  stopwatch_button_a_click: 6,
+  stopwatch_button_b_click: 7
 }
 
 function bytesFromBase64(encoded: string): Uint8Array {

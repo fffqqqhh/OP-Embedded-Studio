@@ -26,8 +26,10 @@
 #define M5IOE1_REG_GPIO_DRV_L 0x13
 #define M5IOE1_REG_I2C_CFG 0x23
 
-// M5Stack StopWatch routes AMOLED enable to IO8 (L3B_EN) and panel reset to IO5.
+// M5Stack StopWatch routes AMOLED enable to IO8 (L3B_EN), touch reset to IO4,
+// and panel reset to IO5.
 #define M5IOE1_DISPLAY_POWER_PIN 7
+#define M5IOE1_TOUCH_RESET_PIN 3
 #define M5IOE1_DISPLAY_RESET_PIN 4
 #define M5IOE1_TRANSACTION_TIMEOUT_MS 100
 
@@ -77,9 +79,12 @@ static esp_err_t read_register16(uint8_t reg, uint16_t *value)
 
 static esp_err_t configure_display_outputs(void)
 {
-    // GPIO8 (bit 7) drives the AMOLED rail; GPIO5 (bit 4) drives panel reset.
+    // GPIO8 (bit 7) drives the AMOLED rail, GPIO4 (bit 3) drives touch reset,
+    // and GPIO5 (bit 4) drives panel reset.
     const uint16_t display_gpio_mask = (uint16_t)((1u << M5IOE1_DISPLAY_POWER_PIN) |
                                                   (1u << M5IOE1_DISPLAY_RESET_PIN));
+    const uint16_t touch_reset_mask = (uint16_t)(1u << M5IOE1_TOUCH_RESET_PIN);
+    const uint16_t output_gpio_mask = display_gpio_mask | touch_reset_mask;
     const uint16_t power_only = (uint16_t)(1u << M5IOE1_DISPLAY_POWER_PIN);
 
     // M5IOE1 GPIO registers are 16-bit little-endian registers. Configure
@@ -88,7 +93,10 @@ static esp_err_t configure_display_outputs(void)
     ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_PD_L, 0), TAG, "clear GPIO pull-down failed");
     // GPIO_DRV uses 0 for push-pull and 1 for open-drain.
     ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_DRV_L, 0), TAG, "configure display drive failed");
-    ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_MODE_L, display_gpio_mask), TAG, "configure display output mode failed");
+    ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_MODE_L,
+                                         output_gpio_mask),
+                        TAG,
+                        "configure display and touch reset output mode failed");
 
     uint16_t mode = 0;
     uint16_t drive = 0;
@@ -97,7 +105,7 @@ static esp_err_t configure_display_outputs(void)
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "M5IOE1 addr=0x%02x GPIO_MODE=0x%04x GPIO_DRV=0x%04x", s_address, mode, drive);
-    if ((mode & display_gpio_mask) != display_gpio_mask || (drive & display_gpio_mask) != 0) {
+    if ((mode & output_gpio_mask) != output_gpio_mask || (drive & output_gpio_mask) != 0) {
         ESP_LOGE(TAG, "M5IOE1 display GPIO configuration readback mismatch");
         return ESP_FAIL;
     }
@@ -112,14 +120,16 @@ static esp_err_t configure_display_outputs(void)
 #endif
     ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, power_only), TAG, "enable display power and assert reset failed");
     vTaskDelay(pdMS_TO_TICKS(80));
-    ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, display_gpio_mask), TAG, "release display reset failed");
+    ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, output_gpio_mask),
+                        TAG,
+                        "release display and touch reset failed");
     vTaskDelay(pdMS_TO_TICKS(50));
     uint16_t output = 0;
     ESP_RETURN_ON_ERROR(read_register16(M5IOE1_REG_GPIO_OUT_L, &output), TAG, "read display output failed");
     ESP_LOGI(TAG, "M5IOE1 GPIO_OUT=0x%04x (power=%d reset=%d)", output,
              (output & (1u << M5IOE1_DISPLAY_POWER_PIN)) != 0,
              (output & (1u << M5IOE1_DISPLAY_RESET_PIN)) != 0);
-    if ((output & display_gpio_mask) != display_gpio_mask) {
+    if ((output & output_gpio_mask) != output_gpio_mask) {
         ESP_LOGE(TAG, "M5IOE1 display output readback mismatch");
         return ESP_FAIL;
     }
@@ -173,6 +183,32 @@ esp_err_t openpencil_m5ioe1_display_init(void)
     ESP_RETURN_ON_ERROR(write_register(M5IOE1_REG_I2C_CFG, &i2c_config, 1), TAG, "configure M5IOE1 I2C failed");
 
     return configure_display_outputs();
+}
+
+esp_err_t openpencil_m5ioe1_touch_reset(void)
+{
+    ESP_RETURN_ON_FALSE(s_device, ESP_ERR_INVALID_STATE, TAG, "M5IOE1 is not initialized");
+    uint16_t output = 0;
+    ESP_RETURN_ON_ERROR(read_register16(M5IOE1_REG_GPIO_OUT_L, &output),
+                        TAG,
+                        "read M5IOE1 output before touch reset failed");
+    output &= (uint16_t)~(1u << M5IOE1_TOUCH_RESET_PIN);
+    ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, output),
+                        TAG,
+                        "assert touch reset failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    output |= (uint16_t)(1u << M5IOE1_TOUCH_RESET_PIN);
+    ESP_RETURN_ON_ERROR(write_register16(M5IOE1_REG_GPIO_OUT_L, output),
+                        TAG,
+                        "release touch reset failed");
+    vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_LOGI(TAG, "M5IOE1 touch reset released");
+    return ESP_OK;
+}
+
+i2c_master_bus_handle_t openpencil_m5ioe1_i2c_bus(void)
+{
+    return s_bus;
 }
 
 esp_err_t openpencil_m5ioe1_display_power_down(void)
