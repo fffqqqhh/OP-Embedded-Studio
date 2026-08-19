@@ -2,6 +2,20 @@
 
 This example initializes an SPI LCD panel and draws a geometry test pattern. It supports selecting ST7789, ST7735, or GC9D01N from `menuconfig`, and is intended as a first hardware bring-up project before adding LVGL or touch support.
 
+The same firmware project also contains the production display profiles used by OP
+Embedded Studio:
+
+| Device | Resolution | Controller / bus | Content paths |
+| --- | ---: | --- | --- |
+| M5Stack StopWatch | 466 x 466 | CO5300 / QSPI | USB, BLE, interaction, PNG sequence |
+| Waveshare ESP32-S3-Touch-AMOLED-1.75C | 466 x 466 | CO5300 / QSPI | USB, BLE, Wi-Fi, live mirror |
+| M5Stack CoreS3 | 320 x 240 | ILI9342C / SPI | USB, BLE, interaction, PNG sequence |
+
+The matching defaults, firmware manifests, and prebuilt images are maintained in
+`screen_profiles/` and `prebuilt-firmware/`. See
+[`OPERATION_GUIDE_CN.md`](OPERATION_GUIDE_CN.md) for wiring, display timing, TE,
+power, and build notes.
+
 ## Verified Baseline
 
 Validated on 2026-06-04 12:14 CST with an ESP32-S3 QFN56 board and a QS130TAB1005A 240x240 ST7789 SPI LCD.

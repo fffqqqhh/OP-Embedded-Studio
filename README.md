@@ -24,6 +24,10 @@ An embedded UI design, interaction prototyping, firmware flashing, and wireless 
   <img src="public/readme/ai-device-deployment.png" alt="OP Embedded Studio AI 交互烧录确认与设备预览" width="480" />
 </p>
 
+<p align="center">
+  <img src="public/readme/embedded-display-panel.png" alt="OP Embedded Studio 设备烧录面板：USB、BLE、Frame、交互与本地内容" width="480" />
+</p>
+
 ## What OP Embedded Studio Does
 
 - **Design with visual AI context** — create or refine an embedded screen from text and pasted reference images.
@@ -117,21 +121,39 @@ AI 的“准备”和“预览”只生成主机侧内容，不会直接操作�
 
 ## 当前重点适配设备
 
-目前完整适配 [Waveshare ESP32-S3-Touch-AMOLED-1.75C](https://docs.waveshare.net/ESP32-S3-Touch-AMOLED-1.75C)：
+### Waveshare ESP32-S3-Touch-AMOLED-1.75C
 
 - 466 × 466 圆形 AMOLED 屏幕
 - ESP32-S3 平台与 CO5300 显示控制器
-- QSPI 显示接口、RGB565 映射和 TE 同步
+- QSPI 显示接口、RGB565 映射和 GPIO13 TE 同步
 - 圆形可视区域、居中裁切与背景补边
 - BOOT 键与触屏交互输入
 
-其他屏幕 profile 保留在设备目录中，便于继续扩展；当前默认设备和主要验证链路均为上述 Waveshare 屏幕。
+### M5Stack StopWatch
+
+- 466 × 466 圆形 AMOLED 屏幕
+- CO5300 QSPI 显示控制器，LCD_TE 使用 GPIO38
+- USB、BLE 和序列帧内容传输
+- 独立的 16MB 内容分区，支持普通 Frame、交互状态和 PNG 序列
+- PM1 电源键唤醒时序，以及 M5-IOE1 显示供电/复位
+
+### M5Stack CoreS3
+
+- 320 × 240 横向 LCD，ILI9342C 控制器
+- SPI 显示接口，RGB565 内容格式
+- FT6336U 电容触摸，支持普通 Frame、交互和序列帧内容
+- USB 与 BLE 固件入口已接入前端
+- AXP2101 电源管理和 AW9523B 显示复位初始化已纳入固件
+
+Waveshare 与 StopWatch 是当前主要的圆形 AMOLED 验证设备；CoreS3 的 USB/BLE
+链路已接入并持续进行硬件验证。其他屏幕 profile 保留在设备目录中，便于继续扩展。
 
 ## 当前限制
 
 - 当前设备交互固件最多保存 10 个画面；提高上限需要评估并重新编译固件，而不是只修改前端限制。
 - Web Serial 和 Web Bluetooth 需要支持相应硬件 API 的 Chromium 浏览器，建议使用最新版 Chrome 或 Edge。
 - Wi-Fi、BLE 和实时镜像使用各自独立的基础固件，首次切换模式仍需要通过 USB 初始化对应固件。
+- CoreS3 的屏幕、电源和 USB/BLE 链路仍建议在真实设备上分别验证；它与 CO5300 圆屏使用不同的显示控制器、分辨率和总线。
 - 其他屏幕 profile 尚未达到与 Waveshare ESP32-S3-Touch-AMOLED-1.75C 相同的完整验证程度。
 
 ## 本地运行
