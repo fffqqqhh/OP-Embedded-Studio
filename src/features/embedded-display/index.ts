@@ -7,6 +7,10 @@ export {
   useEmbeddedDisplay
 } from './composables/useEmbeddedDisplay'
 export type { EmbeddedImagePlacement } from './adapters/image'
+export type {
+  EmbeddedDesignSource,
+  EmbeddedDesignSourceItem
+} from './model/design-source'
 export { createEmbeddedDisplayHttpAdapter } from './adapters/http'
 export { embeddedImagePlacementLabel } from './adapters/image'
 export {
