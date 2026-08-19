@@ -9,7 +9,8 @@ export {
 export type { EmbeddedImagePlacement } from './adapters/image'
 export type {
   EmbeddedDesignSource,
-  EmbeddedDesignSourceItem
+  EmbeddedDesignSourceItem,
+  EmbeddedDesignSourceSummary
 } from './model/design-source'
 export { createEmbeddedDisplayHttpAdapter } from './adapters/http'
 export { embeddedImagePlacementLabel } from './adapters/image'

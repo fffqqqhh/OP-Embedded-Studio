@@ -14,6 +14,11 @@ describe('embedded design source adapter', () => {
       width: 466,
       height: 466
     })
+    graph.createNode('TEXT', frame.id, {
+      characters: 'Current temperature',
+      width: 120,
+      height: 24
+    })
     const image = graph.createNode('RECTANGLE', pageId, {
       name: 'Background image',
       width: 320,
@@ -51,7 +56,13 @@ describe('embedded design source adapter', () => {
       expect.objectContaining({ id: frame.id, sourceKind: 'frame' })
     )
     expect(source.getSource('missing')).toBeNull()
+    expect(source.getSourceSummary(frame.id)).toEqual({
+      layerCount: 1,
+      textSamples: ['Current temperature']
+    })
+    expect(source.getDocumentName()).toBe(store.state.documentName)
     expect(source.getRevision()).toBe(store.state.sceneVersion)
+    expect(createEmbeddedDesignSource(store)).toBe(source)
   })
 
   test('resolves a selected child through the existing embedded source rules', () => {

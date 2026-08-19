@@ -3,12 +3,15 @@ import { tool } from 'ai'
 import type { ToolSet } from 'ai'
 import * as v from 'valibot'
 
-import type { EditorStore } from '@/app/editor/active-store'
 import { DEVICE_PROTOTYPE_EVENTS } from '@/features/device-prototype'
-import { getUsbFrameDeploymentPlan, type EmbeddedImagePlacement } from '@/features/embedded-display'
+import {
+  getUsbFrameDeploymentPlan,
+  type EmbeddedDesignSource,
+  type EmbeddedImagePlacement
+} from '@/features/embedded-display'
 
 import {
-  prepareUsbFrameDeploymentFromStore,
+  prepareUsbFrameDeploymentFromSource,
   updateUsbFrameDeploymentAdaptationFromChat
 } from './deployment'
 import {
@@ -42,12 +45,12 @@ export function resolveEmbeddedImagePlacement(text: string): EmbeddedImagePlacem
 }
 
 export async function prepareUsbFrameDeploymentOutput(
-  store: EditorStore,
+  source: EmbeddedDesignSource,
   intent: string,
   backgroundColor?: string,
   placement?: EmbeddedImagePlacement
 ) {
-  const plan = await prepareUsbFrameDeploymentFromStore(store, backgroundColor, placement)
+  const plan = await prepareUsbFrameDeploymentFromSource(source, backgroundColor, placement)
   return {
     kind: 'usb-frame-deployment-plan' as const,
     planId: plan.id,
@@ -59,7 +62,10 @@ export async function prepareUsbFrameDeploymentOutput(
       roundScreen: plan.roundScreen
     },
     frame: plan.frame,
-    adaptation: { placement: plan.placement, backgroundColor: plan.backgroundColor },
+    adaptation: {
+      placement: plan.placement,
+      backgroundColor: plan.backgroundColor
+    },
     contentBytes: plan.contentBytes,
     firstDeployment: plan.firstDeployment,
     needsDeviceSelection: plan.needsDeviceSelection,
@@ -115,10 +121,10 @@ export async function updateUsbDeploymentAdaptationOutput(
 }
 
 export function prepareUsbPrototypeDeploymentOutput(
-  store: EditorStore,
+  source: EmbeddedDesignSource,
   input: PrepareDevicePrototypeProposalInput
 ) {
-  const proposal = prepareDevicePrototypeProposal(store, input)
+  const proposal = prepareDevicePrototypeProposal(source, input)
   return {
     kind: 'usb-prototype-deployment-proposal' as const,
     proposalId: proposal.id,
@@ -150,7 +156,7 @@ export function prepareUsbPrototypeDeploymentOutput(
   }
 }
 
-export function createDeviceTools(store: EditorStore): ToolSet {
+export function createDeviceTools(source: EmbeddedDesignSource): ToolSet {
   return {
     prepare_usb_frame_deployment: tool({
       description:
@@ -176,7 +182,7 @@ export function createDeviceTools(store: EditorStore): ToolSet {
       ),
       execute: async ({ intent, backgroundColor, placement }) => {
         try {
-          return await prepareUsbFrameDeploymentOutput(store, intent, backgroundColor, placement)
+          return await prepareUsbFrameDeploymentOutput(source, intent, backgroundColor, placement)
         } catch (error) {
           return {
             error: error instanceof Error ? error.message : String(error),
@@ -266,7 +272,7 @@ export function createDeviceTools(store: EditorStore): ToolSet {
       ),
       execute: async (input) => {
         try {
-          return prepareUsbPrototypeDeploymentOutput(store, input)
+          return prepareUsbPrototypeDeploymentOutput(source, input)
         } catch (error) {
           return {
             error: error instanceof Error ? error.message : String(error),

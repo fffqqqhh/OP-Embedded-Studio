@@ -1,5 +1,4 @@
-import type { EditorStore } from '@/app/editor/active-store'
-import { bakeEmbeddedFrameById, isEmbeddedVisualSource } from '@/app/editor/embedded-display-bake'
+import { bakeEmbeddedFrameByIdFromSource } from '@/app/editor/embedded-display-bake'
 import {
   cancelUsbFrameDeployment,
   executeUsbFrameDeployment,
@@ -11,32 +10,33 @@ import {
   setActiveEmbeddedImageSettings,
   updateUsbFrameDeploymentAdaptation,
   type EmbeddedImagePlacement,
+  type EmbeddedDesignSource,
   type UsbFrameDeploymentPlan
 } from '@/features/embedded-display'
 
 import { rememberUsbDeployment, rememberUsbFirmware, resolveDesignHandoffFrame } from './memory'
 
-const planStores = new Map<string, EditorStore>()
+const planSources = new Map<string, EmbeddedDesignSource>()
 
-function prunePlanStores(): void {
-  for (const planId of planStores.keys()) {
+function prunePlanSources(): void {
+  for (const planId of planSources.keys()) {
     const status = getUsbFrameDeploymentPlan(planId)?.status
     if (!status || ['success', 'cancelled', 'superseded', 'stale'].includes(status)) {
-      planStores.delete(planId)
+      planSources.delete(planId)
     }
   }
 }
 
-export async function prepareUsbFrameDeploymentFromStore(
-  store: EditorStore,
+export async function prepareUsbFrameDeploymentFromSource(
+  source: EmbeddedDesignSource,
   backgroundColor?: string,
   placement?: EmbeddedImagePlacement
 ): Promise<UsbFrameDeploymentPlan> {
-  const frame = resolveDesignHandoffFrame(store)
+  const frame = resolveDesignHandoffFrame(source)
   if (!frame.available) {
     throw new Error(frame.reason || '请先选择一个 Frame、图片或 Frame 内的元素')
   }
-  const file = await bakeEmbeddedFrameById(store, frame.id)
+  const file = await bakeEmbeddedFrameByIdFromSource(source, frame.id)
   if (!file) throw new Error('无法渲染当前画面，请重新选择后再试')
   const profile = getActiveEmbeddedDisplayProfile()
   const settings = getActiveEmbeddedImageSettings()
@@ -53,20 +53,20 @@ export async function prepareUsbFrameDeploymentFromStore(
     backgroundColor: backgroundColor ?? settings.backgroundColor,
     placement: placement ?? settings.placement,
     firstDeployment: !hasRememberedUsbFirmware(profile.id),
-    scopeKey: store
+    scopeKey: source
   })
   setActiveEmbeddedImageSettings({
     placement: plan.placement,
     backgroundColor: plan.backgroundColor
   })
-  prunePlanStores()
-  planStores.set(plan.id, store)
+  prunePlanSources()
+  planSources.set(plan.id, source)
   return plan
 }
 
 export function cancelUsbFrameDeploymentFromChat(planId: string): void {
   cancelUsbFrameDeployment(planId)
-  prunePlanStores()
+  prunePlanSources()
 }
 
 export async function updateUsbFrameDeploymentAdaptationFromChat(
@@ -90,20 +90,20 @@ export async function updateUsbFrameDeploymentAdaptationFromChat(
 }
 
 export async function executeUsbFrameDeploymentFromChat(planId: string): Promise<boolean> {
-  const store = planStores.get(planId)
+  const source = planSources.get(planId)
   const plan = getUsbFrameDeploymentPlan(planId)
-  if (!store || !plan) return false
+  if (!source || !plan) return false
   const result = await executeUsbFrameDeployment(planId, {
     isSnapshotCurrent: () => {
       return (
-        isEmbeddedVisualSource(store.graph.getNode(plan.frame.id)) &&
-        store.state.sceneVersion === plan.frame.revision &&
+        Boolean(source.getSource(plan.frame.id)) &&
+        source.getRevision() === plan.frame.revision &&
         getActiveEmbeddedDisplayProfile().id === plan.profileId
       )
     },
     onFirmwareVerified: rememberUsbFirmware,
     onSuccess: rememberUsbDeployment
   })
-  prunePlanStores()
+  prunePlanSources()
   return result
 }

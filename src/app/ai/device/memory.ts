@@ -1,10 +1,7 @@
 import { readCacheJson, writeCacheJson } from '@/app/cache'
-import type { EditorStore } from '@/app/editor/active-store'
+import { getEmbeddedFrameBakeStateFromSource } from '@/app/editor/embedded-display-bake'
 import {
-  getEmbeddedFrameBakeState,
-  isEmbeddedVisualSource
-} from '@/app/editor/embedded-display-bake'
-import {
+  type EmbeddedDesignSource,
   rememberUsbFirmwareForPort,
   type EmbeddedFrameBakeState,
   type UsbFrameDeploymentPlan
@@ -51,28 +48,28 @@ interface UsbDeploymentMemoryRecord {
 type UsbDeploymentMemory = Partial<Record<string, UsbDeploymentMemoryRecord>>
 
 const USB_DEPLOYMENT_MEMORY_KEY = 'embedded-display/ai-usb-frame-deployments'
-const recentDesigns = new WeakMap<EditorStore, RecentAIDesign>()
+const recentDesigns = new WeakMap<EmbeddedDesignSource, RecentAIDesign>()
 const latestUsbDeployments = new Map<string, UsbDeploymentMemoryRecord>()
 
 export function recordDesignHandoff(
-  store: EditorStore,
+  source: EmbeddedDesignSource,
   input: Omit<RecentAIDesign, 'revision' | 'updatedAt'>
 ): void {
-  recentDesigns.set(store, {
+  recentDesigns.set(source, {
     ...input,
-    revision: store.state.sceneVersion,
+    revision: source.getRevision(),
     updatedAt: Date.now()
   })
 }
 
-export function resolveDesignHandoffFrame(store: EditorStore): EmbeddedFrameBakeState {
-  const selected = getEmbeddedFrameBakeState(store)
+export function resolveDesignHandoffFrame(source: EmbeddedDesignSource): EmbeddedFrameBakeState {
+  const selected = getEmbeddedFrameBakeStateFromSource(source)
   if (selected.available) return selected
 
-  const revision = store.state.sceneVersion
-  const recent = recentDesigns.get(store)
-  const recentFrame = recent ? store.graph.getNode(recent.frameId) : undefined
-  if (recentFrame?.type === 'FRAME' && recentFrame.id !== store.graph.rootId) {
+  const revision = source.getRevision()
+  const recent = recentDesigns.get(source)
+  const recentFrame = recent ? source.getSource(recent.frameId) : null
+  if (recentFrame?.sourceKind === 'frame') {
     return {
       id: recentFrame.id,
       revision,
@@ -84,16 +81,14 @@ export function resolveDesignHandoffFrame(store: EditorStore): EmbeddedFrameBake
     }
   }
 
-  const topLevelFrames = store.graph
-    .getChildren(store.state.currentPageId)
-    .filter((node) => isEmbeddedVisualSource(node) && node.id !== store.graph.rootId)
+  const topLevelFrames = source.getPageSources()
   if (topLevelFrames.length === 1) {
     const frame = topLevelFrames[0]
     return {
       id: frame.id,
       revision,
       available: true,
-      sourceKind: frame.type === 'FRAME' ? 'frame' : 'image',
+      sourceKind: frame.sourceKind,
       name: frame.name,
       width: frame.width,
       height: frame.height
@@ -103,32 +98,24 @@ export function resolveDesignHandoffFrame(store: EditorStore): EmbeddedFrameBake
   return selected
 }
 
-export function getDesignHandoffMemory(store: EditorStore): DesignHandoffMemory {
-  const bakeState = resolveDesignHandoffFrame(store)
-  const recent = recentDesigns.get(store)
+export function getDesignHandoffMemory(source: EmbeddedDesignSource): DesignHandoffMemory {
+  const bakeState = resolveDesignHandoffFrame(source)
+  const recent = recentDesigns.get(source)
   const memory: DesignHandoffMemory = {
-    documentName: store.state.documentName,
-    revision: store.state.sceneVersion
+    documentName: source.getDocumentName(),
+    revision: source.getRevision()
   }
   if (!bakeState.available) return memory
 
-  const flattened = store.graph.flattenTree(bakeState.id)
-  const textSamples = flattened
-    .map(({ node }) =>
-      node.type === 'TEXT' && 'characters' in node && typeof node.characters === 'string'
-        ? node.characters.trim()
-        : ''
-    )
-    .filter(Boolean)
-    .slice(0, 8)
+  const summary = source.getSourceSummary(bakeState.id)
   const matchesRecentAI = recent?.frameId === bakeState.id
   memory.frame = {
     id: bakeState.id,
     name: bakeState.name,
     width: bakeState.width,
     height: bakeState.height,
-    layerCount: flattened.length,
-    textSamples,
+    layerCount: summary?.layerCount ?? 1,
+    textSamples: summary?.textSamples ?? [],
     source: matchesRecentAI ? 'ai-assisted' : 'user-design',
     changedAfterAISummary: matchesRecentAI && recent.revision !== bakeState.revision
   }

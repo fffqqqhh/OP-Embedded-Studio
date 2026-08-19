@@ -1,10 +1,9 @@
 import { markRaw, reactive } from 'vue'
 
-import type { EditorStore } from '@/app/editor/active-store'
 import {
-  bakeDevicePrototype,
-  createDevicePrototypeFrameRenderer,
-  getDevicePrototypeFrameCandidates
+  bakeDevicePrototypeFromSource,
+  createDevicePrototypeFrameRendererFromSource,
+  getDevicePrototypeFrameCandidatesFromSource
 } from '@/app/editor/device-prototype'
 import {
   buildManualTransitions,
@@ -31,6 +30,7 @@ import {
   setActiveEmbeddedImageSettings,
   supersedeUsbFrameDeployment,
   updateUsbFrameDeploymentAdaptation,
+  type EmbeddedDesignSource,
   type EmbeddedImagePlacement,
   type UsbFrameDeploymentPlan
 } from '@/features/embedded-display'
@@ -90,7 +90,7 @@ export interface DevicePrototypeProposal {
 }
 
 interface DevicePrototypeProposalRecord extends DevicePrototypeProposal {
-  store: EditorStore
+  source: EmbeddedDesignSource
 }
 
 const proposals = reactive(new Map<string, DevicePrototypeProposalRecord>())
@@ -111,15 +111,15 @@ function proposalInteraction(
 ): DevicePrototypeInteraction | null {
   if (!proposal.interactionId) return null
   return (
-    useDevicePrototype(proposal.store).interactions.value.find(
+    useDevicePrototype(proposal.source).interactions.value.find(
       (interaction) => interaction.id === proposal.interactionId
     ) ?? null
   )
 }
 
-function supersedeInactiveProposals(scopeKey: EditorStore): void {
+function supersedeInactiveProposals(scopeKey: EmbeddedDesignSource): void {
   for (const proposal of proposals.values()) {
-    if (proposal.store !== scopeKey) continue
+    if (proposal.source !== scopeKey) continue
     if (proposal.status === 'preparing') continue
     const deployment = proposal.deploymentPlanId
       ? getUsbFrameDeploymentPlan(proposal.deploymentPlanId)
@@ -134,7 +134,7 @@ function supersedeInactiveProposals(scopeKey: EditorStore): void {
 }
 
 function validateProposalInput(
-  store: EditorStore,
+  source: EmbeddedDesignSource,
   input: PrepareDevicePrototypeProposalInput
 ): {
   definition: DevicePrototypeDefinition
@@ -144,7 +144,10 @@ function validateProposalInput(
 } {
   const mode = input.mode ?? 'custom'
   const candidates = new Map(
-    getDevicePrototypeFrameCandidates(store).map((candidate) => [candidate.id, candidate])
+    getDevicePrototypeFrameCandidatesFromSource(source).map((candidate) => [
+      candidate.id,
+      candidate
+    ])
   )
   const frameIds = [...new Set(input.frameIds)]
   if (frameIds.length < 2) throw new Error('至少需要两个 Frame 才能创建交互')
@@ -245,17 +248,17 @@ export function renderDevicePrototypeProposalFrame(
 ): Promise<Blob | null> {
   const proposal = proposals.get(proposalId)
   if (!proposal) return Promise.resolve(null)
-  return createDevicePrototypeFrameRenderer(proposal.store)(frameId)
+  return createDevicePrototypeFrameRendererFromSource(proposal.source)(frameId)
 }
 
 export function prepareDevicePrototypeProposal(
-  store: EditorStore,
+  source: EmbeddedDesignSource,
   input: PrepareDevicePrototypeProposalInput
 ): DevicePrototypeProposal {
   const name = input.name.trim()
   if (!name) throw new Error('交互名称不能为空')
-  const validated = validateProposalInput(store, input)
-  supersedeInactiveProposals(store)
+  const validated = validateProposalInput(source, input)
+  supersedeInactiveProposals(source)
   const profile = getActiveEmbeddedDisplayProfile()
   const settings = getActiveEmbeddedImageSettings()
   const id = globalThis.crypto.randomUUID()
@@ -267,7 +270,7 @@ export function prepareDevicePrototypeProposal(
     mode: validated.mode,
     manual: validated.manual,
     slideshow: validated.slideshow,
-    revision: store.state.sceneVersion,
+    revision: source.getRevision(),
     definition: validated.definition,
     profileId: profile.id,
     profileName: profile.name,
@@ -277,7 +280,7 @@ export function prepareDevicePrototypeProposal(
     placement: input.placement ?? settings.placement,
     message: '交互方案已准备，确认后会添加到交互栏',
     createdAt: Date.now(),
-    store: markRaw(store)
+    source: markRaw(source)
   })
   proposals.set(id, proposal)
   setActiveEmbeddedImageSettings({
@@ -305,12 +308,12 @@ export async function confirmDevicePrototypeProposalFromChat(id: string): Promis
   try {
     const activeProfile = getActiveEmbeddedDisplayProfile()
     if (
-      proposal.store.state.sceneVersion !== proposal.revision ||
+      proposal.source.getRevision() !== proposal.revision ||
       activeProfile.id !== proposal.profileId
     ) {
       if (proposal.deploymentPlanId) cancelUsbFrameDeployment(proposal.deploymentPlanId)
       proposal.deploymentPlanId = undefined
-      proposal.revision = proposal.store.state.sceneVersion
+      proposal.revision = proposal.source.getRevision()
       proposal.profileId = activeProfile.id
       proposal.profileName = activeProfile.name
       proposal.resolution = { ...activeProfile.resolution }
@@ -320,7 +323,7 @@ export async function confirmDevicePrototypeProposalFromChat(id: string): Promis
 
     let interaction = proposalInteraction(proposal)
     if (!interaction) {
-      interaction = useDevicePrototype(proposal.store).createInteractionFromDefinition({
+      interaction = useDevicePrototype(proposal.source).createInteractionFromDefinition({
         name: proposal.name,
         definition: proposal.definition,
         mode: proposal.mode,
@@ -329,7 +332,7 @@ export async function confirmDevicePrototypeProposalFromChat(id: string): Promis
       })
       proposal.interactionId = interaction.id
     } else {
-      const currentDefinition = useDevicePrototype(proposal.store).definition(interaction.id)
+      const currentDefinition = useDevicePrototype(proposal.source).definition(interaction.id)
       if (!currentDefinition) throw new Error('交互定义已不存在')
       proposal.mode = interaction.mode
       proposal.manual = { ...interaction.manual }
@@ -337,7 +340,7 @@ export async function confirmDevicePrototypeProposalFromChat(id: string): Promis
       proposal.definition = currentDefinition
     }
 
-    const bake = await bakeDevicePrototype(proposal.store, interaction)
+    const bake = await bakeDevicePrototypeFromSource(proposal.source, interaction)
     proposal.preparedInteractionFingerprint = interactionFingerprint(interaction)
     const initialState = interaction.states.find((state) => state.id === interaction.initialStateId)
     if (!initialState) throw new Error('交互缺少有效的初始 Frame')
@@ -355,7 +358,7 @@ export async function confirmDevicePrototypeProposalFromChat(id: string): Promis
       backgroundColor: proposal.backgroundColor,
       placement: proposal.placement,
       firstDeployment: !hasRememberedUsbFirmware(profile.id),
-      scopeKey: proposal.store
+      scopeKey: proposal.source
     })
     proposal.deploymentPlanId = plan.id
     proposal.status = 'deployment-ready'
@@ -417,7 +420,7 @@ export async function executeDevicePrototypeDeploymentFromChat(
     isSnapshotCurrent: () => {
       const interaction = proposalInteraction(proposal)
       return (
-        proposal.store.state.sceneVersion === proposal.revision &&
+        proposal.source.getRevision() === proposal.revision &&
         getActiveEmbeddedDisplayProfile().id === proposal.profileId &&
         Boolean(
           interaction &&

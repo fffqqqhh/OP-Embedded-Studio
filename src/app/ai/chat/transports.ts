@@ -19,6 +19,7 @@ import {
 } from '@/app/ai/device/tools'
 import { createAITools, MAX_AGENT_STEPS, recordStepUsage, resetRunSteps } from '@/app/ai/tools'
 import type { getActiveEditorStore } from '@/app/editor/active-store'
+import { createEmbeddedDesignSource } from '@/app/editor/embedded-design-source'
 import {
   AI_CHAT_CHUNK_TIMEOUT_MS,
   AI_CHAT_STEP_TIMEOUT_MS,
@@ -117,9 +118,10 @@ export function prepareDesignStep(messages: ModelMessage[]) {
 }
 
 export function createUnifiedAITools(store: EditorStore) {
+  const source = createEmbeddedDesignSource(store)
   const designTools = createAITools(store, {
     onRenderSuccess: ({ id, name }) => {
-      recordDesignHandoff(store, {
+      recordDesignHandoff(source, {
         frameId: id,
         frameName: name,
         observation: 'Design AI rendered the current screen from complete JSX.',
@@ -128,7 +130,7 @@ export function createUnifiedAITools(store: EditorStore) {
       })
     }
   })
-  return { ...designTools, ...createDeviceTools(store) }
+  return { ...designTools, ...createDeviceTools(source) }
 }
 
 export function createToolLoopTransport({
@@ -142,7 +144,11 @@ export function createToolLoopTransport({
   maxOutputTokens
 }: ToolLoopTransportOptions) {
   const tools = createUnifiedAITools(store)
-  const effectiveModelID = resolveLanguageModelID({ providerID, modelID, customModelID })
+  const effectiveModelID = resolveLanguageModelID({
+    providerID,
+    modelID,
+    customModelID
+  })
   const providerOptions = chatProviderOptions(providerID, effectiveModelID)
   const agent = new ToolLoopAgent({
     model: createLanguageModel({
@@ -325,14 +331,17 @@ export function createChatSessionManager({
   }
 
   async function submitLocalDeviceAction(text: string): Promise<Chat<UIMessage> | null> {
-    const input = { intent: text, placement: resolveEmbeddedImagePlacement(text) }
+    const input = {
+      intent: text,
+      placement: resolveEmbeddedImagePlacement(text)
+    }
     return submitLocalDeviceToolAction(
       text,
       'prepare_usb_frame_deployment',
       input,
       () =>
         prepareUsbFrameDeploymentOutput(
-          getActiveEditorStore(),
+          createEmbeddedDesignSource(getActiveEditorStore()),
           input.intent,
           undefined,
           input.placement
@@ -349,7 +358,11 @@ export function createChatSessionManager({
       text,
       'prepare_usb_prototype_deployment',
       input,
-      async () => prepareUsbPrototypeDeploymentOutput(getActiveEditorStore(), input),
+      async () =>
+        prepareUsbPrototypeDeploymentOutput(
+          createEmbeddedDesignSource(getActiveEditorStore()),
+          input
+        ),
       '交互方案已准备好，请检查确认卡后创建并烧录。'
     )
   }

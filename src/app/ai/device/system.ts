@@ -1,29 +1,23 @@
-import type { EditorStore } from '@/app/editor/active-store'
-import { getDevicePrototypeFrameCandidates } from '@/app/editor/device-prototype'
-import { getActiveEmbeddedDisplayProfile } from '@/features/embedded-display'
+import { getDevicePrototypeFrameCandidatesFromSource } from '@/app/editor/device-prototype'
+import {
+  getActiveEmbeddedDisplayProfile,
+  type EmbeddedDesignSource
+} from '@/features/embedded-display'
 
 import { getDesignHandoffMemory, getLatestUsbDeploymentMemory } from './memory'
 import DEVICE_SYSTEM_PROMPT from './system-prompt.md?raw'
 
-export function createDeviceSystemPrompt(store: EditorStore): string {
+export function createDeviceSystemPrompt(source: EmbeddedDesignSource): string {
   const profile = getActiveEmbeddedDisplayProfile()
-  const memory = getDesignHandoffMemory(store)
+  const memory = getDesignHandoffMemory(source)
   const frame = memory.frame
     ? {
         ...memory.frame,
         recentAI: memory.recentAI
       }
     : null
-  const interactionFrames = getDevicePrototypeFrameCandidates(store).map((candidate) => {
-    const textSamples = store.graph
-      .flattenTree(candidate.id)
-      .map(({ node }) =>
-        node.type === 'TEXT' && 'characters' in node && typeof node.characters === 'string'
-          ? node.characters.trim()
-          : ''
-      )
-      .filter(Boolean)
-      .slice(0, 6)
+  const interactionFrames = getDevicePrototypeFrameCandidatesFromSource(source).map((candidate) => {
+    const textSamples = source.getSourceSummary(candidate.id)?.textSamples.slice(0, 6) ?? []
     return {
       id: candidate.id,
       name: candidate.name,

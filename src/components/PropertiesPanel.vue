@@ -6,17 +6,18 @@ import { TabsContent, TabsList, TabsRoot, TabsTrigger } from 'reka-ui'
 import { useI18n } from '@open-pencil/vue'
 import { useEditorStore } from '@/app/editor/active-store'
 import {
-  bakeDevicePrototype,
+  bakeDevicePrototypeFromSource,
   bakeDevicePrototypeAnimation,
-  createDevicePrototypeFrameRenderer,
-  getDevicePrototypeFrameCandidate,
-  getSelectedDevicePrototypeFrameCandidates
+  createDevicePrototypeFrameRendererFromSource,
+  getDevicePrototypeFrameCandidateFromSource,
+  getSelectedDevicePrototypeFrameCandidatesFromSource
 } from '@/app/editor/device-prototype'
 import {
-  bakeEmbeddedFrame,
-  bakeEmbeddedFrameById,
-  getEmbeddedFrameBakeState
+  bakeEmbeddedFrameByIdFromSource,
+  bakeEmbeddedFrameFromSource,
+  getEmbeddedFrameBakeStateFromSource
 } from '@/app/editor/embedded-display-bake'
+import { createEmbeddedDesignSource } from '@/app/editor/embedded-design-source'
 import { useAIChat } from '@/app/ai/chat/use'
 import { createPresetFrameName } from '@/app/editor/preset-frame-name'
 
@@ -30,27 +31,31 @@ import ZoomDropdown from './editor/ZoomDropdown.vue'
 const { activeTab } = useAIChat()
 const { panels } = useI18n()
 const editorStore = useEditorStore()
+const embeddedDesignSource = createEmbeddedDesignSource(editorStore)
 
-const devicePrototypeFrame = computed(() => getDevicePrototypeFrameCandidate(editorStore))
-const selectedDevicePrototypeFrames = computed(() =>
-  getSelectedDevicePrototypeFrameCandidates(editorStore)
+const devicePrototypeFrame = computed(() =>
+  getDevicePrototypeFrameCandidateFromSource(embeddedDesignSource)
 )
-const devicePrototypeFrameRenderer = createDevicePrototypeFrameRenderer(editorStore)
-const { interactionOptions, interactions } = useDevicePrototype(editorStore)
-const embeddedBakeState = computed(() => getEmbeddedFrameBakeState(editorStore))
+const selectedDevicePrototypeFrames = computed(() =>
+  getSelectedDevicePrototypeFrameCandidatesFromSource(embeddedDesignSource)
+)
+const devicePrototypeFrameRenderer =
+  createDevicePrototypeFrameRendererFromSource(embeddedDesignSource)
+const { interactionOptions, interactions } = useDevicePrototype(embeddedDesignSource)
+const embeddedBakeState = computed(() => getEmbeddedFrameBakeStateFromSource(embeddedDesignSource))
 
 async function handleEmbeddedFrameBake() {
-  return bakeEmbeddedFrame(editorStore)
+  return bakeEmbeddedFrameFromSource(embeddedDesignSource)
 }
 
 async function handleEmbeddedFrameBakeById(frameId: string) {
-  return bakeEmbeddedFrameById(editorStore, frameId)
+  return bakeEmbeddedFrameByIdFromSource(embeddedDesignSource, frameId)
 }
 
 async function handleEmbeddedPrototypeBake(interactionId: string) {
   const interaction = interactions.value.find((item) => item.id === interactionId)
   if (!interaction) return null
-  return bakeDevicePrototype(editorStore, interaction)
+  return bakeDevicePrototypeFromSource(embeddedDesignSource, interaction)
 }
 
 function handleAnimatedPrototypeBake(interactionId: string) {
@@ -159,7 +164,7 @@ function handleCreateEmbeddedPresetFrame(width: number, height: number, profileN
       >
         <DevicePrototypePanel
           :active="activeTab === 'prototype'"
-          :scope-key="editorStore"
+          :scope-key="embeddedDesignSource"
           :selected-frame="devicePrototypeFrame"
           :selected-frames="selectedDevicePrototypeFrames"
           :render-frame="devicePrototypeFrameRenderer"

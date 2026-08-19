@@ -19,6 +19,7 @@ import {
   getDevicePrototypeFrameCandidates,
   getSelectedDevicePrototypeFrameCandidates
 } from '@/app/editor/device-prototype'
+import { createEmbeddedDesignSource } from '@/app/editor/embedded-design-source'
 import {
   bakeEmbeddedFrameById,
   getEmbeddedFrameBakeState
@@ -188,8 +189,16 @@ describe('embedded display Frame targeting', () => {
     const store = editorStore(graph, [first.id, second.id])
 
     expect(getSelectedDevicePrototypeFrameCandidates(store)).toEqual([
-      expect.objectContaining({ id: first.id, sourceKind: 'image', name: 'Screen (1)' }),
-      expect.objectContaining({ id: second.id, sourceKind: 'image', name: 'Screen (2)' })
+      expect.objectContaining({
+        id: first.id,
+        sourceKind: 'image',
+        name: 'Screen (1)'
+      }),
+      expect.objectContaining({
+        id: second.id,
+        sourceKind: 'image',
+        name: 'Screen (2)'
+      })
     ])
     expect(getDevicePrototypeFrameCandidates(store).map((candidate) => candidate.id)).toEqual([
       first.id,
@@ -227,13 +236,14 @@ describe('device AI design handoff', () => {
       height: 466
     })
     const store = editorStore(graph, [])
+    const source = createEmbeddedDesignSource(store)
 
-    expect(resolveDesignHandoffFrame(store)).toMatchObject({
+    expect(resolveDesignHandoffFrame(source)).toMatchObject({
       available: true,
       id: frame.id,
       name: 'Device UI'
     })
-    expect(getDesignHandoffMemory(store).frame?.source).toBe('user-design')
+    expect(getDesignHandoffMemory(source).frame?.source).toBe('user-design')
   })
 
   test('keeps the latest AI Frame as compact shared memory and detects later edits', () => {
@@ -244,9 +254,14 @@ describe('device AI design handoff', () => {
       width: 466,
       height: 466
     })
-    graph.createNode('FRAME', pageId, { name: 'Other Frame', width: 240, height: 240 })
+    graph.createNode('FRAME', pageId, {
+      name: 'Other Frame',
+      width: 240,
+      height: 240
+    })
     const store = editorStore(graph, [])
-    recordDesignHandoff(store, {
+    const source = createEmbeddedDesignSource(store)
+    recordDesignHandoff(source, {
       frameId: aiFrame.id,
       frameName: aiFrame.name,
       observation: '完成主界面',
@@ -254,8 +269,8 @@ describe('device AI design handoff', () => {
       changes: ['放大主数据', '保留圆屏安全区']
     })
 
-    expect(resolveDesignHandoffFrame(store).id).toBe(aiFrame.id)
-    expect(getDesignHandoffMemory(store)).toMatchObject({
+    expect(resolveDesignHandoffFrame(source).id).toBe(aiFrame.id)
+    expect(getDesignHandoffMemory(source)).toMatchObject({
       frame: {
         id: aiFrame.id,
         source: 'ai-assisted',
@@ -268,7 +283,7 @@ describe('device AI design handoff', () => {
     })
 
     graph.updateNode(aiFrame.id, { name: 'AI Dashboard Revised' })
-    expect(getDesignHandoffMemory(store).frame?.changedAfterAISummary).toBe(true)
+    expect(getDesignHandoffMemory(source).frame?.changedAfterAISummary).toBe(true)
   })
 })
 
@@ -276,17 +291,37 @@ describe('device interaction deployment lifecycle', () => {
   test('does not supersede proposals from another editor document', () => {
     const graph = new SceneGraph()
     const pageId = graph.getPages()[0].id
-    const first = graph.createNode('FRAME', pageId, { name: 'One', width: 240, height: 240 })
-    const second = graph.createNode('FRAME', pageId, { name: 'Two', width: 240, height: 240 })
+    const first = graph.createNode('FRAME', pageId, {
+      name: 'One',
+      width: 240,
+      height: 240
+    })
+    const second = graph.createNode('FRAME', pageId, {
+      name: 'Two',
+      width: 240,
+      height: 240
+    })
     const input = {
       intent: '点击切换',
       name: 'Scoped interaction',
       frameIds: [first.id, second.id],
       initialFrameId: first.id,
-      transitions: [{ fromFrameId: first.id, event: 'screen_click' as const, toFrameId: second.id }]
+      transitions: [
+        {
+          fromFrameId: first.id,
+          event: 'screen_click' as const,
+          toFrameId: second.id
+        }
+      ]
     }
-    const firstProposal = prepareDevicePrototypeProposal(editorStore(graph, []), input)
-    const secondProposal = prepareDevicePrototypeProposal(editorStore(graph, []), input)
+    const firstProposal = prepareDevicePrototypeProposal(
+      createEmbeddedDesignSource(editorStore(graph, [])),
+      input
+    )
+    const secondProposal = prepareDevicePrototypeProposal(
+      createEmbeddedDesignSource(editorStore(graph, [])),
+      input
+    )
 
     expect(firstProposal.status).toBe('ready')
     expect(secondProposal.status).toBe('ready')
@@ -306,19 +341,28 @@ describe('device interaction deployment lifecycle', () => {
       height: 466
     })
     const store = editorStore(graph, [])
+    const source = createEmbeddedDesignSource(store)
     const proposalInput = {
       intent: '创建点击切换交互',
       name: '快速切换',
       frameIds: [first.id, second.id],
       initialFrameId: first.id,
       transitions: [
-        { fromFrameId: first.id, event: 'screen_click' as const, toFrameId: second.id },
-        { fromFrameId: second.id, event: 'screen_click' as const, toFrameId: first.id }
+        {
+          fromFrameId: first.id,
+          event: 'screen_click' as const,
+          toFrameId: second.id
+        },
+        {
+          fromFrameId: second.id,
+          event: 'screen_click' as const,
+          toFrameId: first.id
+        }
       ]
     }
 
-    const previous = prepareDevicePrototypeProposal(store, proposalInput)
-    const latest = prepareDevicePrototypeProposal(store, {
+    const previous = prepareDevicePrototypeProposal(source, proposalInput)
+    const latest = prepareDevicePrototypeProposal(source, {
       ...proposalInput,
       name: '快速切换 2'
     })
@@ -335,17 +379,28 @@ describe('device interaction deployment lifecycle', () => {
   test('preserves an AI-selected slideshow mode without requiring event transitions', () => {
     const graph = new SceneGraph()
     const pageId = graph.getPages()[0].id
-    const first = graph.createNode('FRAME', pageId, { name: 'One', width: 466, height: 466 })
-    const second = graph.createNode('FRAME', pageId, { name: 'Two', width: 466, height: 466 })
-    const proposal = prepareDevicePrototypeProposal(editorStore(graph, []), {
-      intent: '每两秒自动播放',
-      name: '自动播放',
-      mode: 'slideshow',
-      frameIds: [first.id, second.id],
-      initialFrameId: first.id,
-      transitions: [],
-      slideshow: { intervalMs: 2000 }
+    const first = graph.createNode('FRAME', pageId, {
+      name: 'One',
+      width: 466,
+      height: 466
     })
+    const second = graph.createNode('FRAME', pageId, {
+      name: 'Two',
+      width: 466,
+      height: 466
+    })
+    const proposal = prepareDevicePrototypeProposal(
+      createEmbeddedDesignSource(editorStore(graph, [])),
+      {
+        intent: '每两秒自动播放',
+        name: '自动播放',
+        mode: 'slideshow',
+        frameIds: [first.id, second.id],
+        initialFrameId: first.id,
+        transitions: [],
+        slideshow: { intervalMs: 2000 }
+      }
+    )
 
     expect(proposal.mode).toBe('slideshow')
     expect(proposal.slideshow.intervalMs).toBe(2000)
@@ -355,17 +410,36 @@ describe('device interaction deployment lifecycle', () => {
   test('turns an AI-selected manual mode into ordered previous and next rules', () => {
     const graph = new SceneGraph()
     const pageId = graph.getPages()[0].id
-    const first = graph.createNode('FRAME', pageId, { name: 'One', width: 466, height: 466 })
-    const second = graph.createNode('FRAME', pageId, { name: 'Two', width: 466, height: 466 })
-    const third = graph.createNode('FRAME', pageId, { name: 'Three', width: 466, height: 466 })
-    const proposal = prepareDevicePrototypeProposal(editorStore(graph, []), {
-      intent: '点击下一张，长按上一张',
-      name: '手动浏览',
-      mode: 'manual',
-      frameIds: [first.id, second.id, third.id],
-      initialFrameId: first.id,
-      manual: { nextEvent: 'screen_click', previousEvent: 'screen_long_press', loop: true }
+    const first = graph.createNode('FRAME', pageId, {
+      name: 'One',
+      width: 466,
+      height: 466
     })
+    const second = graph.createNode('FRAME', pageId, {
+      name: 'Two',
+      width: 466,
+      height: 466
+    })
+    const third = graph.createNode('FRAME', pageId, {
+      name: 'Three',
+      width: 466,
+      height: 466
+    })
+    const proposal = prepareDevicePrototypeProposal(
+      createEmbeddedDesignSource(editorStore(graph, [])),
+      {
+        intent: '点击下一张，长按上一张',
+        name: '手动浏览',
+        mode: 'manual',
+        frameIds: [first.id, second.id, third.id],
+        initialFrameId: first.id,
+        manual: {
+          nextEvent: 'screen_click',
+          previousEvent: 'screen_long_press',
+          loop: true
+        }
+      }
+    )
 
     expect(proposal.mode).toBe('manual')
     expect(proposal.definition.transitions).toContainEqual({
@@ -418,18 +492,35 @@ describe('device interaction deployment lifecycle', () => {
     try {
       const graph = new SceneGraph()
       const pageId = graph.getPages()[0].id
-      const first = graph.createNode('FRAME', pageId, { name: 'One', width: 4, height: 4 })
-      const second = graph.createNode('FRAME', pageId, { name: 'Two', width: 4, height: 4 })
+      const first = graph.createNode('FRAME', pageId, {
+        name: 'One',
+        width: 4,
+        height: 4
+      })
+      const second = graph.createNode('FRAME', pageId, {
+        name: 'Two',
+        width: 4,
+        height: 4
+      })
       const store = editorStore(graph, [])
+      const source = createEmbeddedDesignSource(store)
       store.renderExportImage = async () => new Uint8Array([1, 2, 3, 4])
-      const proposal = prepareDevicePrototypeProposal(store, {
+      const proposal = prepareDevicePrototypeProposal(source, {
         intent: '点击切换画面',
         name: 'Snapshot test',
         frameIds: [first.id, second.id],
         initialFrameId: first.id,
         transitions: [
-          { fromFrameId: first.id, event: 'screen_click', toFrameId: second.id },
-          { fromFrameId: second.id, event: 'screen_click', toFrameId: first.id }
+          {
+            fromFrameId: first.id,
+            event: 'screen_click',
+            toFrameId: second.id
+          },
+          {
+            fromFrameId: second.id,
+            event: 'screen_click',
+            toFrameId: first.id
+          }
         ]
       })
 
@@ -437,7 +528,7 @@ describe('device interaction deployment lifecycle', () => {
       expect(isDevicePrototypeProposalSnapshotCurrent(proposal.id)).toBe(true)
       const interaction = getDevicePrototypeProposalInteraction(proposal.id)
       if (!interaction) throw new Error('Expected the confirmed interaction to exist')
-      const prototype = useDevicePrototype(store)
+      const prototype = useDevicePrototype(source)
       prototype.selectInteraction(interaction.id)
       prototype.setTransition(first.id, 'screen_click', first.id)
 
@@ -512,7 +603,13 @@ describe('embedded display image placement', () => {
     })
     Object.defineProperty(globalThis, 'document', {
       configurable: true,
-      value: { createElement: () => ({ width: 0, height: 0, getContext: () => context }) }
+      value: {
+        createElement: () => ({
+          width: 0,
+          height: 0,
+          getContext: () => context
+        })
+      }
     })
 
     try {
