@@ -631,9 +631,9 @@ def write_generated_image_header(profile, body):
             f"image payload is too large: {len(pixel_bytes) // 1024}KB, limit is {MAX_IMAGE_RAW_BYTES // 1024}KB",
         )
 
-    # The existing panel factory swaps RGB565 words for CO5300, ST7735 and
-    # GC9D01N. Doing that once here makes the runtime raw path a memcpy.
-    panel_native_swap = profile.get("controller") in {"CO5300", "ST7735", "GC9D01N"}
+    # Match the panel factory's RGB565 wire order. Doing this once here makes
+    # the runtime raw path a memcpy.
+    panel_native_swap = profile.get("controller") in {"CO5300", "ST7735", "GC9D01N", "ILI9342"}
     pixels_per_frame = width * height
     frames = []
     stored_data = bytearray()

@@ -270,6 +270,7 @@ void app_main(void)
         .lcd_param_bits = LCD_PARAM_BITS,
         .spi_mode = 0,
         .trans_queue_depth = 10,
+        .on_color_trans_done = openpencil_display_presenter_on_color_done,
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(LCD_HOST, &io_config, &io_handle));
 

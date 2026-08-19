@@ -12,8 +12,13 @@
 #define CORES3_I2C_FREQ 400000
 #define AXP2101_ADDR 0x34
 #define AW9523B_ADDR 0x58
+#define AW9523B_REG_OUTPUT0 0x02
 #define AW9523B_REG_OUTPUT1 0x03
+#define AW9523B_REG_CONFIG0 0x04
 #define AW9523B_REG_CONFIG1 0x05
+#define AW9523B_REG_GCR 0x11
+#define AW9523B_REG_LEDMODE0 0x12
+#define AW9523B_REG_LEDMODE1 0x13
 #define LCD_RESET_MASK (1u << 1) /* AW9523B P1_1 */
 
 static const char *TAG = "m5cores3";
@@ -59,13 +64,29 @@ esp_err_t openpencil_m5cores3_display_init(void)
     ESP_RETURN_ON_ERROR(add_device(AXP2101_ADDR, &s_axp), TAG, "add AXP2101 failed");
     ESP_RETURN_ON_ERROR(add_device(AW9523B_ADDR, &s_aw), TAG, "add AW9523B failed");
 
-    // AW9523B P1_1 is the LCD reset output. A zero in CONFIG means output.
-    ESP_RETURN_ON_ERROR(update_reg(s_aw, AW9523B_REG_CONFIG1, LCD_RESET_MASK, 0), TAG, "configure LCD reset pin failed");
-    ESP_RETURN_ON_ERROR(write_reg(s_aw, AW9523B_REG_OUTPUT1, LCD_RESET_MASK), TAG, "release LCD reset pin failed");
+    // Match the CoreS3 board sequence used by M5GFX. Set output latches before
+    // changing direction so LCD reset and the SY7088 boost rail never glitch low.
+    ESP_RETURN_ON_ERROR(update_reg(s_aw, AW9523B_REG_OUTPUT0, 0x05, 0x05), TAG,
+                        "enable CoreS3 port 0 outputs failed");
+    ESP_RETURN_ON_ERROR(update_reg(s_aw, AW9523B_REG_OUTPUT1, 0x83, 0x83), TAG,
+                        "enable CoreS3 port 1 outputs failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_aw, AW9523B_REG_CONFIG0, 0x18), TAG,
+                        "configure CoreS3 port 0 failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_aw, AW9523B_REG_CONFIG1, 0x0C), TAG,
+                        "configure CoreS3 port 1 failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_aw, AW9523B_REG_GCR, 0x10), TAG,
+                        "configure CoreS3 push-pull outputs failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_aw, AW9523B_REG_LEDMODE0, 0xFF), TAG,
+                        "configure CoreS3 port 0 GPIO mode failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_aw, AW9523B_REG_LEDMODE1, 0xFF), TAG,
+                        "configure CoreS3 port 1 GPIO mode failed");
 
-    // CoreS3 drives the display/backlight rail from AXP2101 DLDO1.
-    ESP_RETURN_ON_ERROR(update_reg(s_axp, 0x90, 0x80, 0x80), TAG, "enable LCD DLDO1 failed");
-    ESP_RETURN_ON_ERROR(write_reg(s_axp, 0x99, 28), TAG, "set LCD DLDO1 voltage failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_axp, 0x90, 0xBF), TAG, "enable CoreS3 LDO rails failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_axp, 0x92, 13), TAG, "set CoreS3 ALDO1 voltage failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_axp, 0x93, 28), TAG, "set CoreS3 ALDO2 voltage failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_axp, 0x94, 28), TAG, "set CoreS3 ALDO3 voltage failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_axp, 0x95, 28), TAG, "set CoreS3 ALDO4 voltage failed");
+    ESP_RETURN_ON_ERROR(write_reg(s_axp, 0x99, 28), TAG, "set CoreS3 backlight voltage failed");
     ESP_LOGI(TAG, "CoreS3 I2C ready (SDA=%d SCL=%d, AXP2101=0x%02x, AW9523B=0x%02x)",
              CORES3_I2C_SDA, CORES3_I2C_SCL, AXP2101_ADDR, AW9523B_ADDR);
     return openpencil_m5cores3_lcd_reset();

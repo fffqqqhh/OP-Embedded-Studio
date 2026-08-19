@@ -14,7 +14,8 @@ const FIRMWARE_PARTS = [
 ]
 
 const FIRMWARE_FLASH_SIZES: Record<string, string> = {
-  co5300_m5stack_stopwatch: '16MB'
+  co5300_m5stack_stopwatch: '16MB',
+  ili9342_m5stack_cores3: '16MB'
 }
 
 function firmwareManifest(mode: string, profileId: string) {

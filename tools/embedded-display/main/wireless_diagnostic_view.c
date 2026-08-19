@@ -91,22 +91,15 @@ void openpencil_wireless_diagnostic_draw(uint16_t *frame_buffer, const char *lab
 {
     const int center_x = VIEW_WIDTH / 2;
     const int center_y = VIEW_HEIGHT / 2;
+    const int title_scale = VIEW_WIDTH >= 400 ? 3 : (VIEW_WIDTH >= 220 ? 2 : 1);
     const uint16_t black = diagnostic_color(0, 0, 0);
     const uint16_t white = diagnostic_color(255, 255, 255);
     const uint16_t gray = diagnostic_color(40, 40, 40);
-    const uint16_t red = diagnostic_color(255, 0, 0);
-    const uint16_t green = diagnostic_color(0, 255, 0);
-    const uint16_t blue = diagnostic_color(0, 0, 255);
-    const uint16_t yellow = diagnostic_color(255, 255, 0);
 
     fill_rect(frame_buffer, 0, 0, VIEW_WIDTH, VIEW_HEIGHT, black);
     for (int x = 40; x < VIEW_WIDTH; x += 40) fill_rect(frame_buffer, x, 0, 1, VIEW_HEIGHT, gray);
     for (int y = 40; y < VIEW_HEIGHT; y += 40) fill_rect(frame_buffer, 0, y, VIEW_WIDTH, 1, gray);
 
-    fill_rect(frame_buffer, 4, 4, 20, 20, red);
-    fill_rect(frame_buffer, VIEW_WIDTH - 24, 4, 20, 20, green);
-    fill_rect(frame_buffer, 4, VIEW_HEIGHT - 24, 20, 20, blue);
-    fill_rect(frame_buffer, VIEW_WIDTH - 24, VIEW_HEIGHT - 24, 20, 20, yellow);
     fill_rect(frame_buffer, center_x - 10, center_y, 21, 1, white);
     fill_rect(frame_buffer, center_x, center_y - 10, 1, 21, white);
     fill_rect(frame_buffer, 0, 0, VIEW_WIDTH, 1, white);
@@ -115,12 +108,12 @@ void openpencil_wireless_diagnostic_draw(uint16_t *frame_buffer, const char *lab
     fill_rect(frame_buffer, VIEW_WIDTH - 1, 0, 1, VIEW_HEIGHT, white);
 
     if (label && label[0]) {
-        const int scale = VIEW_WIDTH >= 400 ? 3 : (VIEW_WIDTH >= 220 ? 2 : 1);
-        const int text_width = (int)strlen(label) * 6 * scale;
+        const int text_width = (int)strlen(label) * 6 * title_scale;
         const int text_x = (VIEW_WIDTH - text_width) / 2;
         const int text_y = center_y + 28;
-        fill_rect(frame_buffer, text_x - 8, text_y - 6, text_width + 16, 7 * scale + 12, black);
-        draw_text(frame_buffer, text_x, text_y, label, scale, white);
+        fill_rect(frame_buffer, text_x - 8, text_y - 6,
+                  text_width + 16, 7 * title_scale + 12, black);
+        draw_text(frame_buffer, text_x, text_y, label, title_scale, white);
     }
 }
 

@@ -101,12 +101,10 @@ static esp_err_t submit_region(esp_lcd_panel_handle_t panel,
                         TAG,
                         "submit frame region failed");
 
-#if CONFIG_EXAMPLE_LCD_CONTROLLER_CO5300
     ESP_RETURN_ON_FALSE(xSemaphoreTake(s_transfer_done, pdMS_TO_TICKS(TRANSFER_DONE_TIMEOUT_MS)) == pdTRUE,
                         ESP_ERR_TIMEOUT,
                         TAG,
                         "frame transfer completion timed out");
-#endif
     return ESP_OK;
 }
 
