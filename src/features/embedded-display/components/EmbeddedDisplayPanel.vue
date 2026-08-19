@@ -1769,7 +1769,7 @@ watch([wifiSsid, wifiPassword], () => {
                   :source-width="bakeState?.width"
                   :source-height="bakeState?.height"
                   :round="selectedProfile?.visibleArea?.shape === 'round'"
-                  class="max-h-48 w-48 max-w-[76%]"
+                  class="w-[min(76%,192px)] max-w-full"
                 />
                 <div
                   v-else

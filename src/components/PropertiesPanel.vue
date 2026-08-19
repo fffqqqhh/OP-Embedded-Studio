@@ -18,6 +18,7 @@ import {
   getEmbeddedFrameBakeState
 } from '@/app/editor/embedded-display-bake'
 import { useAIChat } from '@/app/ai/chat/use'
+import { createPresetFrameName } from '@/app/editor/preset-frame-name'
 
 import ChatPanel from './ChatPanel.vue'
 import { DevicePrototypePanel, useDevicePrototype } from '@/features/device-prototype'
@@ -67,7 +68,11 @@ function handleCreateEmbeddedPresetFrame(width: number, height: number, profileN
     width,
     height
   )
-  editorStore.renameNode(frameId, `${profileName} Frame`)
+  const existingFrameNames = editorStore.graph
+    .getChildren(editorStore.state.currentPageId)
+    .filter((node) => node.type === 'FRAME' && node.id !== frameId)
+    .map((node) => node.name)
+  editorStore.renameNode(frameId, createPresetFrameName(profileName, existingFrameNames))
   editorStore.select([frameId])
   editorStore.requestRender()
 }
