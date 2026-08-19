@@ -6,8 +6,12 @@ import type {
   EmbeddedDesignSourceItem
 } from '@/features/embedded-display/model/design-source'
 
-import { getSelectedEmbeddedVisualSources, isEmbeddedVisualSource } from './embedded-display-bake'
 import { renderEmbeddedVisualPng } from './embedded-frame-render'
+import {
+  getSelectedEmbeddedVisualSources,
+  isEmbeddedVisualSource,
+  resolveEmbeddedVisualSelection
+} from './embedded-visual-source'
 
 function toSourceItem(node: SceneNode): EmbeddedDesignSourceItem {
   return {
@@ -24,6 +28,11 @@ export function createEmbeddedDesignSource(store: EditorStore): EmbeddedDesignSo
     getRevision: () => store.state.sceneVersion,
 
     getSelectedSources: () => getSelectedEmbeddedVisualSources(store).map(toSourceItem),
+
+    getSelectionError: () => {
+      const selection = resolveEmbeddedVisualSelection(store)
+      return selection.source ? null : (selection.reason ?? null)
+    },
 
     getPageSources: () =>
       store.graph

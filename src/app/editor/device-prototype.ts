@@ -1,5 +1,3 @@
-import type { SceneNode } from '@open-pencil/scene-graph'
-
 import type { EditorStore } from '@/app/editor/session'
 import type {
   DevicePrototypeFrameCandidate,
@@ -8,35 +6,33 @@ import type {
 } from '@/features/device-prototype'
 import { resolveDevicePrototypeTransitions } from '@/features/device-prototype'
 import type {
+  EmbeddedDesignSource,
+  EmbeddedDesignSourceItem,
   EmbeddedAnimatedPrototypeBakeResult,
   EmbeddedPrototypeBakeResult
 } from '@/features/embedded-display'
 
-import {
-  getEmbeddedFrameBakeState,
-  getSelectedEmbeddedVisualSources,
-  isEmbeddedVisualSource
-} from './embedded-display-bake'
-import { renderEmbeddedVisualPng } from './embedded-frame-render'
+import { createEmbeddedDesignSource } from './embedded-design-source'
+import { getEmbeddedFrameBakeStateFromSource } from './embedded-display-bake'
 
-function candidatesFromNodes(nodes: SceneNode[]): DevicePrototypeFrameCandidate[] {
+function candidatesFromItems(items: EmbeddedDesignSourceItem[]): DevicePrototypeFrameCandidate[] {
   const nameCounts = new Map<string, number>()
-  for (const node of nodes) {
-    const name = node.name.trim() || '未命名画面'
+  for (const item of items) {
+    const name = item.name.trim() || '未命名画面'
     nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1)
   }
   const nameIndexes = new Map<string, number>()
-  return nodes.map((node) => {
-    const baseName = node.name.trim() || '未命名画面'
+  return items.map((item) => {
+    const baseName = item.name.trim() || '未命名画面'
     const index = (nameIndexes.get(baseName) ?? 0) + 1
     nameIndexes.set(baseName, index)
     return {
       available: true,
-      id: node.id,
-      sourceKind: node.type === 'FRAME' ? 'frame' : 'image',
+      id: item.id,
+      sourceKind: item.sourceKind,
       name: (nameCounts.get(baseName) ?? 0) > 1 ? `${baseName} (${index})` : baseName,
-      width: node.width,
-      height: node.height
+      width: item.width,
+      height: item.height
     }
   })
 }
@@ -44,40 +40,58 @@ function candidatesFromNodes(nodes: SceneNode[]): DevicePrototypeFrameCandidate[
 export function getDevicePrototypeFrameCandidate(
   store: EditorStore
 ): DevicePrototypeFrameCandidate {
-  const source = getEmbeddedFrameBakeState(store)
+  return getDevicePrototypeFrameCandidateFromSource(createEmbeddedDesignSource(store))
+}
+
+export function getDevicePrototypeFrameCandidateFromSource(
+  source: EmbeddedDesignSource
+): DevicePrototypeFrameCandidate {
+  const state = getEmbeddedFrameBakeStateFromSource(source)
   return {
-    available: source.available,
-    id: source.id,
-    sourceKind: source.sourceKind,
-    name: source.name,
-    width: source.width,
-    height: source.height,
-    reason: source.reason
+    available: state.available,
+    id: state.id,
+    sourceKind: state.sourceKind,
+    name: state.name,
+    width: state.width,
+    height: state.height,
+    reason: state.reason
   }
 }
 
 export function getSelectedDevicePrototypeFrameCandidates(
   store: EditorStore
 ): DevicePrototypeFrameCandidate[] {
-  void store.state.sceneVersion
-  return candidatesFromNodes(getSelectedEmbeddedVisualSources(store))
+  return getSelectedDevicePrototypeFrameCandidatesFromSource(createEmbeddedDesignSource(store))
+}
+
+export function getSelectedDevicePrototypeFrameCandidatesFromSource(
+  source: EmbeddedDesignSource
+): DevicePrototypeFrameCandidate[] {
+  return candidatesFromItems(source.getSelectedSources())
 }
 
 export function getDevicePrototypeFrameCandidates(
   store: EditorStore
 ): DevicePrototypeFrameCandidate[] {
-  void store.state.sceneVersion
-  const nodes = store.graph
-    .getChildren(store.state.currentPageId)
-    .filter((node) => isEmbeddedVisualSource(node) && node.id !== store.graph.rootId)
-  return candidatesFromNodes(nodes)
+  return getDevicePrototypeFrameCandidatesFromSource(createEmbeddedDesignSource(store))
+}
+
+export function getDevicePrototypeFrameCandidatesFromSource(
+  source: EmbeddedDesignSource
+): DevicePrototypeFrameCandidate[] {
+  return candidatesFromItems(source.getPageSources())
 }
 
 export function createDevicePrototypeFrameRenderer(store: EditorStore): DevicePrototypeFrameRender {
+  return createDevicePrototypeFrameRendererFromSource(createEmbeddedDesignSource(store))
+}
+
+export function createDevicePrototypeFrameRendererFromSource(
+  source: EmbeddedDesignSource
+): DevicePrototypeFrameRender {
   return async (frameId) => {
-    const node = store.graph.getNode(frameId)
-    if (!isEmbeddedVisualSource(node)) throw new Error('交互引用的画面已不存在')
-    const data = await renderEmbeddedVisualPng(store, node.id)
+    if (!source.getSource(frameId)) throw new Error('交互引用的画面已不存在')
+    const data = await source.renderSourcePng(frameId)
     return new Blob([Uint8Array.from(data).buffer], { type: 'image/png' })
   }
 }
@@ -86,11 +100,19 @@ export async function bakeDevicePrototype(
   store: EditorStore,
   interaction: DevicePrototypeInteraction
 ): Promise<EmbeddedPrototypeBakeResult> {
+  return bakeDevicePrototypeFromSource(createEmbeddedDesignSource(store), interaction)
+}
+
+export async function bakeDevicePrototypeFromSource(
+  source: EmbeddedDesignSource,
+  interaction: DevicePrototypeInteraction
+): Promise<EmbeddedPrototypeBakeResult> {
   const states = []
   for (const state of interaction.states) {
-    const node = store.graph.getNode(state.frameId)
-    if (!isEmbeddedVisualSource(node)) throw new Error(`交互引用的画面已不存在：${state.name}`)
-    const data = await renderEmbeddedVisualPng(store, node.id)
+    if (!source.getSource(state.frameId)) {
+      throw new Error(`交互引用的画面已不存在：${state.name}`)
+    }
+    const data = await source.renderSourcePng(state.frameId)
     states.push({
       id: state.id,
       name: state.name,

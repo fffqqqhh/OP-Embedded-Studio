@@ -14,6 +14,7 @@ export interface EmbeddedDesignSourceItem {
 export interface EmbeddedDesignSource {
   getRevision(): number
   getSelectedSources(): EmbeddedDesignSourceItem[]
+  getSelectionError?(): string | null
   getPageSources(): EmbeddedDesignSourceItem[]
   getSource(id: string): EmbeddedDesignSourceItem | null
   renderSourcePng(id: string): Promise<Uint8Array>
