@@ -56,6 +56,21 @@ function handleAnimatedPrototypeBake(interactionId: string) {
   const interaction = interactions.value.find((item) => item.id === interactionId)
   return interaction ? bakeDevicePrototypeAnimation(interaction) : null
 }
+
+function handleCreateEmbeddedPresetFrame(width: number, height: number, profileName: string) {
+  const viewportCenter = editorStore.viewportCanvasCenter()
+  const center = editorStore.screenToCanvas(viewportCenter.x, viewportCenter.y)
+  const frameId = editorStore.createShape(
+    'FRAME',
+    center.x - width / 2,
+    center.y - height / 2,
+    width,
+    height
+  )
+  editorStore.renameNode(frameId, `${profileName} Frame`)
+  editorStore.select([frameId])
+  editorStore.requestRender()
+}
 </script>
 
 <template>
@@ -158,8 +173,12 @@ function handleAnimatedPrototypeBake(interactionId: string) {
           :bake-frame="handleEmbeddedFrameBake"
           :bake-frame-by-id="handleEmbeddedFrameBakeById"
           :prototype-options="interactionOptions"
+          :prototype-interactions="interactions"
+          :render-prototype-frame="devicePrototypeFrameRenderer"
+          :prototype-render-revision="editorStore.state.sceneVersion"
           :bake-prototype="handleEmbeddedPrototypeBake"
           :bake-animation="handleAnimatedPrototypeBake"
+          :create-preset-frame="handleCreateEmbeddedPresetFrame"
         />
       </TabsContent>
     </TabsRoot>

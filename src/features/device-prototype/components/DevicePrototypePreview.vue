@@ -4,10 +4,10 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useEventListener } from '@vueuse/core'
 
 import {
-  EmbeddedDisplayContentPreview,
   embeddedImagePlacementLabel,
   type EmbeddedImagePlacement
-} from '@/features/embedded-display'
+} from '@/features/embedded-display/adapters/image'
+import EmbeddedDisplayContentPreview from '@/features/embedded-display/components/EmbeddedDisplayContentPreview.vue'
 import { DEVICE_PROTOTYPE_EVENTS } from '../model/types'
 import { resolveDevicePrototypeTransitions } from '../model/rules'
 import type {
@@ -17,16 +17,25 @@ import type {
   DevicePrototypePreviewProfile
 } from '../model/types'
 
-const { open, interaction, renderFrame, renderRevision, profile, placement, backgroundColor } =
-  defineProps<{
-    open: boolean
-    interaction: DevicePrototypeInteraction | null
-    renderFrame?: DevicePrototypeFrameRender
-    renderRevision?: number
-    profile: DevicePrototypePreviewProfile
-    placement: EmbeddedImagePlacement
-    backgroundColor: string
-  }>()
+const {
+  open,
+  inline = false,
+  interaction,
+  renderFrame,
+  renderRevision,
+  profile,
+  placement,
+  backgroundColor
+} = defineProps<{
+  open: boolean
+  inline?: boolean
+  interaction: DevicePrototypeInteraction | null
+  renderFrame?: DevicePrototypeFrameRender
+  renderRevision?: number
+  profile: DevicePrototypePreviewProfile
+  placement: EmbeddedImagePlacement
+  backgroundColor: string
+}>()
 
 const emit = defineEmits<{ 'update:open': [value: boolean] }>()
 const currentStateId = ref('')
@@ -37,6 +46,7 @@ const lastEventLabel = ref('等待操作')
 const clickCount = ref(0)
 const slideshowPaused = ref(false)
 const renderNonce = ref(0)
+const previewVisible = computed(() => inline || open)
 let clickTimer: ReturnType<typeof setTimeout> | undefined
 let longPressTimer: ReturnType<typeof setTimeout> | undefined
 let slideshowTimer: ReturnType<typeof setTimeout> | undefined
@@ -67,7 +77,7 @@ function clearAnimationTimer() {
 function scheduleAnimationFrame() {
   clearAnimationTimer()
   const animation = currentState.value?.animation
-  if (!open || !animation || animation.files.length < 2) return
+  if (!previewVisible.value || !animation || animation.files.length < 2) return
   animationTimer = setTimeout(() => {
     animationFrameIndex += 1
     if (animationFrameIndex >= animation.files.length) {
@@ -96,10 +106,10 @@ async function renderCurrentState() {
   try {
     const blob = await renderFrame(currentState.value.frameId)
     if (!blob) throw new Error('无法渲染当前 Frame')
-    if (request !== renderRequest || !open) return
+    if (request !== renderRequest || !previewVisible.value) return
     previewUrl.value = URL.createObjectURL(blob)
   } catch (error) {
-    if (request !== renderRequest || !open) return
+    if (request !== renderRequest || !previewVisible.value) return
     previewError.value = error instanceof Error ? error.message : String(error)
   } finally {
     if (request === renderRequest) previewLoading.value = false
@@ -152,7 +162,7 @@ function advanceSlideshow() {
 function scheduleSlideshow() {
   clearSlideshowTimer()
   if (
-    !open ||
+    !previewVisible.value ||
     slideshowPaused.value ||
     !interaction ||
     interaction.mode !== 'slideshow' ||
@@ -169,7 +179,7 @@ function toggleSlideshow() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (open && event.key === 'Escape') closePreview()
+  if (!inline && open && event.key === 'Escape') closePreview()
 }
 
 function dispatch(eventId: DevicePrototypeEventId) {
@@ -247,9 +257,9 @@ function handleBootPointerUp() {
 }
 
 watch(
-  () => [open, interaction?.id, interaction?.initialStateId],
+  () => [previewVisible.value, interaction?.id, interaction?.initialStateId],
   () => {
-    if (open) resetPreview()
+    if (previewVisible.value) resetPreview()
   },
   { immediate: true }
 )
@@ -260,7 +270,7 @@ watch(
 )
 watch(
   () => [
-    open,
+    previewVisible.value,
     interaction?.mode,
     interaction?.slideshow.intervalMs,
     currentStateId.value,
@@ -270,7 +280,7 @@ watch(
 )
 
 watch(
-  () => open,
+  () => previewVisible.value,
   (isOpen) => {
     if (!isOpen) {
       clearSlideshowTimer()
@@ -294,40 +304,73 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport to="body" :disabled="inline">
     <div
-      v-if="open"
-      class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-6"
+      v-if="previewVisible"
+      :class="
+        inline
+          ? 'w-full overflow-hidden rounded-panel border border-border bg-panel-field'
+          : 'fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-6'
+      "
+      :data-test-id="inline ? 'embedded-content-stage-prototype' : undefined"
       @click.self="closePreview"
     >
       <div
-        class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-2xl"
+        :class="
+          inline
+            ? 'flex h-full w-full flex-col overflow-hidden'
+            : 'flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-2xl'
+        "
       >
-        <header class="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+        <header
+          v-if="!inline"
+          :class="
+            inline
+              ? 'flex min-h-9 shrink-0 items-center gap-1.5 border-b border-border px-2'
+              : 'flex h-12 shrink-0 items-center gap-3 border-b border-border px-4'
+          "
+        >
           <div class="min-w-0 flex-1">
-            <div class="truncate text-sm font-semibold text-surface">
+            <div
+              :class="
+                inline
+                  ? 'truncate text-[11px] font-medium text-surface'
+                  : 'truncate text-sm font-semibold text-surface'
+              "
+            >
               {{ interaction?.name || '交互预览' }}
             </div>
-            <div class="truncate text-[11px] text-muted">
+            <div
+              :class="inline ? 'truncate text-[9px] text-muted' : 'truncate text-[11px] text-muted'"
+            >
               {{ currentState?.name || '没有可预览的状态' }} · {{ lastEventLabel }}
             </div>
           </div>
           <button
             type="button"
             v-if="interaction?.mode === 'slideshow'"
-            class="rounded px-2 py-1 text-xs text-muted hover:text-surface"
+            :class="
+              inline
+                ? 'rounded px-1.5 py-1 text-[10px] text-muted hover:text-surface'
+                : 'rounded px-2 py-1 text-xs text-muted hover:text-surface'
+            "
             @click="toggleSlideshow"
           >
             {{ slideshowPaused ? '继续' : '暂停' }}
           </button>
           <button
             type="button"
-            class="rounded px-2 py-1 text-xs text-muted hover:text-surface"
+            :class="
+              inline
+                ? 'rounded px-1.5 py-1 text-[10px] text-muted hover:text-surface'
+                : 'rounded px-2 py-1 text-xs text-muted hover:text-surface'
+            "
             @click="resetPreview"
           >
             重新开始
           </button>
           <button
+            v-if="!inline"
             type="button"
             class="rounded px-2 py-1 text-xs text-muted hover:text-surface"
             @click="closePreview"
@@ -336,14 +379,29 @@ onUnmounted(() => {
           </button>
         </header>
         <div
-          class="flex min-h-0 flex-1 items-center justify-center gap-6 overflow-auto bg-canvas p-6"
+          :class="
+            inline
+              ? 'flex min-h-0 flex-col overflow-hidden bg-panel-field'
+              : 'flex min-h-0 flex-1 items-center justify-center gap-6 overflow-auto bg-canvas p-6'
+          "
         >
-          <div class="flex min-w-0 flex-col items-center gap-3">
+          <div
+            :class="
+              inline
+                ? 'flex h-52 w-full min-w-0 shrink-0 items-center justify-center p-2'
+                : 'flex min-w-0 flex-col items-center gap-3'
+            "
+          >
             <div
-              class="relative max-h-[68vh] max-w-full select-none overflow-hidden rounded-lg bg-black shadow-lg"
+              :class="
+                inline
+                  ? 'relative max-w-full select-none overflow-hidden bg-black'
+                  : 'relative max-h-[68vh] max-w-full select-none overflow-hidden rounded-lg bg-black shadow-lg'
+              "
               :style="{
                 aspectRatio: `${profile.resolution.width} / ${profile.resolution.height}`,
-                width: 'min(68vh, 420px)',
+                width: inline ? 'min(76%, 192px)' : 'min(68vh, 420px)',
+                maxHeight: inline ? '192px' : undefined,
                 backgroundColor:
                   previewUrl && profile.visibleArea?.shape === 'round'
                     ? 'transparent'
@@ -382,12 +440,12 @@ onUnmounted(() => {
                 {{ previewError || '请选择包含状态的交互' }}
               </span>
             </div>
-            <p class="text-center text-[11px] text-muted">
+            <p v-if="!inline" class="text-center text-[11px] text-muted">
               {{ profile.name }} · {{ profile.resolution.width }} ×
               {{ profile.resolution.height }} ·
               {{ embeddedImagePlacementLabel(placement) }}
             </p>
-            <p class="text-center text-[11px] text-muted">
+            <p v-if="!inline" class="text-center text-[11px] text-muted">
               {{
                 interaction?.mode === 'slideshow'
                   ? `每 ${(interaction.slideshow.intervalMs / 1000).toFixed(1)} 秒自动切换`
@@ -396,7 +454,76 @@ onUnmounted(() => {
             </p>
           </div>
           <div
-            v-if="interaction?.mode !== 'slideshow'"
+            v-if="inline"
+            class="grid h-24 w-full min-w-0 shrink-0 grid-rows-3 border-t border-border px-3"
+          >
+            <p class="flex min-w-0 items-center truncate text-[11px] font-medium text-surface">
+              {{ interaction?.name || '未选择交互' }}
+            </p>
+            <p class="flex min-w-0 items-center truncate text-[9px] text-muted">
+              <template v-if="interaction">
+                {{ currentState?.name || '没有可预览的状态' }} ·
+                {{ interaction.states.length }} 个画面 · {{ profile.resolution.width }} ×
+                {{ profile.resolution.height }}
+              </template>
+              <template v-else>选择交互后可在上方直接操作预览</template>
+            </p>
+            <div class="flex min-w-0 items-center gap-1.5">
+              <div class="min-w-0 flex-1">
+                <slot name="controls" />
+              </div>
+              <button
+                v-if="interaction?.mode === 'slideshow'"
+                type="button"
+                class="flex h-7 shrink-0 items-center gap-1 rounded-panel border border-border bg-canvas px-2 text-[9px] text-surface hover:bg-hover"
+                @click="toggleSlideshow"
+              >
+                <icon-lucide-play v-if="slideshowPaused" class="size-3" />
+                <icon-lucide-pause v-else class="size-3" />
+                {{ slideshowPaused ? '播放' : '暂停' }}
+              </button>
+              <button
+                type="button"
+                class="flex size-7 shrink-0 items-center justify-center rounded-panel border border-border bg-canvas text-muted hover:bg-hover hover:text-surface disabled:opacity-50"
+                :disabled="!interaction"
+                title="重新开始"
+                @click="resetPreview"
+              >
+                <icon-lucide-rotate-ccw class="size-3.5" />
+              </button>
+              <button
+                v-if="interaction?.mode !== 'slideshow' && isStopwatch"
+                type="button"
+                title="触发 StopWatch A 键"
+                class="flex size-7 shrink-0 select-none items-center justify-center rounded-panel border border-border bg-canvas text-[9px] font-semibold text-surface hover:bg-hover active:scale-95"
+                @click="dispatch('stopwatch_button_a_click')"
+              >
+                A
+              </button>
+              <button
+                v-if="interaction?.mode !== 'slideshow' && isStopwatch"
+                type="button"
+                title="触发 StopWatch B 键"
+                class="flex size-7 shrink-0 select-none items-center justify-center rounded-panel border border-border bg-canvas text-[9px] font-semibold text-surface hover:bg-hover active:scale-95"
+                @click="dispatch('stopwatch_button_b_click')"
+              >
+                B
+              </button>
+              <button
+                v-if="interaction?.mode !== 'slideshow'"
+                type="button"
+                class="flex h-7 shrink-0 select-none items-center justify-center rounded-panel border border-border bg-canvas px-1.5 text-[9px] font-semibold text-surface hover:bg-hover active:scale-95"
+                @pointerdown="handleBootPointerDown"
+                @pointerup="handleBootPointerUp"
+                @pointerleave="handlePointerCancel"
+                @pointercancel="handlePointerCancel"
+              >
+                BOOT
+              </button>
+            </div>
+          </div>
+          <div
+            v-else-if="interaction?.mode !== 'slideshow'"
             class="flex shrink-0 flex-col items-center gap-2"
           >
             <div v-if="isStopwatch" class="flex items-center gap-3">

@@ -12,6 +12,7 @@ import { APP_MENU_SCHEMA } from '@/app/shell/menu/schema'
 import { appMenuShortcutLabel } from '@/app/shell/menu/shortcut'
 import { openFileDialog } from '@/app/shell/menu/use'
 import { useAppTheme } from '@/app/shell/theme'
+import { embeddedDisplayAdvancedDebugMode } from '@/features/embedded-display/debug'
 
 export interface AppMenuGroup {
   label: string
@@ -108,6 +109,8 @@ export function useAppMenu() {
         return store.renderer?.profiler.hudVisible ?? false
       case 'layer-order-front-first':
         return showTopLayersFirst.value
+      case 'embedded-display-advanced-debug':
+        return embeddedDisplayAdvancedDebugMode.value
       case 'theme-light':
         return theme.value === 'light'
       case 'theme-dark':
@@ -130,6 +133,10 @@ export function useAppMenu() {
       case 'layer-order-front-first':
         return (value: boolean) => {
           showTopLayersFirst.value = value
+        }
+      case 'embedded-display-advanced-debug':
+        return (value: boolean) => {
+          embeddedDisplayAdvancedDebugMode.value = value
         }
       case 'theme-light':
       case 'theme-dark':

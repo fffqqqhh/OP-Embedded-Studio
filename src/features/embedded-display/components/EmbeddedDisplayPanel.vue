@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 
 import AppSelect from '@/components/ui/AppSelect.vue'
-import IconButton from '@/components/ui/IconButton.vue'
 import { PanelHeader, PanelSection } from '@/components/ui/panel'
 import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 
@@ -42,8 +41,14 @@ import type { SerialPortLike } from '../adapters/serial-flasher'
 import { useBleDeviceSession } from '../composables/useBleDeviceSession'
 import { useEmbeddedDisplay } from '../composables/useEmbeddedDisplay'
 import { useSerialDeviceSession } from '../composables/useSerialDeviceSession'
+import DevicePrototypePreview from '@/features/device-prototype/components/DevicePrototypePreview.vue'
 import EmbeddedDisplayContentPreview from './EmbeddedDisplayContentPreview.vue'
 import WifiLiveMirrorPanel from '../live-mirror/components/WifiLiveMirrorPanel.vue'
+import { embeddedDisplayAdvancedDebugMode } from '../debug'
+import type {
+  DevicePrototypeFrameRender,
+  DevicePrototypeInteraction
+} from '@/features/device-prototype/model/types'
 import type {
   EmbeddedBuildMode,
   EmbeddedFrameBake,
@@ -57,13 +62,28 @@ import type {
   EmbeddedPrototypePayload
 } from '../model/types'
 
-const { bakeState, bakeFrame, bakeFrameById, bakePrototype, bakeAnimation, prototypeOptions } = defineProps<{
+const {
+  bakeState,
+  bakeFrame,
+  bakeFrameById,
+  bakePrototype,
+  bakeAnimation,
+  prototypeOptions,
+  prototypeInteractions,
+  renderPrototypeFrame,
+  prototypeRenderRevision,
+  createPresetFrame
+} = defineProps<{
   bakeState?: EmbeddedFrameBakeState
   bakeFrame?: EmbeddedFrameBake
   bakeFrameById?: EmbeddedFrameBakeById
   bakePrototype?: EmbeddedPrototypeBake
   bakeAnimation?: EmbeddedAnimatedPrototypeBake
   prototypeOptions?: EmbeddedPrototypeOption[]
+  prototypeInteractions?: DevicePrototypeInteraction[]
+  renderPrototypeFrame?: DevicePrototypeFrameRender
+  prototypeRenderRevision?: number
+  createPresetFrame?: (width: number, height: number, profileName: string) => void
 }>()
 
 type BurnMode = 'frame' | 'prototype'
@@ -71,6 +91,7 @@ type TransportMode = 'usb' | 'wifi' | 'ble' | 'wifi-live'
 type UsbDisplayBackend = 'standard' | 'm5gfx'
 type FrameResourceSource = 'baked' | 'uploaded' | null
 type WirelessTransportMode = 'wifi' | 'ble' | 'wifi-live'
+type ContentUploadMode = 'frame' | 'prototype' | 'local'
 type FirmwareInitializationStatus = 'idle' | 'uploading' | 'success' | 'error'
 
 interface FirmwareInitializationState {
@@ -108,10 +129,23 @@ const wirelessStatus = ref<'idle' | 'checking' | 'uploading' | 'success' | 'erro
 const wirelessMessage = ref('连接设备后，可直接传输当前图片')
 const wirelessDeviceReady = ref(false)
 const wifiBaseFirmwareReady = ref(false)
-const DEFAULT_WIFI_AP_SSID = 'OP-Embedded-Setup'
-const DEFAULT_WIFI_AP_PASSWORD = 'opembedded'
-const deviceDetailsOpen = ref(false)
 const liveMirrorBusy = ref(false)
+const contentUploadMode = ref<ContentUploadMode>('frame')
+const framePreviewUrl = ref('')
+const framePreviewPending = ref(false)
+const localContentFiles = ref<File[]>([])
+const localPreviewUrls = ref<string[]>([])
+const localPreviewIndex = ref(0)
+const localPreviewPlaying = ref(true)
+const localDropActive = ref(false)
+const localFileInput = ref<HTMLInputElement>()
+let localPreviewTimer: number | undefined
+let framePreviewRequest = 0
+const activeUploadId = ref<number | null>(null)
+const uploadTaskLabel = ref('')
+const uploadTaskStatus = ref<'idle' | 'running' | 'success' | 'error' | 'cancelled'>('idle')
+let uploadTaskSequence = 0
+let activeUploadController: AbortController | null = null
 const usbFlashing = ref(false)
 const usbPreparing = ref(false)
 const contentUploadProgress = ref(0)
@@ -161,9 +195,6 @@ const prototypeError = ref('')
 const {
   selectedProfile,
   profiles,
-  variables,
-  selectedImageName,
-  previewUrl,
   imagePlacement,
   frameBackgroundColor,
   imagePayload,
@@ -178,8 +209,7 @@ const {
   selectImage,
   selectUsbImageSequence,
   selectPrototype,
-  loadCachedFirmware,
-  loadProfiles
+  loadCachedFirmware
 } = useEmbeddedDisplay()
 
 const resolutionLabel = computed(() => {
@@ -191,14 +221,42 @@ const imagePlacementOptions: Array<{ value: EmbeddedImagePlacement; label: strin
   { value: 'contain', label: '等比缩放' },
   { value: 'pixel-perfect', label: '不缩放' }
 ]
+const contentUploadOptions: Array<{ value: ContentUploadMode; label: string }> = [
+  { value: 'frame', label: 'Frame' },
+  { value: 'prototype', label: '交互' },
+  { value: 'local', label: '本地' }
+]
 const imagePlacementSummary = computed(() => embeddedImagePlacementLabel(imagePlacement.value))
+const localPreviewUrl = computed(() => localPreviewUrls.value[localPreviewIndex.value] ?? '')
+const localContentLabel = computed(() => {
+  if (!localContentFiles.value.length) return '图片、GIF 或 PNG 序列'
+  if (localContentFiles.value.length === 1) return localContentFiles.value[0]?.name ?? '本地图片'
+  return `${localContentFiles.value.length} 帧 PNG 序列 · 20 FPS`
+})
+const localContentPrimary = computed(() => {
+  if (!localContentFiles.value.length) return '0 帧'
+  if (localContentFiles.value.length === 1) return '1 个文件'
+  return `${localContentFiles.value.length} 帧`
+})
+const localContentSecondary = computed(() => {
+  const firstFileName = localContentFiles.value[0]?.name
+  if (!firstFileName) return '图片、GIF 或 PNG 序列'
+  return localContentFiles.value.length > 1 ? `PNG 序列 · 20 FPS · ${firstFileName}` : firstFileName
+})
 const availablePrototypeOptions = computed(() =>
   (prototypeOptions ?? []).filter(
     (option) => transportMode.value === 'usb' || option.contentKind !== 'animated-prototype'
   )
 )
 const selectedPrototype = computed(
-  () => availablePrototypeOptions.value.find((option) => option.id === selectedPrototypeId.value) ?? null
+  () =>
+    availablePrototypeOptions.value.find((option) => option.id === selectedPrototypeId.value) ??
+    null
+)
+const selectedPrototypePreview = computed(
+  () =>
+    prototypeInteractions?.find((interaction) => interaction.id === selectedPrototypeId.value) ??
+    null
 )
 const selectedInteractionIsSlideshow = computed(() => selectedPrototype.value?.mode === 'slideshow')
 const selectedInteractionIsAnimated = computed(
@@ -215,41 +273,89 @@ const selectedPrototypeSelectValue = computed({
     selectedPrototypeId.value = value === NO_PROTOTYPE_VALUE ? '' : value
   }
 })
-const modeSwitchLocked = computed(
-  () =>
-    usbFlashing.value ||
-    usbPreparing.value ||
-    usbInitialization.value.status === 'uploading' ||
-    serialSession.selecting.value ||
-    liveMirrorBusy.value ||
-    wirelessInitialization.value.wifi.status === 'uploading' ||
-    wirelessInitialization.value.ble.status === 'uploading' ||
-    wirelessInitialization.value['wifi-live'].status === 'uploading' ||
-    bakePending.value ||
-    prototypePending.value ||
-    ['uploading', 'building'].includes(buildStatus.value) ||
-    ['checking', 'uploading'].includes(wirelessStatus.value) ||
-    ['checking', 'uploading'].includes(bleSession.status.value)
+const uploadTaskRunning = computed(() => activeUploadId.value !== null)
+const uploadTaskProgress = computed(() =>
+  transportMode.value === 'ble' ? bleSession.progress.value : contentUploadProgress.value
 )
-const burnModeOptions = computed(() =>
-  [
-    { value: 'frame', label: '单 Frame' },
-    { value: 'prototype', label: '交互' }
-  ].map((option) => ({
-    ...option,
-    disabled: modeSwitchLocked.value && option.value !== burnMode.value
-  }))
+const uploadTaskMessage = computed(() => {
+  let transportMessage = buildMessage.value
+  if (transportMode.value === 'ble') transportMessage = bleSession.message.value
+  if (transportMode.value === 'wifi') transportMessage = wirelessMessage.value
+  if (uploadTaskStatus.value === 'cancelled') return '上传已取消，可以开始新的操作'
+  if (uploadTaskStatus.value === 'error') return transportMessage || '上传失败'
+  if (uploadTaskStatus.value === 'success') return transportMessage || '上传完成'
+  if (uploadTaskRunning.value) return transportMessage || uploadTaskLabel.value
+  return transportMessage
+})
+
+function beginUploadTask(label: string): number {
+  activeUploadController?.abort()
+  const id = ++uploadTaskSequence
+  activeUploadId.value = id
+  uploadTaskLabel.value = label
+  uploadTaskStatus.value = 'running'
+  activeUploadController = new AbortController()
+  contentUploadProgress.value = 0
+  return id
+}
+
+function isUploadTaskCurrent(id: number): boolean {
+  return activeUploadId.value === id
+}
+
+function finishUploadTask(id: number, status: 'success' | 'error' = 'success'): void {
+  if (!isUploadTaskCurrent(id)) return
+  activeUploadId.value = null
+  uploadTaskStatus.value = status
+  activeUploadController = null
+}
+
+function currentUploadFailed(): boolean {
+  if (buildStatus.value === 'error') return true
+  if (transportMode.value === 'ble') return bleSession.status.value === 'error'
+  if (transportMode.value === 'wifi') return wirelessStatus.value === 'error'
+  return false
+}
+
+function cancelUploadTask(): void {
+  if (!uploadTaskRunning.value) return
+  uploadTaskSequence += 1
+  activeUploadController?.abort()
+  activeUploadController = null
+  activeUploadId.value = null
+  uploadTaskStatus.value = 'cancelled'
+  uploadTaskLabel.value = '上传已取消'
+  usbFlashing.value = false
+  usbPreparing.value = false
+  bakePending.value = false
+  prototypePending.value = false
+  contentUploadProgress.value = 0
+  buildStatus.value = 'idle'
+  buildMessage.value = '上传已取消，可以开始新的操作'
+  if (wirelessStatus.value === 'uploading' || wirelessStatus.value === 'checking') {
+    wirelessStatus.value = 'idle'
+  }
+  if (bleSession.status.value === 'uploading' || bleSession.status.value === 'checking') {
+    bleSession.cancelUpload()
+  }
+}
+
+const modeSwitchLocked = computed(
+  () => uploadTaskRunning.value || serialSession.selecting.value || liveMirrorBusy.value
 )
 const transportOptions = computed(() =>
   [
-    { value: 'usb', label: 'USB' },
-    { value: 'wifi', label: 'Wi-Fi' },
-    { value: 'ble', label: 'BLE' },
-    { value: 'wifi-live', label: 'Wi-Fi 实时镜像' }
-  ].map((option) => ({
-    ...option,
-    disabled: modeSwitchLocked.value && option.value !== transportMode.value
-  }))
+    { value: 'usb' as const, label: 'USB' },
+    { value: 'wifi' as const, label: 'Wi-Fi', debugOnly: true },
+    { value: 'ble' as const, label: 'BLE' },
+    { value: 'wifi-live' as const, label: 'Wi-Fi 实时镜像', debugOnly: true }
+  ]
+    .filter((option) => !option.debugOnly || embeddedDisplayAdvancedDebugMode.value)
+    .map(({ value, label }) => ({
+      value,
+      label,
+      disabled: modeSwitchLocked.value && value !== transportMode.value
+    }))
 )
 const transportModeLabel = computed(
   () =>
@@ -262,10 +368,7 @@ const profileOptions = computed(() =>
   profiles.value.flatMap((profile) => {
     const baseOption = { value: profile.id, label: profile.name }
     if (profile.id !== M5_STOPWATCH_PROFILE_ID) return [baseOption]
-    return [
-      baseOption,
-      { value: M5GFX_DEVICE_OPTION_ID, label: `${profile.name}（M5GFX USB）` }
-    ]
+    return [baseOption, { value: M5GFX_DEVICE_OPTION_ID, label: `${profile.name}（M5GFX USB）` }]
   })
 )
 const selectedDeviceOptionId = computed(() =>
@@ -327,32 +430,43 @@ const canWifiBakeAndUpload = computed(
         prototypeReason.value === '' &&
         !prototypePending.value)
 )
-const canWifiFileUpload = computed(
-  () => wifiTransferAvailable.value && !bakePending.value && !prototypePending.value
-)
-const canBleFileUpload = computed(
+const canUploadCurrent = computed(
   () =>
-    transportMode.value === 'ble' &&
-    burnMode.value === 'frame' &&
-    (bleSession.deviceReady.value || bleSession.canReconnect.value) &&
-    !['checking', 'uploading'].includes(bleSession.status.value) &&
-    !bakePending.value &&
-    !prototypePending.value
+    Boolean(selectedProfile.value && bakeState?.available) &&
+    transportMode.value !== 'wifi-live' &&
+    !uploadTaskRunning.value
 )
+const canUploadInteraction = computed(
+  () =>
+    Boolean(selectedProfile.value && selectedPrototype.value && selectedPrototype.value.valid) &&
+    transportMode.value !== 'wifi-live' &&
+    !uploadTaskRunning.value
+)
+const canUploadLocal = computed(
+  () =>
+    Boolean(selectedProfile.value && localContentFiles.value.length) &&
+    transportMode.value !== 'wifi-live' &&
+    !uploadTaskRunning.value
+)
+const canUploadSelectedContent = computed(() => {
+  if (contentUploadMode.value === 'frame') return canUploadCurrent.value
+  if (contentUploadMode.value === 'prototype') return canUploadInteraction.value
+  return canUploadLocal.value
+})
 const NO_PROTOTYPE_VALUE = '__embedded-display-no-prototype__'
-function interactionModeLabel(mode: EmbeddedPrototypeOption['mode']): string {
-  if (mode === 'slideshow') return '幻灯片'
-  if (mode === 'manual') return '手动浏览'
-  return '自定义'
-}
-
 const prototypeSelectOptions = computed(() => [
   { value: NO_PROTOTYPE_VALUE, label: '请选择交互' },
   ...availablePrototypeOptions.value.map((option) => ({
     value: option.id,
-    label: `${option.name} · ${interactionModeLabel(option.mode)} · ${option.stateCount} 个画面`
+    label: option.name
   }))
 ])
+
+function handleCreatePresetFrame(): void {
+  const profile = selectedProfile.value
+  if (!profile || !createPresetFrame) return
+  createPresetFrame(profile.resolution.width, profile.resolution.height, profile.name)
+}
 const bakeReason = computed(() => {
   if (!bakeState) return '请在画布中选中一个 Frame 或 Frame 内的元素'
   if (!bakeState.available) return bakeState.reason || '当前选择无法烘焙'
@@ -370,16 +484,6 @@ const canBake = computed(
     Boolean(bakeFrame && bakeState?.available) &&
     bakeReason.value === '' &&
     !bakePending.value &&
-    !['uploading', 'building'].includes(buildStatus.value)
-)
-const canPreparePrototype = computed(
-  () =>
-    (transportMode.value === 'usb' ||
-      transportMode.value === 'wifi' ||
-      transportMode.value === 'ble') &&
-    Boolean((bakePrototype || bakeAnimation) && selectedPrototype.value) &&
-    prototypeReason.value === '' &&
-    !prototypePending.value &&
     !['uploading', 'building'].includes(buildStatus.value)
 )
 const canUsbFrameFlash = computed(
@@ -446,15 +550,103 @@ watch(
   () => {
     prototypePrepared.value = false
     prototypeError.value = ''
+    void refreshFramePreview()
   }
 )
 
-async function handleBakeFrame(): Promise<boolean> {
+function clearLocalPreviewTimer(): void {
+  if (localPreviewTimer !== undefined) window.clearInterval(localPreviewTimer)
+  localPreviewTimer = undefined
+}
+
+function clearLocalPreview(): void {
+  clearLocalPreviewTimer()
+  for (const url of localPreviewUrls.value) URL.revokeObjectURL(url)
+  localPreviewUrls.value = []
+  localPreviewIndex.value = 0
+}
+
+function restartLocalPreview(): void {
+  clearLocalPreviewTimer()
+  localPreviewIndex.value = 0
+  if (!localPreviewPlaying.value || localPreviewUrls.value.length < 2) return
+  localPreviewTimer = window.setInterval(() => {
+    localPreviewIndex.value = (localPreviewIndex.value + 1) % localPreviewUrls.value.length
+  }, 50)
+}
+
+function setLocalContentFiles(files: File[]): void {
+  const imageFiles = files.filter((file) => file.type.startsWith('image/'))
+  if (!imageFiles.length) return
+  clearLocalPreview()
+  localContentFiles.value = imageFiles
+  localPreviewUrls.value = imageFiles.map((file) => URL.createObjectURL(file))
+  localPreviewPlaying.value = imageFiles.length > 1
+  restartLocalPreview()
+  contentUploadMode.value = 'local'
+  bakeError.value = ''
+}
+
+function handleLocalContentChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  setLocalContentFiles([...(input.files ?? [])])
+  input.value = ''
+}
+
+function handleLocalDrop(event: DragEvent): void {
+  event.preventDefault()
+  localDropActive.value = false
+  setLocalContentFiles([...(event.dataTransfer?.files ?? [])])
+}
+
+async function refreshFramePreview(): Promise<void> {
+  const request = ++framePreviewRequest
+  if (!bakeFrame || !bakeState?.available || !selectedProfile.value) {
+    if (framePreviewUrl.value) URL.revokeObjectURL(framePreviewUrl.value)
+    framePreviewUrl.value = ''
+    framePreviewPending.value = false
+    return
+  }
+  framePreviewPending.value = true
+  try {
+    const file = await bakeFrame()
+    if (request !== framePreviewRequest || !file) return
+    if (framePreviewUrl.value) URL.revokeObjectURL(framePreviewUrl.value)
+    framePreviewUrl.value = URL.createObjectURL(file)
+  } catch (error) {
+    if (request === framePreviewRequest)
+      bakeError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (request === framePreviewRequest) framePreviewPending.value = false
+  }
+}
+
+watch(
+  [contentUploadMode, () => bakeState?.id, () => bakeState?.revision],
+  ([mode]) => {
+    if (mode === 'frame') void refreshFramePreview()
+  },
+  { immediate: true }
+)
+
+watch([contentUploadMode, localPreviewPlaying, () => localPreviewUrls.value.length], ([mode]) => {
+  if (mode === 'local') restartLocalPreview()
+  else clearLocalPreviewTimer()
+})
+
+onUnmounted(() => {
+  framePreviewRequest += 1
+  if (framePreviewUrl.value) URL.revokeObjectURL(framePreviewUrl.value)
+  clearLocalPreview()
+})
+
+async function handleBakeFrame(taskId?: number): Promise<boolean> {
   if (!bakeFrame || !canBake.value) return false
   bakePending.value = true
   bakeError.value = ''
   try {
     const file = await bakeFrame()
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return false
     if (!file) return false
     await selectImage(file, {
       upload: false,
@@ -471,8 +663,8 @@ async function handleBakeFrame(): Promise<boolean> {
   }
 }
 
-async function prepareUsbFrameContent(source: 'frame' | 'file'): Promise<boolean> {
-  if (source === 'frame') return handleBakeFrame()
+async function prepareUsbFrameContent(source: 'frame' | 'file', taskId?: number): Promise<boolean> {
+  if (source === 'frame') return handleBakeFrame(taskId)
   if (!uploadedUsbFiles.value.length) return false
   const files = uploadedUsbFiles.value
   await selectImage(undefined, { upload: false })
@@ -488,6 +680,7 @@ async function prepareUsbFrameContent(source: 'frame' | 'file'): Promise<boolean
       backgroundColor: frameBackgroundColor.value
     })
   }
+  if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return false
   return buildStatus.value !== 'error'
 }
 
@@ -515,7 +708,8 @@ async function resolveUsbFirmwareManifestUrl(): Promise<string> {
 async function transferPreparedUsbContent(
   port: SerialPortLike,
   contentLabel: string,
-  upload: (options: UsbFlashOptions) => Promise<number>
+  upload: (options: UsbFlashOptions) => Promise<number>,
+  taskId?: number
 ): Promise<void> {
   const manifestUrl = await resolveUsbFirmwareManifestUrl()
 
@@ -525,18 +719,27 @@ async function transferPreparedUsbContent(
     firmwareBuildMode: usbBuildMode.value,
     transfer: (activePort, firmwareUpdated) => {
       const progressStart = firmwareUpdated ? 70 : 10
+      if (taskId !== undefined && !isUploadTaskCurrent(taskId))
+        return Promise.reject(new DOMException('上传已取消', 'AbortError'))
       contentUploadProgress.value = progressStart
-      return upload(usbTransferOptions(activePort as SerialPortLike, contentLabel, progressStart))
+      return upload(
+        usbTransferOptions(activePort as SerialPortLike, contentLabel, progressStart, taskId)
+      )
     },
     onLog: (message) => {
+      if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
       const normalized = message.trim()
       if (normalized) buildLog.value.push(normalized)
     },
     onProgress: ({ percent, written, total }) => {
+      if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
       contentUploadProgress.value = 5 + Math.round(percent * 0.55)
       buildMessage.value = `检测到固件不兼容，正在自动更新：${percent}%（${written} / ${total} 字节）`
     },
-    onStage: updateUsbFirmwareStage
+    onStage: (stage, message) => {
+      if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
+      updateUsbFirmwareStage(stage, message)
+    }
   })
   clearActiveUsbPort(result.port)
 }
@@ -544,15 +747,18 @@ async function transferPreparedUsbContent(
 function usbTransferOptions(
   port: SerialPortLike,
   contentLabel: string,
-  progressStart: number
+  progressStart: number,
+  taskId?: number
 ): UsbFlashOptions {
   return {
     port,
     onLog: (message) => {
+      if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
       const normalized = message.trim()
       if (normalized) buildLog.value.push(normalized)
     },
     onProgress: ({ percent, written, total }) => {
+      if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
       contentUploadProgress.value =
         progressStart + Math.round((percent * (100 - progressStart)) / 100)
       buildMessage.value = `正在通过 USB 高速传输${contentLabel}：${percent}%（${written} / ${total} 字节）`
@@ -591,7 +797,8 @@ function preparedUsbFrameContent(source: 'frame' | 'file'): PreparedUsbFrameCont
 async function flashPreparedUsbFrame(
   port: SerialPortLike,
   requestedProfileId: string,
-  source: 'frame' | 'file'
+  source: 'frame' | 'file',
+  taskId?: number
 ): Promise<void> {
   const content = preparedUsbFrameContent(source)
   if (!content) {
@@ -613,7 +820,8 @@ async function flashPreparedUsbFrame(
   buildMessage.value = `正在准备 USB ${content.label}…`
   buildLog.value = []
   try {
-    await transferPreparedUsbContent(port, content.label, content.upload)
+    await transferPreparedUsbContent(port, content.label, content.upload, taskId)
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
     contentUploadProgress.value = 100
     buildStatus.value = 'ready'
     buildMessage.value = content.successMessage
@@ -627,7 +835,7 @@ async function flashPreparedUsbFrame(
   }
 }
 
-async function handleUsbFrameBakeAndFlash(source: 'frame' | 'file' = 'frame') {
+async function handleUsbFrameBakeAndFlash(source: 'frame' | 'file' = 'frame', taskId?: number) {
   const requestedProfileId = selectedProfile.value?.id
   const canStart = source === 'frame' ? canUsbFrameFlash.value : canUsbFileFlash.value
   if (!requestedProfileId || !canStart) return
@@ -635,8 +843,8 @@ async function handleUsbFrameBakeAndFlash(source: 'frame' | 'file' = 'frame') {
   usbPreparing.value = true
   try {
     const port = await serialSession.requirePort()
-    if (!(await prepareUsbFrameContent(source))) return
-    await flashPreparedUsbFrame(port, requestedProfileId, source)
+    if (!(await prepareUsbFrameContent(source, taskId))) return
+    await flashPreparedUsbFrame(port, requestedProfileId, source, taskId)
   } catch (error) {
     bakeError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -644,7 +852,7 @@ async function handleUsbFrameBakeAndFlash(source: 'frame' | 'file' = 'frame') {
   }
 }
 
-async function handleUsbPrototypeBakeAndFlash() {
+async function handleUsbPrototypeBakeAndFlash(taskId?: number) {
   if (!canUsbPrototypeFlash.value || usbPreparing.value) return
   const requestedProfileId = selectedProfile.value?.id
   if (!requestedProfileId) return
@@ -655,11 +863,15 @@ async function handleUsbPrototypeBakeAndFlash() {
     const animated = selectedInteractionIsAnimated.value
     const selectedInteraction = selectedPrototype.value
     if (!selectedInteraction) return
-    let interactionPayload: EmbeddedPrototypePayload | WirelessImageSequencePayload | EmbeddedAnimatedPrototypeBakeResult | null
+    let interactionPayload:
+      | EmbeddedPrototypePayload
+      | WirelessImageSequencePayload
+      | EmbeddedAnimatedPrototypeBakeResult
+      | null
     if (animated) {
       interactionPayload = bakeAnimation?.(selectedInteraction.id) ?? null
     } else {
-      if (!(await preparePrototypeResources(false))) return
+      if (!(await preparePrototypeResources(false, taskId))) return
       interactionPayload = selectedInteractionIsSlideshow.value
         ? usbSequencePayload.value
         : prototypePayload.value
@@ -698,7 +910,8 @@ async function handleUsbPrototypeBakeAndFlash() {
       const prototype = prototypePayload.value
       upload = (options) => flashUsbPrototypeFirmware(prototype, options)
     } else throw new Error('交互内容尚未准备完成')
-    await transferPreparedUsbContent(port, selectedInteractionModeLabel.value, upload)
+    await transferPreparedUsbContent(port, selectedInteractionModeLabel.value, upload, taskId)
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
     contentUploadProgress.value = 100
     buildStatus.value = 'ready'
     buildMessage.value = `${selectedInteractionModeLabel.value}和全部画面已写入，设备正在重启。`
@@ -714,15 +927,17 @@ async function handleUsbPrototypeBakeAndFlash() {
   }
 }
 
-async function handleBleBakeAndUpload() {
-  if (!canBleBakeAndUpload.value) return
+async function handleBleBakeAndUpload(taskId?: number) {
+  if (!canBleBakeAndUpload.value && taskId === undefined) return
   bleSequencePayload.value = null
   const requestedMode = burnMode.value
   const requestedProfileId = selectedProfile.value?.id
   if (!requestedProfileId) return
 
+  if (!(await ensureBleUploadDevice(selectedProfile.value, requestedMode, taskId))) return
+
   if (requestedMode === 'prototype') {
-    if (!(await preparePrototypeResources(false))) return
+    if (!(await preparePrototypeResources(false, taskId))) return
     if (
       transportMode.value !== 'ble' ||
       burnMode.value !== requestedMode ||
@@ -734,11 +949,11 @@ async function handleBleBakeAndUpload() {
       ? bleSequencePayload.value
       : prototypePayload.value
     if (!interactionPayload) return
-    await bleSession.upload(interactionPayload)
+    await bleSession.upload(interactionPayload, selectedProfile.value)
     return
   }
 
-  if (!(await handleBakeFrame()) || !imagePayload.value) return
+  if (!(await handleBakeFrame(taskId)) || !imagePayload.value) return
   if (
     transportMode.value !== 'ble' ||
     burnMode.value !== requestedMode ||
@@ -746,185 +961,211 @@ async function handleBleBakeAndUpload() {
   ) {
     return
   }
-  await bleSession.upload(imagePayload.value)
+  await bleSession.upload(imagePayload.value, selectedProfile.value)
 }
 
-async function handleWifiBakeAndUpload() {
-  if (!canWifiBakeAndUpload.value) return
+async function handleWifiBakeAndUpload(taskId?: number) {
+  if (!wirelessDeviceReady.value) await handleProbeWifi()
+  if (!wirelessDeviceReady.value || (taskId !== undefined && !isUploadTaskCurrent(taskId))) return
+  if (!canWifiBakeAndUpload.value && taskId === undefined) return
   wifiSequencePayload.value = null
   const requestedMode = burnMode.value
   const requestedProfileId = selectedProfile.value?.id
   if (!requestedProfileId) return
 
   if (requestedMode === 'prototype') {
-    if (!(await preparePrototypeResources(false))) return
-  } else if (!(await handleBakeFrame()) || !imagePayload.value) {
+    if (!(await preparePrototypeResources(false, taskId))) return
+  } else if (!(await handleBakeFrame(taskId)) || !imagePayload.value) {
     return
   }
 
-  await uploadWifiContent(requestedMode, requestedProfileId)
+  await uploadWifiContent(requestedMode, requestedProfileId, taskId)
 }
 
-async function handleUsbImageChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = [...(input.files ?? [])]
-  const requestedProfileId = selectedProfile.value?.id
-  if (!files.length || !requestedProfileId || !canUsbFileFlash.value) return
+async function ensureBleUploadDevice(
+  profile: NonNullable<typeof selectedProfile.value>,
+  mode: BurnMode,
+  taskId?: number
+): Promise<boolean> {
+  if (bleSession.deviceReady.value || bleSession.canReconnect.value) return true
+  buildMessage.value = '请选择要上传到的 BLE 设备'
+  const connection = await bleSession.probe(profile, mode)
+  if (!connection || !bleSession.deviceReady.value) return false
+  return taskId === undefined || isUploadTaskCurrent(taskId)
+}
 
-  frameResourceSource.value = 'uploaded'
-  uploadedUsbFiles.value = files
-  bakeError.value = ''
+async function handleUploadSelectedContent(): Promise<void> {
+  if (contentUploadMode.value === 'frame') {
+    await handleUploadCurrentFrame()
+    return
+  }
+  if (contentUploadMode.value === 'prototype') {
+    await handleUploadInteraction()
+    return
+  }
+  await handleUploadLocalContent()
+}
+
+async function handleUploadCurrentFrame(): Promise<void> {
+  const profile = selectedProfile.value
+  if (!profile || !bakeState?.available) {
+    bakeError.value = bakeReason.value
+    return
+  }
+  burnMode.value = 'frame'
+  const taskId = beginUploadTask('上传当前 Frame')
   try {
-    // File selection only prepares content. A separate button click requests Web Serial permission.
-    // Clear both USB content variants first so failed conversion can never flash stale data.
-    await selectImage(undefined, { upload: false })
-    if (files.length === 1) {
-      await selectImage(files[0], {
-        upload: false,
-        placement: imagePlacement.value,
-        backgroundColor: frameBackgroundColor.value
-      })
-    } else {
-      await selectUsbImageSequence(files, {
-        placement: imagePlacement.value,
-        backgroundColor: frameBackgroundColor.value
-      })
+    if (transportMode.value === 'usb') await handleUsbFrameBakeAndFlash('frame', taskId)
+    else if (transportMode.value === 'ble') await handleBleBakeAndUpload(taskId)
+    else if (transportMode.value === 'wifi') await handleWifiBakeAndUpload(taskId)
+    if (isUploadTaskCurrent(taskId)) {
+      finishUploadTask(taskId, currentUploadFailed() ? 'error' : 'success')
     }
-
-    const content = files.length === 1 ? imagePayload.value : usbSequencePayload.value
-    if (
-      !content ||
-      content.frameCount !== files.length ||
-      buildStatus.value === 'error' ||
-      transportMode.value !== 'usb' ||
-      burnMode.value !== 'frame' ||
-      selectedProfile.value?.id !== requestedProfileId ||
-      content.profileId !== requestedProfileId
-    ) {
-      return
-    }
-    buildMessage.value =
-      files.length === 1
-        ? '图片已准备，请点击“通过 USB 上传内容”'
-        : 'PNG 序列已准备，请点击“通过 USB 上传内容”'
   } catch (error) {
-    bakeError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    input.value = ''
+    if (!isUploadTaskCurrent(taskId)) return
+    const message = error instanceof Error ? error.message : String(error)
+    buildStatus.value = 'error'
+    buildMessage.value = message
+    finishUploadTask(taskId, 'error')
   }
 }
 
-async function handleWifiImageChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = [...(input.files ?? [])]
+async function handleUploadInteraction(): Promise<void> {
+  if (!selectedProfile.value || !selectedPrototype.value) {
+    prototypeError.value = prototypeReason.value
+    return
+  }
+  burnMode.value = 'prototype'
+  const taskId = beginUploadTask(`上传交互：${selectedPrototype.value.name}`)
+  try {
+    if (transportMode.value === 'usb') await handleUsbPrototypeBakeAndFlash(taskId)
+    else if (transportMode.value === 'ble') await handleBleBakeAndUpload(taskId)
+    else if (transportMode.value === 'wifi') await handleWifiBakeAndUpload(taskId)
+    if (isUploadTaskCurrent(taskId)) {
+      finishUploadTask(taskId, currentUploadFailed() ? 'error' : 'success')
+    }
+  } catch (error) {
+    if (!isUploadTaskCurrent(taskId)) return
+    const message = error instanceof Error ? error.message : String(error)
+    prototypeError.value = message
+    buildStatus.value = 'error'
+    buildMessage.value = message
+    finishUploadTask(taskId, 'error')
+  }
+}
+
+async function handleUploadLocalContent(): Promise<void> {
+  const files = [...localContentFiles.value]
   const profile = selectedProfile.value
-  if (!files.length || !profile || !canWifiFileUpload.value) return
+  if (!files.length || !profile) return
+
+  burnMode.value = 'frame'
+  const taskId = beginUploadTask('上传本地内容')
+  try {
+    if (transportMode.value === 'usb') {
+      const port = await serialSession.requirePort()
+      if (!isUploadTaskCurrent(taskId)) return
+      uploadedUsbFiles.value = files
+      if (!(await prepareUsbFrameContent('file', taskId))) {
+        throw new Error(bakeError.value || buildMessage.value || '本地内容准备失败')
+      }
+      await flashPreparedUsbFrame(port, profile.id, 'file', taskId)
+    } else if (transportMode.value === 'ble') {
+      if (!(await ensureBleUploadDevice(profile, 'frame', taskId))) {
+        throw new Error(bleSession.message.value || '未找到可用 BLE 设备')
+      }
+      await uploadBleLocalContent(files, profile.id, taskId)
+    } else if (transportMode.value === 'wifi') {
+      if (!wirelessDeviceReady.value) await handleProbeWifi()
+      if (!wirelessDeviceReady.value || !isUploadTaskCurrent(taskId)) {
+        throw new Error(wirelessMessage.value || '未找到可用 Wi-Fi 设备')
+      }
+      await uploadWifiLocalContent(files, profile.id, taskId)
+    }
+    if (isUploadTaskCurrent(taskId)) {
+      finishUploadTask(taskId, currentUploadFailed() ? 'error' : 'success')
+    }
+  } catch (error) {
+    if (!isUploadTaskCurrent(taskId)) return
+    const message = error instanceof Error ? error.message : String(error)
+    bakeError.value = message
+    buildStatus.value = 'error'
+    buildMessage.value = message
+    finishUploadTask(taskId, 'error')
+  }
+}
+
+async function uploadWifiLocalContent(
+  files: File[],
+  requestedProfileId: string,
+  taskId: number
+): Promise<void> {
+  const profile = selectedProfile.value
+  if (!profile || profile.id !== requestedProfileId) return
 
   frameResourceSource.value = 'uploaded'
   wifiSequencePayload.value = null
-  try {
-    await selectImage(undefined, { upload: false })
-    if (files.length === 1) {
-      await selectImage(files[0], {
-        upload: false,
-        placement: imagePlacement.value,
-        backgroundColor: frameBackgroundColor.value
-      })
-      if (
-        !isWirelessSingleImagePayload(imagePayload.value, profile.id) ||
-        buildStatus.value === 'error' ||
-        transportMode.value !== 'wifi' ||
-        burnMode.value !== 'frame' ||
-        selectedProfile.value?.id !== profile.id
-      ) {
-        return
-      }
-      await uploadWifiContent('frame', profile.id)
-      return
-    }
-
-    const sequence = await imageFilesToWifiSequence(files, profile, {
+  await selectImage(undefined, { upload: false })
+  if (files.length === 1) {
+    await selectImage(files[0], {
+      upload: false,
       placement: imagePlacement.value,
       backgroundColor: frameBackgroundColor.value
     })
-    if (
-      transportMode.value !== 'wifi' ||
-      burnMode.value !== 'frame' ||
-      selectedProfile.value?.id !== profile.id
-    )
-      return
-    wifiSequencePayload.value = sequence
-    wirelessStatus.value = 'uploading'
-    contentUploadProgress.value = 0
-    wirelessMessage.value = `正在通过 Wi-Fi 传输 PNG 序列：${sequence.frameCount} 帧…`
-    await uploadWirelessSequence(wirelessBaseUrl.value, sequence, undefined, ({ percent }) => {
-      contentUploadProgress.value = percent
+  } else {
+    wifiSequencePayload.value = await imageFilesToWifiSequence(files, profile, {
+      placement: imagePlacement.value,
+      backgroundColor: frameBackgroundColor.value
     })
-    contentUploadProgress.value = 100
-    wirelessStatus.value = 'success'
-    wirelessMessage.value = `PNG 序列已传输：${sequence.frameCount} 帧 · 20 FPS，设备正在重启`
-  } catch (error) {
-    wirelessStatus.value = 'error'
-    wirelessMessage.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    input.value = ''
   }
+  if (!isUploadTaskCurrent(taskId) || selectedProfile.value?.id !== requestedProfileId) return
+  await uploadWifiContent('frame', requestedProfileId, taskId)
 }
 
-async function handleBleImageChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = [...(input.files ?? [])]
+async function uploadBleLocalContent(
+  files: File[],
+  requestedProfileId: string,
+  taskId: number
+): Promise<void> {
   const profile = selectedProfile.value
-  if (!files.length || !profile || !canBleFileUpload.value) return
+  if (!profile || profile.id !== requestedProfileId) return
 
   frameResourceSource.value = 'uploaded'
   bleSequencePayload.value = null
-  try {
-    await selectImage(undefined, { upload: false })
-    if (files.length === 1) {
-      await selectImage(files[0], {
-        upload: false,
-        placement: imagePlacement.value,
-        backgroundColor: frameBackgroundColor.value
-      })
-      if (
-        !isWirelessSingleImagePayload(imagePayload.value, profile.id) ||
-        buildStatus.value === 'error' ||
-        transportMode.value !== 'ble' ||
-        burnMode.value !== 'frame' ||
-        selectedProfile.value?.id !== profile.id
-      )
-        return
-      await bleSession.upload(imagePayload.value)
-      return
-    }
-
-    const sequence = await imageFilesToBleSequence(files, profile, {
+  await selectImage(undefined, { upload: false })
+  if (files.length === 1) {
+    await selectImage(files[0], {
+      upload: false,
       placement: imagePlacement.value,
       backgroundColor: frameBackgroundColor.value
     })
     if (
-      transportMode.value !== 'ble' ||
-      burnMode.value !== 'frame' ||
-      selectedProfile.value?.id !== profile.id
-    )
+      !isUploadTaskCurrent(taskId) ||
+      !isWirelessSingleImagePayload(imagePayload.value, requestedProfileId)
+    ) {
       return
-    bleSequencePayload.value = sequence
-    await bleSession.upload(sequence)
-  } catch (error) {
-    bakeError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    input.value = ''
+    }
+    await bleSession.upload(imagePayload.value, profile)
+    return
   }
+
+  const sequence = await imageFilesToBleSequence(files, profile, {
+    placement: imagePlacement.value,
+    backgroundColor: frameBackgroundColor.value
+  })
+  if (!isUploadTaskCurrent(taskId) || selectedProfile.value?.id !== requestedProfileId) return
+  bleSequencePayload.value = sequence
+  await bleSession.upload(sequence, profile)
 }
 
-async function preparePrototypeResources(uploadToBuildService = false) {
+async function preparePrototypeResources(uploadToBuildService = false, taskId?: number) {
   if (!bakePrototype || !selectedPrototype.value || prototypeReason.value) return false
   prototypePending.value = true
   prototypePrepared.value = false
   prototypeError.value = ''
   try {
     const bake = await bakePrototype(selectedPrototypeId.value)
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return false
     if (!bake) throw new Error('无法读取所选交互')
     usbSequencePayload.value = null
     wifiSequencePayload.value = null
@@ -962,6 +1203,7 @@ async function preparePrototypeResources(uploadToBuildService = false) {
         placement: imagePlacement.value
       })
     }
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return false
     prototypePrepared.value = true
     return true
   } catch (error) {
@@ -970,11 +1212,6 @@ async function preparePrototypeResources(uploadToBuildService = false) {
   } finally {
     prototypePending.value = false
   }
-}
-
-async function handlePreparePrototype() {
-  if (!canPreparePrototype.value) return
-  await preparePrototypeResources()
 }
 
 function resetWirelessInitialization(mode: WirelessTransportMode) {
@@ -989,7 +1226,7 @@ function resetUsbInitialization() {
   usbInitialization.value = { status: 'idle', progress: 0, message: '' }
 }
 
-async function handleInitializeUsbFirmware() {
+async function handleInitializeUsbFirmware(taskId?: number) {
   const manifestUrl = usbManifestUrl.value
   const profileId = selectedProfile.value?.id
   if (
@@ -1030,6 +1267,7 @@ async function handleInitializeUsbFirmware() {
         preparingMessage: state.message,
         connectedMessage: '已连接，正在写入 USB 高速传输固件。',
         onLog: (message) => {
+          if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
           const normalized = message.trim()
           if (!normalized) return
           state.message = normalized
@@ -1037,12 +1275,14 @@ async function handleInitializeUsbFirmware() {
           buildLog.value.push(normalized)
         },
         onProgress: ({ percent, written, total }) => {
+          if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
           state.progress = percent
           state.message = `正在写入 USB 模式固件：${percent}%（${written} / ${total} 字节）`
           buildMessage.value = state.message
         }
       })
     )
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
     clearActiveUsbPort(port as UsbContentSerialPort)
     state.status = 'success'
     state.progress = 100
@@ -1050,6 +1290,7 @@ async function handleInitializeUsbFirmware() {
     buildStatus.value = 'ready'
     buildMessage.value = state.message
   } catch (error) {
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
     const message = error instanceof Error ? error.message : String(error)
     state.status = 'error'
     state.message = `USB 模式固件写入失败：${message}`
@@ -1059,16 +1300,16 @@ async function handleInitializeUsbFirmware() {
   }
 }
 
-async function handleInitializeFirmware() {
+async function handleInitializeFirmware(taskId?: number) {
   const mode = transportMode.value
   if (mode === 'usb') {
-    await handleInitializeUsbFirmware()
+    await handleInitializeUsbFirmware(taskId)
     return
   }
-  await handleInitializeWirelessFirmware(mode)
+  await handleInitializeWirelessFirmware(mode, taskId)
 }
 
-async function handleInitializeWirelessFirmware(mode: WirelessTransportMode) {
+async function handleInitializeWirelessFirmware(mode: WirelessTransportMode, taskId?: number) {
   if (transportMode.value !== mode) return
   const { manifestUrl, modeLabel, buildMode } = wirelessFirmwareConfiguration(mode)
   const profileId = selectedProfile.value?.id
@@ -1111,6 +1352,7 @@ async function handleInitializeWirelessFirmware(mode: WirelessTransportMode) {
       preparingMessage: state.message,
       connectedMessage: `已连接，正在写入 ${modeLabel} 模式固件。`,
       onLog: (message) => {
+        if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
         const normalized = message.trim()
         if (!normalized) return
         state.message = normalized
@@ -1118,11 +1360,13 @@ async function handleInitializeWirelessFirmware(mode: WirelessTransportMode) {
         buildLog.value.push(normalized)
       },
       onProgress: ({ percent, written, total }) => {
+        if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
         state.progress = percent
         state.message = `正在写入 ${modeLabel} 模式固件：${percent}%（${written} / ${total} 字节）`
         buildMessage.value = state.message
       }
     })
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
     state.status = 'success'
     state.progress = 100
     state.message = `${modeLabel} 模式固件已写入，设备正在重启。`
@@ -1140,12 +1384,31 @@ async function handleInitializeWirelessFirmware(mode: WirelessTransportMode) {
       wifiLiveFirmwareRevision.value += 1
     }
   } catch (error) {
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
     const message = error instanceof Error ? error.message : String(error)
     state.status = 'error'
     state.message = `${modeLabel} 模式固件写入失败：${message}`
     buildStatus.value = 'error'
     buildMessage.value = state.message
     buildLog.value.push(message)
+  }
+}
+
+async function handleInitializeFirmwareTask(): Promise<void> {
+  if (!activeFirmwareManifestUrl.value || uploadTaskRunning.value) return
+  const taskId = beginUploadTask(firmwareActionLabel.value)
+  try {
+    await handleInitializeFirmware(taskId)
+    if (isUploadTaskCurrent(taskId)) {
+      const failed = activeFirmwareInitialization.value.status === 'error'
+      finishUploadTask(taskId, failed ? 'error' : 'success')
+    }
+  } catch (error) {
+    if (!isUploadTaskCurrent(taskId)) return
+    const message = error instanceof Error ? error.message : String(error)
+    buildStatus.value = 'error'
+    buildMessage.value = message
+    finishUploadTask(taskId, 'error')
   }
 }
 
@@ -1165,12 +1428,6 @@ function wirelessFirmwareConfiguration(mode: WirelessTransportMode): {
     }
   }
   return { manifestUrl: wifiManifestUrl.value, modeLabel: 'Wi-Fi', buildMode: 'wifi-frame' }
-}
-
-async function handleProbeBle() {
-  const profile = selectedProfile.value
-  if (!profile || transportMode.value !== 'ble') return
-  await bleSession.probe(profile, burnMode.value)
 }
 
 async function handleProbeWifi() {
@@ -1216,6 +1473,9 @@ async function handleProbeWifi() {
 
 function preparedWifiContent(requestedMode: 'frame' | 'prototype'): WifiUploadContent | null {
   if (requestedMode === 'frame') {
+    if (wifiSequencePayload.value) {
+      return { kind: 'slideshow', payload: wifiSequencePayload.value }
+    }
     return imagePayload.value ? { kind: 'frame', payload: imagePayload.value } : null
   }
   if (selectedInteractionIsSlideshow.value) {
@@ -1229,20 +1489,25 @@ function preparedWifiContent(requestedMode: 'frame' | 'prototype'): WifiUploadCo
 async function sendWifiContent(
   baseUrl: string,
   content: WifiUploadContent,
-  onProgress: (progress: { percent: number }) => void
+  onProgress: (progress: { percent: number }) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   if (content.kind === 'frame') {
-    await uploadWirelessImage(baseUrl, content.payload, undefined, onProgress)
+    await uploadWirelessImage(baseUrl, content.payload, signal, onProgress)
     return
   }
   if (content.kind === 'slideshow') {
-    await uploadWirelessSequence(baseUrl, content.payload, undefined, onProgress)
+    await uploadWirelessSequence(baseUrl, content.payload, signal, onProgress)
     return
   }
-  await uploadWirelessPrototype(baseUrl, content.payload, undefined, onProgress)
+  await uploadWirelessPrototype(baseUrl, content.payload, signal, onProgress)
 }
 
-async function uploadWifiContent(requestedMode: 'frame' | 'prototype', requestedProfileId: string) {
+async function uploadWifiContent(
+  requestedMode: 'frame' | 'prototype',
+  requestedProfileId: string,
+  taskId?: number
+) {
   if (
     transportMode.value !== 'wifi' ||
     burnMode.value !== requestedMode ||
@@ -1271,7 +1536,8 @@ async function uploadWifiContent(requestedMode: 'frame' | 'prototype', requested
     const onProgress = ({ percent }: { percent: number }) => {
       contentUploadProgress.value = percent
     }
-    await sendWifiContent(requestedBaseUrl, content, onProgress)
+    await sendWifiContent(requestedBaseUrl, content, onProgress, activeUploadController?.signal)
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
     contentUploadProgress.value = 100
     wirelessStatus.value = 'success'
     wirelessMessage.value =
@@ -1281,6 +1547,7 @@ async function uploadWifiContent(requestedMode: 'frame' | 'prototype', requested
     buildLog.value.push('upload: ok')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return
     wirelessStatus.value = 'error'
     wirelessMessage.value = message
     buildLog.value.push(`upload-error: ${message}`)
@@ -1365,6 +1632,12 @@ watch(
   { immediate: true }
 )
 
+watch(embeddedDisplayAdvancedDebugMode, (enabled) => {
+  if (!enabled && (transportMode.value === 'wifi' || transportMode.value === 'wifi-live')) {
+    transportMode.value = 'usb'
+  }
+})
+
 watch([wifiSsid, wifiPassword], () => {
   wifiBaseFirmwareReady.value = false
   if (wirelessInitialization.value.wifi.status !== 'uploading') {
@@ -1393,22 +1666,8 @@ watch([wifiSsid, wifiPassword], () => {
       </template>
     </PanelHeader>
 
-    <div class="scrollbar-thin flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pb-4">
-      <PanelSection class="order-[10]" label="设备">
-        <template #actions>
-          <IconButton
-            :label="deviceDetailsOpen ? '收起设备详情' : '查看设备详情'"
-            :active="deviceDetailsOpen"
-            :disabled="!selectedProfile"
-            @click="deviceDetailsOpen = !deviceDetailsOpen"
-          >
-            <icon-lucide-info class="size-3.5" />
-          </IconButton>
-          <IconButton label="重新连接设备服务" @click="loadProfiles">
-            <icon-lucide-refresh-cw class="size-3.5" />
-          </IconButton>
-        </template>
-
+    <div class="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-3">
+      <PanelSection v-if="selectedProfile" label="固件烧录" :default-open="true">
         <AppSelect
           v-if="profiles.length"
           :model-value="selectedDeviceOptionId"
@@ -1417,198 +1676,239 @@ watch([wifiSsid, wifiPassword], () => {
           label="设备型号"
           @update:model-value="selectDeviceOption"
         />
-        <p v-else class="text-[11px] text-muted">{{ buildMessage }}</p>
-
-        <div
-          v-if="selectedProfile"
-          class="mt-panel rounded-panel border border-border bg-panel-field p-2"
-        >
-          <div class="flex items-center justify-between gap-2">
-            <span class="text-xs font-medium text-surface">传输方式</span>
-            <span class="truncate text-[10px] text-muted">{{ firmwareActionLabel }}</span>
-          </div>
+        <div class="mt-2 flex min-w-0 items-center gap-2">
           <SegmentedControl
             v-model="transportMode"
-            class="mt-2 w-full"
+            class="min-w-0 flex-1"
             :options="transportOptions"
             label="选择传输方式"
           />
-        </div>
-
-        <div
-          v-if="selectedProfile"
-          class="mt-panel rounded-panel border border-border bg-panel-field p-2"
-        >
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex min-w-0 items-center gap-2">
-              <span
-                class="size-2 shrink-0 rounded-full"
-                :class="serialSession.ready.value ? 'bg-success' : 'bg-muted'"
-              />
-              <p class="truncate text-xs font-medium text-surface">
-                {{ serialSession.ready.value ? serialSession.label.value : '串口设备' }}
-              </p>
-            </div>
-            <button
-              type="button"
-              class="h-7 shrink-0 rounded-panel border border-border bg-canvas px-2 text-[11px] font-medium text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="
-                modeSwitchLocked || serialSession.selecting.value || !serialSession.supported.value
-              "
-              @click="serialSession.selectPort"
-            >
-              {{
-                serialSession.selecting.value
-                  ? '选择中…'
-                  : serialSession.ready.value
-                    ? '更换串口'
-                    : '选择串口'
-              }}
-            </button>
-          </div>
-          <p v-if="!serialSession.supported.value" class="mt-1 text-[10px] text-error">
-            当前浏览器不支持串口
-          </p>
-        </div>
-
-        <div v-if="selectedProfile" class="mt-1.5">
           <button
             type="button"
-            class="h-control w-full rounded-panel border border-border bg-canvas px-3 text-xs font-medium text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="modeSwitchLocked || !activeFirmwareManifestUrl"
-            @click="handleInitializeFirmware"
+            class="flex h-control shrink-0 items-center gap-1.5 whitespace-nowrap rounded-panel border border-border bg-canvas px-3 text-[10px] font-medium text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="uploadTaskRunning || !activeFirmwareManifestUrl"
+            :title="
+              serialSession.ready.value ? firmwareActionLabel : `选择串口并${firmwareActionLabel}`
+            "
+            @click="handleInitializeFirmwareTask"
           >
-            {{
-              activeFirmwareInitialization.status === 'uploading'
-                ? `正在写入 ${transportModeLabel} 模式固件 ${activeFirmwareInitialization.progress}%`
-                : firmwareActionLabel
-            }}
+            <icon-lucide-download class="size-3.5" />
+            <span v-if="uploadTaskRunning && activeFirmwareInitialization.status === 'uploading'">
+              {{ activeFirmwareInitialization.progress }}%
+            </span>
+            <span v-else>固件</span>
           </button>
-          <div
-            v-if="activeFirmwareInitialization.status === 'uploading'"
-            class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel-field"
-          >
-            <div
-              class="h-full bg-accent transition-[width]"
-              :style="{ width: `${activeFirmwareInitialization.progress}%` }"
-            />
-          </div>
-          <p
-            v-if="activeFirmwareInitialization.status === 'error'"
-            class="mt-1 text-[10px] text-error"
-          >
-            {{ activeFirmwareInitialization.message }}
-          </p>
-        </div>
-
-        <div
-          v-if="selectedProfile && deviceDetailsOpen"
-          class="mt-panel grid grid-cols-[68px_minmax(0,1fr)] gap-y-1 border-t border-border pt-panel text-[11px]"
-        >
-          <span class="text-muted">分辨率</span><span>{{ resolutionLabel }}</span>
-          <span class="text-muted">控制器</span><span>{{ selectedProfile.controller }}</span>
-          <span class="text-muted">接口</span><span>{{ selectedProfile.interface }}</span>
-          <span class="text-muted">驱动</span><span>{{ selectedProfile.driverIc || '—' }}</span>
-          <span class="text-muted">验证</span
-          ><span>{{ selectedProfile.verified ? '已验证' : '待验证' }}</span>
-        </div>
-        <div
-          v-if="
-            selectedProfile &&
-            deviceDetailsOpen &&
-            (transportMode === 'wifi' || transportMode === 'wifi-live')
-          "
-          class="mt-panel border-t border-border pt-panel"
-        >
-          <label class="flex items-center gap-2 text-[11px] text-surface">
-            <input
-              v-model="wifiProvisionEnabled"
-              type="checkbox"
-              class="accent-accent"
-              :disabled="modeSwitchLocked"
-            />
-            <span>写入局域网 Wi-Fi</span>
-          </label>
-          <div v-if="wifiProvisionEnabled" class="mt-1.5 grid gap-1.5">
-            <input
-              v-model="wifiSsid"
-              class="h-control rounded-panel border border-border bg-panel-field px-2 text-xs text-surface outline-none focus:border-accent disabled:opacity-50"
-              :disabled="modeSwitchLocked"
-              type="text"
-              maxlength="32"
-              placeholder="Wi-Fi 名称"
-              aria-label="局域网 Wi-Fi 名称"
-            />
-            <input
-              v-model="wifiPassword"
-              class="h-control rounded-panel border border-border bg-panel-field px-2 text-xs text-surface outline-none focus:border-accent disabled:opacity-50"
-              :disabled="modeSwitchLocked"
-              type="password"
-              maxlength="64"
-              placeholder="Wi-Fi 密码"
-              aria-label="局域网 Wi-Fi 密码"
-            />
-          </div>
         </div>
       </PanelSection>
 
-      <PanelSection class="order-[70]" label="画面适配">
-        <template #actions>
-          <span class="text-[10px] font-normal text-muted">{{ imagePlacementSummary }}</span>
-        </template>
-        <div class="grid gap-2">
+      <PanelSection v-if="selectedProfile" label="画面设置" :default-open="true">
+        <div class="flex items-center gap-2">
           <SegmentedControl
             v-model="imagePlacement"
-            class="w-full"
+            class="min-w-0 flex-1"
             :options="imagePlacementOptions"
             label="选择画面适配方式"
+          />
+          <label
+            class="flex size-control shrink-0 cursor-pointer items-center justify-center rounded-panel border border-border bg-canvas"
+            :title="`补边颜色 ${frameBackgroundColor.toUpperCase()}`"
           >
-            <template #option="{ option }">
-              <span class="flex min-w-0 items-center justify-center gap-1">
-                <icon-lucide-expand v-if="option.value === 'stretch'" class="size-3 shrink-0" />
-                <icon-lucide-maximize-2
-                  v-else-if="option.value === 'contain'"
-                  class="size-3 shrink-0"
-                />
-                <icon-lucide-scan-line v-else class="size-3 shrink-0" />
-                <span class="truncate">{{ option.label }}</span>
-              </span>
-            </template>
-          </SegmentedControl>
-
-          <div v-if="previewUrl && selectedProfile" class="flex min-w-0 items-center gap-2">
-            <EmbeddedDisplayContentPreview
-              :src="previewUrl"
-              :alt="selectedImageName || '画面适配预览'"
-              :placement="imagePlacement"
-              :background-color="frameBackgroundColor"
-              :target-width="selectedProfile.resolution.width"
-              :target-height="selectedProfile.resolution.height"
-              :round="selectedProfile.visibleArea?.shape === 'round'"
-              class="w-20"
+            <span
+              class="size-4 rounded border border-border"
+              :style="{ backgroundColor: frameBackgroundColor }"
             />
-            <div class="min-w-0 flex-1 text-[10px] leading-4">
-              <p class="truncate text-surface">{{ selectedImageName }}</p>
-              <p class="text-muted">输出 {{ resolutionLabel }}</p>
-            </div>
-          </div>
-
-          <label class="flex h-control items-center justify-between gap-3 text-xs text-surface">
-            <span>补边颜色</span>
-            <span class="flex items-center gap-2 text-[10px] text-muted">
-              {{ frameBackgroundColor.toUpperCase() }}
-              <input
-                v-model="frameBackgroundColor"
-                type="color"
-                aria-label="画面补边颜色"
-                class="h-7 w-9 shrink-0 cursor-pointer rounded border border-border bg-canvas p-0.5"
-              />
-            </span>
+            <input
+              v-model="frameBackgroundColor"
+              type="color"
+              aria-label="画面补边颜色"
+              class="sr-only"
+            />
           </label>
+        </div>
+        <p class="mt-1.5 truncate text-[10px] text-muted">
+          {{ imagePlacementSummary }} · {{ frameBackgroundColor.toUpperCase() }} ·
+          {{ resolutionLabel }}
+        </p>
+      </PanelSection>
+
+      <PanelSection v-if="transportMode !== 'wifi-live'" label="上传内容" :default-open="true">
+        <div class="flex min-w-0 items-center gap-2">
+          <SegmentedControl
+            v-model="contentUploadMode"
+            class="min-w-0 flex-1"
+            :options="contentUploadOptions"
+            label="选择内容类型"
+          />
+          <button
+            type="button"
+            class="flex h-control shrink-0 items-center gap-1.5 rounded-panel bg-accent px-3 text-[11px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="!canUploadSelectedContent"
+            title="上传当前选中的内容"
+            @click="handleUploadSelectedContent"
+          >
+            <icon-lucide-upload class="size-3.5" />
+            上传
+          </button>
+        </div>
+
+        <div class="mt-2 min-w-0">
+          <template v-if="contentUploadMode === 'frame'">
+            <div
+              data-test-id="embedded-content-stage-frame"
+              class="min-w-0 overflow-hidden rounded-panel border border-border bg-panel-field"
+            >
+              <div class="flex h-52 items-center justify-center p-2">
+                <EmbeddedDisplayContentPreview
+                  v-if="framePreviewUrl"
+                  :src="framePreviewUrl"
+                  :alt="bakeState?.name || '当前 Frame'"
+                  :placement="imagePlacement"
+                  :background-color="frameBackgroundColor"
+                  :target-width="selectedProfile?.resolution.width || 1"
+                  :target-height="selectedProfile?.resolution.height || 1"
+                  :source-width="bakeState?.width"
+                  :source-height="bakeState?.height"
+                  :round="selectedProfile?.visibleArea?.shape === 'round'"
+                  class="max-h-48 w-48 max-w-[76%]"
+                />
+                <div
+                  v-else
+                  class="flex size-44 max-w-[76%] items-center justify-center rounded-panel border border-dashed border-border text-muted"
+                >
+                  <icon-lucide-frame class="size-6" />
+                </div>
+              </div>
+              <div class="grid h-24 min-w-0 grid-rows-3 border-t border-border px-3">
+                <p class="flex min-w-0 items-center truncate text-[11px] font-medium text-surface">
+                  {{ bakeState?.name || '当前 Frame' }}
+                </p>
+                <p class="flex min-w-0 items-center truncate text-[9px] text-muted">
+                  <template v-if="bakeState?.available">
+                    {{ bakeState.width }} × {{ bakeState.height }} · {{ imagePlacementSummary }}
+                  </template>
+                  <template v-else>
+                    {{ framePreviewPending ? '正在生成预览…' : bakeReason }}
+                  </template>
+                </p>
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    class="flex h-7 min-w-0 items-center gap-1.5 rounded-panel border border-border bg-canvas px-2 text-[9px] text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!createPresetFrame || !selectedProfile"
+                    title="按当前设备屏幕尺寸在画布中创建 Frame"
+                    @click="handleCreatePresetFrame"
+                  >
+                    <icon-lucide-square-plus class="size-3.5 shrink-0" />
+                    <span class="truncate">创建预设 Frame</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="contentUploadMode === 'prototype'">
+            <div v-if="renderPrototypeFrame && selectedProfile">
+              <DevicePrototypePreview
+                :open="true"
+                :inline="true"
+                :interaction="selectedPrototypePreview"
+                :render-frame="renderPrototypeFrame"
+                :render-revision="prototypeRenderRevision"
+                :profile="selectedProfile"
+                :placement="imagePlacement"
+                :background-color="frameBackgroundColor"
+              >
+                <template #controls>
+                  <AppSelect
+                    v-model="selectedPrototypeSelectValue"
+                    class="w-full"
+                    :options="prototypeSelectOptions"
+                    :disabled="uploadTaskRunning"
+                    label="选择要上传的交互"
+                  />
+                </template>
+              </DevicePrototypePreview>
+            </div>
+            <div
+              v-else
+              class="flex h-[306px] items-center justify-center rounded-panel border border-dashed border-border bg-panel-field text-[10px] text-muted"
+            >
+              请选择一个可预览的交互
+            </div>
+          </template>
+
+          <template v-else>
+            <div
+              data-test-id="embedded-content-stage-local"
+              class="overflow-hidden rounded-panel border border-dashed border-border bg-panel-field hover:border-accent has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
+              :class="localDropActive ? 'border-accent bg-hover' : ''"
+              @dragenter.prevent="localDropActive = true"
+              @dragover.prevent="localDropActive = true"
+              @dragleave.prevent="localDropActive = false"
+              @drop="handleLocalDrop"
+            >
+              <div class="flex h-52 items-center justify-center p-2">
+                <template v-if="localPreviewUrl">
+                  <EmbeddedDisplayContentPreview
+                    :src="localPreviewUrl"
+                    :alt="localContentLabel"
+                    :placement="imagePlacement"
+                    :background-color="frameBackgroundColor"
+                    :target-width="selectedProfile?.resolution.width || 1"
+                    :target-height="selectedProfile?.resolution.height || 1"
+                    :round="selectedProfile?.visibleArea?.shape === 'round'"
+                    class="max-h-48 w-48 max-w-[76%]"
+                  />
+                </template>
+                <div v-else class="flex flex-col items-center justify-center gap-1 text-muted">
+                  <icon-lucide-upload-cloud class="size-5 text-accent" />
+                  <span class="text-[10px]">拖入图片、GIF 或 PNG 序列</span>
+                </div>
+              </div>
+              <div class="grid h-24 min-w-0 grid-rows-3 border-t border-border px-3">
+                <p class="flex min-w-0 items-center truncate text-[11px] font-medium text-surface">
+                  {{ localContentPrimary }}
+                </p>
+                <p class="flex min-w-0 items-center truncate text-[9px] text-muted">
+                  {{ localContentSecondary }}
+                </p>
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    class="flex h-7 min-w-0 items-center gap-1.5 rounded-panel border border-border bg-canvas px-2 text-[9px] text-surface hover:bg-hover"
+                    :disabled="uploadTaskRunning"
+                    @click="localFileInput?.click()"
+                  >
+                    <icon-lucide-folder-open class="size-3.5 shrink-0" />
+                    <span class="truncate">选择文件</span>
+                  </button>
+                  <button
+                    v-if="localContentFiles.length > 1"
+                    type="button"
+                    class="flex h-7 items-center gap-1 rounded-panel border border-border bg-canvas px-2 text-[9px] text-surface hover:bg-hover"
+                    @click.prevent="localPreviewPlaying = !localPreviewPlaying"
+                  >
+                    <icon-lucide-pause v-if="localPreviewPlaying" class="size-3" />
+                    <icon-lucide-play v-else class="size-3" />
+                    {{ localPreviewPlaying ? '暂停' : '播放' }}
+                  </button>
+                </div>
+              </div>
+              <input
+                ref="localFileInput"
+                class="sr-only"
+                type="file"
+                accept="image/gif,image/png,image/jpeg,image/webp,image/bmp"
+                multiple
+                :disabled="uploadTaskRunning"
+                @change="handleLocalContentChange"
+              />
+            </div>
+          </template>
         </div>
       </PanelSection>
 
-      <div v-if="transportMode === 'wifi-live'" class="order-[50]">
+      <div v-if="transportMode === 'wifi-live' && embeddedDisplayAdvancedDebugMode">
         <WifiLiveMirrorPanel
           :key="wifiLiveFirmwareRevision"
           :profile="selectedProfile"
@@ -1620,576 +1920,41 @@ watch([wifiSsid, wifiPassword], () => {
         />
       </div>
 
-      <PanelSection v-if="transportMode === 'ble'" class="order-[40]" label="设备连接">
-        <div
-          class="flex items-center justify-between rounded-panel border border-border bg-panel-field px-2 py-2 text-[11px]"
-        >
-          <div class="flex min-w-0 items-center gap-2">
-            <span
-              class="size-2 shrink-0 rounded-full"
-              :class="bleSession.deviceReady.value ? 'bg-success' : 'bg-muted'"
-            />
-            <div class="min-w-0">
-              <p class="truncate text-surface">
-                {{ bleSession.deviceReady.value ? bleSession.deviceName.value : '尚未连接设备' }}
-              </p>
-            </div>
-          </div>
-          <span
-            class="text-[10px]"
-            :class="bleSession.deviceReady.value ? 'text-success' : 'text-muted'"
-            >{{ bleSession.deviceReady.value ? '已连接' : '未连接' }}</span
-          >
-        </div>
-        <button
-          type="button"
-          class="mt-panel h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="
-            bleSession.status.value === 'checking' || bleSession.status.value === 'uploading'
-          "
-          @click="handleProbeBle"
-        >
-          {{
-            bleSession.status.value === 'checking'
-              ? '等待选择 BLE 设备…'
-              : bleSession.deviceReady.value
-                ? '重新选择 BLE 设备'
-                : '连接 BLE 设备'
-          }}
-        </button>
-        <p v-if="bleSession.status.value === 'error'" class="mt-1 text-[10px] text-error">
-          {{ bleSession.message.value }}
-        </p>
-        <div
-          v-if="bleSession.status.value === 'uploading'"
-          class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel-field"
-        >
-          <div
-            class="h-full bg-accent transition-[width]"
-            :style="{ width: bleSession.progress.value + '%' }"
-          />
-        </div>
-      </PanelSection>
-
-      <PanelSection v-if="transportMode === 'wifi'" class="order-[40]" label="设备连接">
-        <div
-          class="flex items-center justify-between rounded-panel border border-border bg-panel-field px-2 py-2 text-[11px]"
-        >
-          <div class="flex min-w-0 items-center gap-2">
-            <span
-              class="size-2 shrink-0 rounded-full"
-              :class="wirelessDeviceReady ? 'bg-success' : 'bg-muted'"
-            />
-            <div class="min-w-0">
-              <p class="text-surface">
-                {{ wirelessDeviceReady ? '设备已连接' : '尚未连接设备' }}
-              </p>
-            </div>
-          </div>
-          <span class="text-[10px]" :class="wirelessDeviceReady ? 'text-success' : 'text-muted'">{{
-            wirelessDeviceReady ? '已连接' : '未连接'
-          }}</span>
-        </div>
-        <div
-          class="mt-panel flex items-center justify-between gap-2 rounded-panel border border-border bg-panel-field px-2 py-2 text-[11px]"
-        >
-          <span class="text-muted">设备热点</span>
-          <span class="truncate text-surface"
-            >{{ DEFAULT_WIFI_AP_SSID }} · {{ DEFAULT_WIFI_AP_PASSWORD }}</span
-          >
-        </div>
-        <input
-          v-model="wirelessBaseUrl"
-          class="mt-panel h-control w-full rounded-panel border border-border bg-panel-field px-2 text-xs text-surface outline-none focus:border-accent disabled:opacity-50"
-          :disabled="modeSwitchLocked"
-          type="url"
-          placeholder="http://192.168.4.1"
-          aria-label="设备地址"
-        />
-        <button
-          type="button"
-          class="mt-1.5 h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:opacity-50"
-          :disabled="wirelessStatus === 'checking'"
-          @click="handleProbeWifi"
-        >
-          {{ wirelessStatus === 'checking' ? '正在检查设备…' : '检查 Wi-Fi 设备连接' }}
-        </button>
-        <p v-if="wirelessStatus === 'error'" class="mt-1 text-[10px] text-error">
-          {{ wirelessMessage }}
-        </p>
-      </PanelSection>
-
-      <PanelSection
-        v-if="transportMode === 'usb' || transportMode === 'wifi' || transportMode === 'ble'"
-        class="order-[30]"
-        label="内容类型"
-      >
-        <SegmentedControl
-          v-model="burnMode"
-          class="w-full"
-          :options="burnModeOptions"
-          label="选择烧录模式"
-        />
-      </PanelSection>
-
-      <PanelSection
-        v-if="transportMode === 'usb' && burnMode === 'frame'"
-        class="order-[60]"
-        label="上传内容"
-      >
-        <div class="grid gap-2">
-          <div class="rounded-panel border border-border bg-panel-field p-2">
-            <div class="flex min-w-0 items-start justify-between gap-2">
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-xs font-medium text-surface">当前 Frame</p>
-                <p v-if="bakeState?.name" class="mt-0.5 truncate text-[10px] text-muted">
-                  {{ bakeState.name }}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              class="mt-2 h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="!canUsbFrameFlash"
-              @click="handleUsbFrameBakeAndFlash('frame')"
-            >
-              {{
-                usbFlashing && frameResourceSource === 'baked'
-                  ? '正在上传…'
-                  : '一键烘焙并上传当前 Frame'
-              }}
-            </button>
-          </div>
-
-          <div class="rounded-panel border border-border bg-panel-field p-2">
-            <div class="flex min-w-0 items-start justify-between gap-2">
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-xs font-medium text-surface">上传文件</p>
-                <p
-                  v-if="frameResourceSource === 'uploaded' && selectedImageName"
-                  class="mt-0.5 truncate text-[10px] text-muted"
-                >
-                  {{
-                    usbSequencePayload
-                      ? `${selectedImageName} · ${usbSequencePayload.frameCount} 帧`
-                      : selectedImageName
-                  }}
-                </p>
-              </div>
-            </div>
-            <label
-              class="mt-2 flex h-control w-full cursor-pointer items-center justify-center rounded-panel border border-border bg-canvas px-3 text-xs font-medium text-surface hover:bg-hover has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
-            >
-              选择图片或 PNG 序列
-              <input
-                class="sr-only"
-                type="file"
-                accept="image/gif,image/png,image/jpeg,image/webp,image/bmp"
-                multiple
-                :disabled="!canUsbFileFlash"
-                @change="handleUsbImageChange"
-              />
-            </label>
-            <button
-              v-if="frameResourceSource === 'uploaded' && (imagePayload || usbSequencePayload)"
-              type="button"
-              class="mt-2 h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="!canUsbFileFlash"
-              @click="handleUsbFrameBakeAndFlash('file')"
-            >
-              {{ usbFlashing ? '正在上传…' : '通过 USB 上传内容' }}
-            </button>
-          </div>
-        </div>
-
-        <div v-if="usbFlashing" class="mt-panel h-1.5 overflow-hidden rounded-full bg-panel-field">
-          <div
-            class="h-full bg-accent transition-[width]"
-            :style="{ width: `${contentUploadProgress}%` }"
-          />
-        </div>
-
-        <p v-if="bakeError" class="mt-panel text-[11px] text-error">
-          {{ bakeError }}
-        </p>
-        <p v-if="buildStatus === 'error'" class="mt-panel text-[10px] text-error">
-          {{ buildMessage }}
-        </p>
-      </PanelSection>
-
-      <PanelSection
-        v-if="transportMode === 'usb' && burnMode === 'prototype'"
-        class="order-[60]"
-        label="上传内容"
-      >
-        <AppSelect
-          v-model="selectedPrototypeSelectValue"
-          :options="prototypeSelectOptions"
-          :disabled="modeSwitchLocked"
-          label="命名交互"
-        />
-        <div
-          v-if="selectedPrototype"
-          class="mt-panel rounded-panel border border-border bg-panel-field p-2"
-        >
-          <div class="flex min-w-0 items-start justify-between gap-2">
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-xs font-medium text-surface">
-                {{ selectedPrototype.name }}
-              </p>
-              <p class="mt-0.5 text-[10px] leading-relaxed text-muted">
-                {{ selectedPrototype.initialStateName || '未设置初始界面' }} ·
-                {{ selectedInteractionModeLabel }} · {{ selectedPrototype.stateCount }} 个画面 ·
-                {{ selectedPrototype.width }} ×
-                {{ selectedPrototype.height }}
-              </p>
-            </div>
-            <span class="shrink-0 text-[10px] text-muted">交互</span>
-          </div>
-          <button
-            type="button"
-            class="mt-2 h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="!canUsbPrototypeFlash"
-            @click="handleUsbPrototypeBakeAndFlash"
-          >
-            {{ usbFlashing ? `正在上传${selectedInteractionModeLabel}…` : '一键烘焙并上传交互' }}
-          </button>
-        </div>
-        <div v-if="usbFlashing" class="mt-panel h-1.5 overflow-hidden rounded-full bg-panel-field">
-          <div
-            class="h-full bg-accent transition-[width]"
-            :style="{ width: `${contentUploadProgress}%` }"
-          />
-        </div>
-        <p
-          v-if="prototypeReason || prototypeError"
-          class="mt-panel text-[11px]"
-          :class="prototypeError ? 'text-error' : 'text-muted'"
-        >
-          {{ prototypeError || prototypeReason }}
-        </p>
-        <p v-if="buildStatus === 'error'" class="mt-panel text-[10px] text-error">
-          {{ buildMessage }}
-        </p>
-      </PanelSection>
-
-      <PanelSection
-        v-if="transportMode === 'wifi' && burnMode === 'frame'"
-        class="order-[60]"
-        label="上传内容"
-      >
-        <div class="grid gap-2">
-          <div class="rounded-panel border border-border bg-panel-field p-2">
-            <div class="flex min-w-0 items-start justify-between gap-2">
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-xs font-medium text-surface">当前 Frame</p>
-                <p v-if="bakeState?.name" class="mt-0.5 truncate text-[10px] text-muted">
-                  {{ bakeState.name }}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              class="mt-2 h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="!canWifiBakeAndUpload"
-              @click="handleWifiBakeAndUpload"
-            >
-              {{ wirelessStatus === 'uploading' ? '正在传输…' : '一键烘焙并上传当前 Frame' }}
-            </button>
-          </div>
-
-          <div class="rounded-panel border border-border bg-panel-field p-2">
-            <div class="flex min-w-0 items-start justify-between gap-2">
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-xs font-medium text-surface">上传文件</p>
-                <p
-                  v-if="frameResourceSource === 'uploaded' && selectedImageName"
-                  class="mt-0.5 truncate text-[10px] text-muted"
-                >
-                  {{
-                    wifiSequencePayload
-                      ? `${wifiSequencePayload.name} · ${wifiSequencePayload.frameCount} 帧`
-                      : selectedImageName
-                  }}
-                </p>
-              </div>
-            </div>
-            <label
-              class="mt-2 flex h-control w-full cursor-pointer items-center justify-center rounded-panel border border-border bg-canvas px-3 text-xs font-medium text-surface hover:bg-hover has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
-            >
-              {{ wirelessStatus === 'uploading' ? '正在传输…' : '选择图片或 PNG 序列并上传' }}
-              <input
-                class="sr-only"
-                type="file"
-                accept="image/gif,image/png,image/jpeg,image/webp,image/bmp"
-                multiple
-                :disabled="!canWifiFileUpload"
-                @change="handleWifiImageChange"
-              />
-            </label>
-          </div>
-        </div>
-        <div
-          v-if="wirelessStatus === 'uploading'"
-          class="mt-panel h-1.5 overflow-hidden rounded-full bg-panel-field"
-        >
-          <div
-            class="h-full bg-accent transition-[width]"
-            :style="{ width: `${contentUploadProgress}%` }"
-          />
-        </div>
-        <p v-if="bakeError" class="mt-panel text-[11px] text-error">
-          {{ bakeError }}
-        </p>
-        <p v-if="wirelessStatus === 'error'" class="mt-panel text-[10px] text-error">
-          {{ wirelessMessage }}
-        </p>
-      </PanelSection>
-
-      <PanelSection
-        v-if="transportMode === 'wifi' && burnMode === 'prototype'"
-        class="order-[60]"
-        label="上传内容"
-      >
-        <AppSelect
-          v-model="selectedPrototypeSelectValue"
-          :options="prototypeSelectOptions"
-          :disabled="modeSwitchLocked"
-          label="命名交互"
-        />
-        <div
-          v-if="selectedPrototype"
-          class="mt-panel rounded-panel border border-border bg-panel-field p-2"
-        >
-          <div class="flex min-w-0 items-start justify-between gap-2">
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-xs font-medium text-surface">
-                {{ selectedPrototype.name }}
-              </p>
-              <p class="mt-0.5 text-[10px] leading-relaxed text-muted">
-                {{ selectedPrototype.initialStateName || '未设置初始界面' }} ·
-                {{ selectedInteractionModeLabel }} · {{ selectedPrototype.stateCount }} 个画面 ·
-                {{ selectedPrototype.width }} ×
-                {{ selectedPrototype.height }}
-              </p>
-            </div>
-            <span class="shrink-0 text-[10px] text-muted">交互</span>
-          </div>
-          <button
-            type="button"
-            class="mt-2 h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="!canWifiBakeAndUpload"
-            @click="handleWifiBakeAndUpload"
-          >
-            {{
-              wirelessStatus === 'uploading'
-                ? `正在传输${selectedInteractionModeLabel}…`
-                : '一键烘焙并上传交互'
-            }}
-          </button>
-        </div>
-        <div
-          v-if="wirelessStatus === 'uploading'"
-          class="mt-panel h-1.5 overflow-hidden rounded-full bg-panel-field"
-        >
-          <div
-            class="h-full bg-accent transition-[width]"
-            :style="{ width: `${contentUploadProgress}%` }"
-          />
-        </div>
-        <p
-          v-if="prototypeReason || prototypeError"
-          class="mt-panel text-[11px]"
-          :class="prototypeError ? 'text-error' : 'text-muted'"
-        >
-          {{ prototypeError || prototypeReason }}
-        </p>
-        <p v-if="wirelessStatus === 'error'" class="mt-panel text-[10px] text-error">
-          {{ wirelessMessage }}
-        </p>
-      </PanelSection>
-
-      <PanelSection
-        v-if="transportMode === 'ble' && burnMode === 'frame'"
-        class="order-[60]"
-        label="上传内容"
-      >
-        <div class="grid gap-2">
-          <div class="rounded-panel border border-border bg-panel-field p-2">
-            <div class="flex min-w-0 items-start justify-between gap-2">
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-xs font-medium text-surface">当前 Frame</p>
-                <p v-if="bakeState?.name" class="mt-0.5 truncate text-[10px] text-muted">
-                  {{ bakeState.name }}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              class="mt-2 h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="!canBleBakeAndUpload"
-              @click="handleBleBakeAndUpload"
-            >
-              {{
-                bleSession.status.value === 'uploading' && frameResourceSource === 'baked'
-                  ? '正在传输…'
-                  : '一键烘焙并上传当前 Frame'
-              }}
-            </button>
-          </div>
-
-          <div class="rounded-panel border border-border bg-panel-field p-2">
-            <div class="flex min-w-0 items-start justify-between gap-2">
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-xs font-medium text-surface">上传文件</p>
-                <p
-                  v-if="frameResourceSource === 'uploaded' && selectedImageName"
-                  class="mt-0.5 truncate text-[10px] text-muted"
-                >
-                  {{
-                    bleSequencePayload
-                      ? `${bleSequencePayload.name} · ${bleSequencePayload.frameCount} 帧`
-                      : selectedImageName
-                  }}
-                </p>
-              </div>
-            </div>
-            <label
-              class="mt-2 flex h-control w-full cursor-pointer items-center justify-center rounded-panel border border-border bg-canvas px-3 text-xs font-medium text-surface hover:bg-hover has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
-            >
-              {{
-                bleSession.status.value === 'uploading' ? '正在传输…' : '选择图片或 PNG 序列并上传'
-              }}
-              <input
-                class="sr-only"
-                type="file"
-                accept="image/gif,image/png,image/jpeg,image/webp,image/bmp"
-                multiple
-                :disabled="!canBleFileUpload"
-                @change="handleBleImageChange"
-              />
-            </label>
-          </div>
-        </div>
-        <div
-          v-if="
-            bleSession.status.value === 'uploading' ||
-            (bleSession.status.value === 'checking' && bleSession.progress.value > 0)
-          "
-          class="mt-panel h-1.5 overflow-hidden rounded-full bg-panel-field"
-        >
-          <div
-            class="h-full bg-accent transition-[width]"
-            :style="{ width: `${bleSession.progress.value}%` }"
-          />
-        </div>
-        <p v-if="bakeError" class="mt-panel text-[11px] text-error">
-          {{ bakeError }}
-        </p>
-      </PanelSection>
-
-      <PanelSection
-        v-if="burnMode === 'prototype' && transportMode === 'ble'"
-        class="order-[60]"
-        label="上传内容"
-      >
-        <AppSelect
-          v-model="selectedPrototypeSelectValue"
-          :options="prototypeSelectOptions"
-          :disabled="modeSwitchLocked"
-          label="命名交互"
-        />
-        <div
-          v-if="selectedPrototype"
-          class="mt-panel grid grid-cols-[68px_minmax(0,1fr)] gap-y-1 text-[11px]"
-        >
-          <span class="text-muted">初始界面</span
-          ><span>{{ selectedPrototype.initialStateName || '—' }}</span>
-          <span class="text-muted">交互模式</span><span>{{ selectedInteractionModeLabel }}</span>
-          <span class="text-muted">界面数量</span><span>{{ selectedPrototype.stateCount }}</span>
-          <span class="text-muted">分辨率</span
-          ><span>{{ selectedPrototype.width }} × {{ selectedPrototype.height }}</span>
-        </div>
-        <p
-          v-if="prototypeReason || prototypeError"
-          class="mt-panel text-[11px]"
-          :class="prototypeError ? 'text-error' : 'text-muted'"
-        >
-          {{ prototypeError || prototypeReason }}
-        </p>
-        <button
-          type="button"
-          class="mt-panel h-control w-full rounded-panel border border-transparent bg-panel-field px-2 text-[11px] text-surface hover:bg-panel-field-hover disabled:opacity-50"
-          :disabled="!canPreparePrototype"
-          @click="handlePreparePrototype"
-        >
-          {{
-            prototypePending ? '正在检查资源…' : prototypePrepared ? '资源检查通过' : '检查交互资源'
-          }}
-        </button>
-        <p class="mt-1 text-[10px] leading-relaxed text-muted">
-          {{
-            transportMode === 'ble'
-              ? 'BLE 上传会重新烘焙全部画面，模式固件不会嵌入交互内容。'
-              : '此步骤可选；生成固件时会自动重新烘焙全部画面。'
-          }}
-        </p>
-        <button
-          v-if="transportMode === 'ble'"
-          type="button"
-          class="mt-panel h-control w-full rounded-panel bg-accent px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="!canBleBakeAndUpload"
-          @click="handleBleBakeAndUpload"
-        >
-          {{
-            bleSession.status.value === 'uploading'
-              ? `正在传输${selectedInteractionModeLabel}…`
-              : '烘焙并上传交互到 BLE 设备'
-          }}
-        </button>
-        <div
-          v-if="
-            bleSession.status.value === 'uploading' ||
-            (bleSession.status.value === 'checking' && bleSession.progress.value > 0)
-          "
-          class="mt-panel h-1.5 overflow-hidden rounded-full bg-panel-field"
-        >
-          <div
-            class="h-full bg-accent transition-[width]"
-            :style="{ width: `${bleSession.progress.value}%` }"
-          />
-        </div>
-      </PanelSection>
-
-      <PanelSection
-        v-if="variables.length && transportMode === 'ble'"
-        class="order-[90]"
-        :label="`变量 · ${variables.length}`"
-        :default-open="false"
-      >
-        <div class="grid gap-1 text-[11px]">
-          <div
-            v-for="variable in variables"
-            :key="variable.name"
-            class="flex justify-between gap-2"
-          >
-            <span class="truncate text-muted">{{ variable.name }}</span>
-            <span class="truncate">{{ variable.value }}</span>
-          </div>
-        </div>
-      </PanelSection>
-
-      <PanelSection
-        v-if="transportMode !== 'wifi-live'"
-        class="order-[100]"
-        label="状态日志"
-        :default-open="false"
-      >
+      <PanelSection v-if="embeddedDisplayAdvancedDebugMode" label="状态日志" :default-open="false">
         <pre
           class="min-h-16 max-h-48 overflow-auto rounded-panel border border-border bg-canvas p-2 text-[10px] leading-relaxed text-muted"
           >{{ buildLog.length ? buildLog.join('\n') : buildMessage }}</pre
         >
       </PanelSection>
+    </div>
+
+    <div
+      v-if="uploadTaskRunning || uploadTaskStatus !== 'idle'"
+      class="shrink-0 border-t border-border bg-panel px-panel py-2"
+    >
+      <div class="flex items-center gap-2">
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-[10px] text-surface">{{ uploadTaskMessage }}</p>
+          <div
+            v-if="uploadTaskRunning"
+            class="mt-1 h-1 overflow-hidden rounded-full bg-panel-field"
+          >
+            <div
+              class="h-full bg-accent transition-[width]"
+              :style="{ width: `${Math.max(3, uploadTaskProgress)}%` }"
+            />
+          </div>
+        </div>
+        <button
+          v-if="uploadTaskRunning"
+          type="button"
+          class="flex h-7 shrink-0 items-center gap-1 rounded-panel border border-border bg-canvas px-2 text-[10px] text-surface hover:bg-hover"
+          @click="cancelUploadTask"
+        >
+          <icon-lucide-x class="size-3" />
+          取消
+        </button>
+      </div>
     </div>
   </div>
 </template>

@@ -88,6 +88,13 @@ export const APP_MENU_SCHEMA = [
       },
       { type: 'separator' },
       {
+        id: 'embedded-display-advanced-debug',
+        label: '高级调试模式',
+        checkbox: true,
+        target: 'browser'
+      },
+      { type: 'separator' },
+      {
         id: 'layer-order-front-first',
         label: 'Show top layers first (Figma)',
         checkbox: true,

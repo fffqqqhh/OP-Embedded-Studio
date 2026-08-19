@@ -155,6 +155,7 @@ function createBleDeviceSession() {
   const canReconnect = computed(() => Boolean(selectedDevice.value && selectedProfile.value))
   const deviceName = computed(() => selectedDevice.value?.name || 'OP Embedded BLE')
   const monitoredDevices = new WeakSet<object>()
+  let uploadGeneration = 0
 
   function setBaseFirmwareReady(ready: boolean) {
     baseFirmwareReady.value = ready
@@ -310,27 +311,56 @@ function createBleDeviceSession() {
     }
   }
 
-  async function upload(payload: BleUploadPayload) {
+  async function upload(payload: BleUploadPayload, profileOverride?: EmbeddedDisplayProfile) {
+    const expectedMode = payloadFirmwareMode(payload)
+    const expectedProfile = profileOverride ?? selectedProfile.value ?? null
+    if (profileOverride && selectedProfile.value?.id !== profileOverride.id) {
+      selectedProfile.value = profileOverride
+    }
+    if (!selectedDevice.value || !expectedProfile || !deviceReady.value) {
+      if (expectedProfile && canReconnect.value) {
+        await connectSelectedDevice()
+      }
+      if (!deviceReady.value) {
+        status.value = 'checking'
+        const profile = expectedProfile
+        if (!profile) {
+          status.value = 'error'
+          message.value = '缺少当前屏幕方案，无法连接 BLE 设备'
+          return false
+        }
+        const connection = await probe(profile, expectedMode)
+        if (!connection) return false
+      }
+    }
     if (!selectedDevice.value || !selectedProfile.value) {
       status.value = 'error'
-      message.value = '请先连接 BLE 设备'
+      message.value = '未找到可用 BLE 设备'
       return false
     }
 
-    const expectedMode = payloadFirmwareMode(payload)
+    const generation = uploadGeneration
     progress.value = 0
     const transferMetrics = createBleTransferMetrics((nextMessage, nextProgress) => {
       message.value = nextMessage
       progress.value = nextProgress
     })
+    const handleTransferProgress = (transferProgress: BleTransferProgress) => {
+      if (generation !== uploadGeneration) {
+        throw new DOMException('BLE 上传已取消', 'AbortError')
+      }
+      transferMetrics.update(transferProgress)
+    }
     let resumeOffset = 0
     for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (generation !== uploadGeneration) return false
       let connection = connectedDevice.value
       if (!connection?.server.connected) {
         status.value = 'checking'
         message.value =
           attempt === 0 ? '正在重新连接 BLE 设备…' : '连接中断，正在进行第 ' + attempt + ' 次续传…'
         await waitBeforeReconnect()
+        if (generation !== uploadGeneration) return false
         connection = await connectSelectedDevice()
       }
       if (!isActiveBleConnection(connection)) {
@@ -373,7 +403,8 @@ function createBleDeviceSession() {
       status.value = 'uploading'
       transferMetrics.begin(resumeOffset)
       try {
-        await uploadBleContent(connection, payload, transferMetrics.update, resumeOffset)
+        await uploadBleContent(connection, payload, handleTransferProgress, resumeOffset)
+        if (generation !== uploadGeneration) return false
         await new Promise<void>((resolve) => {
           window.setTimeout(resolve, 300)
         })
@@ -384,6 +415,7 @@ function createBleDeviceSession() {
         message.value = transferMetrics.complete()
         return true
       } catch (error) {
+        if (generation !== uploadGeneration) return false
         if (isDisconnectedError(error)) {
           connectedDevice.value = null
           deviceReady.value = false
@@ -401,6 +433,15 @@ function createBleDeviceSession() {
     return false
   }
 
+  function cancelUpload(): void {
+    uploadGeneration += 1
+    if (status.value === 'uploading' || status.value === 'checking') {
+      status.value = 'idle'
+      progress.value = 0
+      message.value = 'BLE 上传已取消，可以开始新的操作'
+    }
+  }
+
   return {
     status,
     message,
@@ -415,7 +456,8 @@ function createBleDeviceSession() {
     setProfile,
     disconnect,
     probe,
-    upload
+    upload,
+    cancelUpload
   }
 }
 
