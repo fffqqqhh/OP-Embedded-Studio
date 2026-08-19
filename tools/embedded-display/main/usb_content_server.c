@@ -16,6 +16,9 @@
 #include "freertos/task.h"
 #include "sequence_player.h"
 #include "wireless_content.h"
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3
+#include "m5cores3.h"
+#endif
 
 #define USB_PROTOCOL_PREFIX "OPUSB/1"
 #define USB_CONTENT_SERVICE_VERSION 6u
@@ -196,6 +199,42 @@ static esp_err_t handle_stats(void)
     return usb_write_line(response);
 }
 
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3
+static esp_err_t handle_power(void)
+{
+    static const uint8_t registers[] = {
+        0x00, 0x01, 0x10, 0x12, 0x14, 0x15, 0x18, 0x20,
+        0x21, 0x22, 0x24, 0x25, 0x27, 0x30, 0x34, 0x35,
+        0x38, 0x39, 0x3A, 0x3B, 0x48, 0x49, 0x4A, 0x61,
+        0x62, 0x64, 0x68, 0x80, 0x81, 0x82, 0x90, 0x99,
+        0xA4,
+    };
+    char response[256];
+    size_t length = (size_t)snprintf(response, sizeof(response), USB_PROTOCOL_PREFIX " POWER");
+    for (size_t i = 0; i < sizeof(registers); ++i) {
+        uint8_t value = 0;
+        ESP_RETURN_ON_ERROR(openpencil_m5cores3_read_power_register(registers[i], &value),
+                            TAG,
+                            "read CoreS3 power register failed");
+        const int written = snprintf(response + length,
+                                     sizeof(response) - length,
+                                     " %02X=%02X",
+                                     registers[i],
+                                     value);
+        ESP_RETURN_ON_FALSE(written > 0 && (size_t)written < sizeof(response) - length,
+                            ESP_ERR_INVALID_SIZE,
+                            TAG,
+                            "CoreS3 power response overflow");
+        length += (size_t)written;
+    }
+    ESP_RETURN_ON_FALSE(length + 2 <= sizeof(response), ESP_ERR_INVALID_SIZE, TAG,
+                        "CoreS3 power response overflow");
+    response[length++] = '\n';
+    response[length] = '\0';
+    return usb_write_all(response, length);
+}
+#endif
+
 static void usb_content_server_task(void *argument)
 {
     (void)argument;
@@ -256,6 +295,11 @@ static void usb_content_server_task(void *argument)
         } else if (strcmp(line, USB_PROTOCOL_PREFIX " STATS") == 0) {
             operation = "stats";
             result = handle_stats();
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3
+        } else if (strcmp(line, USB_PROTOCOL_PREFIX " POWER") == 0) {
+            operation = "power";
+            result = handle_power();
+#endif
         } else if (strcmp(line, USB_PROTOCOL_PREFIX " ABORT") == 0) {
             openpencil_content_write_abort();
             operation = "abort";
