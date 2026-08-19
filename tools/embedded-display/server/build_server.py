@@ -62,6 +62,12 @@ PROFILE_PARTITION_TABLES = {
         "wifi-live": "partitions_16mb_wireless.csv",
         "ble-frame": "partitions_16mb_wireless.csv",
     },
+    "ili9342_m5stack_cores3": {
+        "usb-frame": "partitions_16mb_usb_frame.csv",
+        "usb-prototype": "partitions_16mb_usb_frame.csv",
+        "ble-frame": "partitions_16mb_wireless.csv",
+        "ble-prototype": "partitions_16mb_wireless.csv",
+    },
 }
 
 BUILD_DIRECTORY_ALIASES = {
@@ -409,6 +415,29 @@ def mode_defaults_path(profile, build_mode):
             "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y",
             "# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set",
         ])
+    if profile["id"] == "co5300_m5stack_stopwatch" and mode not in ("usb-frame", "usb-frame-m5gfx"):
+        settings.extend([
+            "# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160 is not set",
+            "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y",
+            "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240",
+        ])
+    if profile["id"] == "ili9342_m5stack_cores3":
+        settings.extend([
+            "CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3=y",
+            "CONFIG_EXAMPLE_LCD_CONTROLLER_ILI9342=y",
+            "CONFIG_EXAMPLE_PIN_NUM_SCLK=36",
+            "CONFIG_EXAMPLE_PIN_NUM_MOSI=37",
+            "CONFIG_EXAMPLE_PIN_NUM_MISO=-1",
+            "CONFIG_EXAMPLE_PIN_NUM_LCD_DC=35",
+            "CONFIG_EXAMPLE_PIN_NUM_LCD_CS=3",
+            "CONFIG_EXAMPLE_PIN_NUM_LCD_RST=-1",
+            "CONFIG_EXAMPLE_PIN_NUM_BK_LIGHT=-1",
+            "CONFIG_EXAMPLE_LCD_H_RES=320",
+            "CONFIG_EXAMPLE_LCD_V_RES=240",
+            "CONFIG_EXAMPLE_LCD_X_GAP=0",
+            "CONFIG_EXAMPLE_LCD_Y_GAP=0",
+            "CONFIG_EXAMPLE_LCD_INVERT_COLOR=y",
+        ])
     if ble_enabled:
         settings.extend([
             "CONFIG_BT_ENABLED=y",
@@ -724,8 +753,8 @@ def clear_generated_image():
 
 def write_generated_prototype_header(profile, body):
     """Generate frame data plus a compact table for the generic device runtime."""
-    if profile.get("controller") != "CO5300":
-        raise ApiError(HTTPStatus.BAD_REQUEST, "prototype input runtime is currently available for the Waveshare CO5300 profile")
+    if profile.get("controller") not in {"CO5300", "ILI9342"}:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "prototype input runtime is currently unavailable for this display profile")
     states = body.get("states")
     transitions = body.get("transitions")
     initial_state = body.get("initialStateIndex")

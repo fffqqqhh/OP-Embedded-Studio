@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "m5ioe1.h"
+#include "m5cores3.h"
 #include "sdkconfig.h"
 
 #define BOOT_BUTTON_GPIO GPIO_NUM_0
@@ -37,6 +38,9 @@ typedef struct {
     int64_t changed_at_ms;
 } debounced_button_t;
 #endif
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3
+static i2c_master_dev_handle_t s_cores3_touch;
+#endif
 
 static const char *TAG = "prototype_input";
 static gesture_recognizer_t s_screen;
@@ -47,6 +51,36 @@ static bool s_screen_multi_click_enabled;
 static debounced_button_t s_stopwatch_button_a;
 static debounced_button_t s_stopwatch_button_b;
 static i2c_master_dev_handle_t s_stopwatch_touch;
+#endif
+
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3
+static esp_err_t init_cores3_touch(void)
+{
+    i2c_master_bus_handle_t bus = openpencil_m5cores3_i2c_bus();
+    ESP_RETURN_ON_FALSE(bus, ESP_ERR_INVALID_STATE, TAG, "CoreS3 I2C bus is unavailable");
+    const i2c_device_config_t device_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x38,
+        .scl_speed_hz = 400000,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &device_config, &s_cores3_touch), TAG, "add FT6336U touch device failed");
+    uint8_t device_mode = 0;
+    const uint8_t register_address = 0x00;
+    ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(s_cores3_touch, &register_address, 1, &device_mode, 1, 100), TAG, "read FT6336U failed");
+    ESP_LOGI(TAG, "CoreS3 FT6336U ready at 0x38 (mode=0x%02x)", device_mode);
+    return ESP_OK;
+}
+
+static bool read_cores3_touch(void)
+{
+    if (!s_cores3_touch) return false;
+    uint8_t register_address = 0x02;
+    uint8_t data[7] = {0};
+    if (i2c_master_transmit_receive(s_cores3_touch, &register_address, 1, data, sizeof(data), 20) != ESP_OK) {
+        return false;
+    }
+    return data[0] > 0;
+}
 #endif
 
 static int64_t now_ms(void)
@@ -268,7 +302,12 @@ esp_err_t openpencil_input_init(void)
                  esp_err_to_name(touch_result));
     }
 #else
-    const esp_err_t touch_result = init_waveshare_touch();
+    const esp_err_t touch_result =
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3
+        init_cores3_touch();
+#else
+        init_waveshare_touch();
+#endif
     if (touch_result != ESP_OK) {
         ESP_LOGW(TAG, "Touch unavailable; BOOT events remain active: %s", esp_err_to_name(touch_result));
     }
@@ -287,6 +326,8 @@ bool openpencil_input_poll(openpencil_input_event_t *event)
     bool screen_pressed = false;
 #if CONFIG_OPENPENCIL_BOARD_M5STACK_STOPWATCH
     screen_pressed = read_stopwatch_touch();
+#elif CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3
+    screen_pressed = read_cores3_touch();
 #else
     if (s_touch && esp_lcd_touch_read_data(s_touch) == ESP_OK) {
         esp_lcd_touch_point_data_t point = {0};

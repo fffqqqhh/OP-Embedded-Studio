@@ -43,6 +43,7 @@
 #endif
 #include "co5300_panel.h"
 #include "m5ioe1.h"
+#include "m5cores3.h"
 
 static const char *TAG = "lcd_simple";
 
@@ -232,6 +233,11 @@ void app_main(void)
         // and panel sequence instead of leaving a misleading black screen.
         ESP_ERROR_CHECK(m5ioe1_result);
     }
+#endif
+
+#if CONFIG_OPENPENCIL_BOARD_M5STACK_CORES3
+    ESP_LOGI(TAG, "Initialize M5Stack CoreS3 display power and reset");
+    ESP_ERROR_CHECK(openpencil_m5cores3_display_init());
 #endif
 
     esp_lcd_panel_io_handle_t io_handle = NULL;

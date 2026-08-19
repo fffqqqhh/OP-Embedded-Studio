@@ -7,7 +7,8 @@ import { encodeWirelessImage, encodeWirelessPrototype } from './wireless-content
 
 const USB_FAST_PROFILES = new Set([
   'co5300_waveshare_amoled_1_75c',
-  'co5300_m5stack_stopwatch'
+  'co5300_m5stack_stopwatch',
+  'ili9342_m5stack_cores3'
 ])
 
 export type UsbContentBuildMode = 'usb-frame' | 'usb-frame-m5gfx'

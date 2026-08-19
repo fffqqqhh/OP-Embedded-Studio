@@ -457,6 +457,60 @@
         "displayPower": "M5IOE1 GPIO8",
         "displayReset": "M5IOE1 GPIO5"
       }
+    },
+    {
+      "id": "ili9342_m5stack_cores3",
+      "displayName": "M5Stack CoreS3 320x240 ILI9342C",
+      "displayNameZh": "M5Stack CoreS3 320x240 ILI9342C",
+      "screenType": "landscape_lcd",
+      "module": "M5Stack CoreS3",
+      "driverIc": "ILI9342C",
+      "controller": "ILI9342",
+      "interface": "SPI 3-wire",
+      "flash": "16MB",
+      "wirelessContentBytes": 13565952,
+      "logicalResolution": {
+        "width": 320,
+        "height": 240
+      },
+      "visibleArea": {
+        "shape": "rectangle",
+        "description": "320 x 240 landscape LCD with FT6336U capacitive touch.",
+        "descriptionZh": "320 x 240 横向 LCD，带 FT6336U 电容触摸。"
+      },
+      "physicalSize": {
+        "diagonalInch": 2.0
+      },
+      "verified": false,
+      "imageOnly": false,
+      "defaultsFile": "screen_profiles/ili9342_m5stack_cores3.defaults",
+      "image": {
+        "pixelFormat": "RGB565",
+        "colorOrder": "RGB",
+        "byteOrder": "little",
+        "rotation": 0,
+        "xGap": 0,
+        "yGap": 0,
+        "transport": "SPI"
+      },
+      "touch": {
+        "controller": "FT6336U",
+        "address": "0x38",
+        "sda": 12,
+        "scl": 11,
+        "interrupt": 21
+      },
+      "boardBringup": {
+        "i2c": {
+          "scl": 11,
+          "sda": 12,
+          "powerAddress": "0x34",
+          "expanderAddress": "0x58"
+        },
+        "displayPower": "AXP2101 DLDO1",
+        "displayReset": "AW9523B P1_1",
+        "backlight": "AXP2101 DLDO1"
+      }
     }
   ]
 }

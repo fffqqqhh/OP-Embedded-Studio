@@ -48,6 +48,10 @@ menu "Example Configuration"
         bool "Use M5Stack StopWatch board power and reset wiring"
         default n
 
+    config OPENPENCIL_BOARD_M5STACK_CORES3
+        bool "Use M5Stack CoreS3 board power, reset and touch wiring"
+        default n
+
     config OPENPENCIL_DISPLAY_BACKEND_M5GFX
         bool "Use the M5GFX-style StopWatch QSPI framebuffer backend"
         depends on OPENPENCIL_BOARD_M5STACK_STOPWATCH
@@ -71,11 +75,15 @@ menu "Example Configuration"
 
         config EXAMPLE_LCD_CONTROLLER_CO5300
             bool "CO5300 (Waveshare 1.75C QSPI)"
+
+        config EXAMPLE_LCD_CONTROLLER_ILI9342
+            bool "ILI9342C (M5Stack CoreS3)"
     endchoice
 
     config EXAMPLE_LCD_PIXEL_CLOCK_HZ
         int "LCD pixel clock in Hz"
         default 30000000 if EXAMPLE_LCD_CONTROLLER_CO5300
+        default 40000000 if EXAMPLE_LCD_CONTROLLER_ILI9342
         default 10000000
         help
             SPI clock used to write pixels to the LCD panel. 10 MHz is a stable
@@ -151,6 +159,7 @@ menu "Example Configuration"
         default 128 if EXAMPLE_LCD_CONTROLLER_ST7735
         default 160 if EXAMPLE_LCD_CONTROLLER_GC9D01N
         default 466 if EXAMPLE_LCD_CONTROLLER_CO5300
+        default 320 if EXAMPLE_LCD_CONTROLLER_ILI9342
 
     config EXAMPLE_LCD_V_RES
         int "LCD vertical resolution"
@@ -158,6 +167,7 @@ menu "Example Configuration"
         default 128 if EXAMPLE_LCD_CONTROLLER_ST7735
         default 160 if EXAMPLE_LCD_CONTROLLER_GC9D01N
         default 466 if EXAMPLE_LCD_CONTROLLER_CO5300
+        default 240 if EXAMPLE_LCD_CONTROLLER_ILI9342
 
     config EXAMPLE_LCD_X_GAP
         int "LCD X gap/offset"
@@ -186,6 +196,7 @@ menu "Example Configuration"
         default n if EXAMPLE_LCD_CONTROLLER_ST7735
         default n if EXAMPLE_LCD_CONTROLLER_GC9D01N
         default n if EXAMPLE_LCD_CONTROLLER_CO5300
+        default y if EXAMPLE_LCD_CONTROLLER_ILI9342
 
     choice EXAMPLE_LCD_RGB_ORDER
         prompt "LCD RGB element order"
