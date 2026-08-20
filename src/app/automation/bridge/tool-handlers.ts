@@ -1,11 +1,12 @@
 import { renderTreeNode } from '@open-pencil/core/design-jsx'
 import type { FigmaAPI } from '@open-pencil/core/figma-api'
 import { computeAllLayouts } from '@open-pencil/core/layout'
-import { ALL_TOOLS } from '@open-pencil/core/tools'
-import type { JsonObject } from '@open-pencil/scene-graph/primitives'
+import { ALL_TOOLS, registerComponentCatalog } from '@open-pencil/core/tools'
+import type { JSONObject } from '@open-pencil/scene-graph/primitives'
 
 import type { AutomationTarget } from '@/app/automation/bridge/target'
 import { ensureGraphFonts } from '@/app/editor/fonts'
+import { useLibraryService } from '@/app/libraries'
 
 type FigmaFactory = (store: AutomationTarget['store'], pageId?: string) => FigmaAPI
 
@@ -21,7 +22,7 @@ export function createAutomationToolHandler(makeFigma: FigmaFactory) {
       x: toolArgs.x as number | undefined,
       y: toolArgs.y as number | undefined
     })
-    await ensureGraphFonts(store.graph, [result.id])
+    await ensureGraphFonts(store.graph, [result.id], store.renderer)
     computeAllLayouts(store.graph, target.pageId)
     store.requestRender()
     store.flashNodes([result.id])
@@ -43,12 +44,15 @@ export function createAutomationToolHandler(makeFigma: FigmaFactory) {
     const def = ALL_TOOLS.find((t) => t.name === toolName)
     if (!def) throw new Error(`Unknown tool: ${toolName}`)
     const store = target.store
+    const libraryService = useLibraryService()
+    libraryService.bindEditor(store)
+    registerComponentCatalog(store.graph, libraryService)
     const figma = makeFigma(store, target.pageId)
     const result = await def.execute(figma, toolArgs)
 
     if (def.mutates) {
       const pageNode = store.graph.getNode(figma.currentPageId)
-      if (pageNode) await ensureGraphFonts(store.graph, pageNode.childIds)
+      if (pageNode) await ensureGraphFonts(store.graph, pageNode.childIds, store.renderer)
       computeAllLayouts(store.graph, figma.currentPageId)
       store.requestRender()
       store.flashNodes(extractNodeIds(result))
@@ -59,14 +63,14 @@ export function createAutomationToolHandler(makeFigma: FigmaFactory) {
 
 function extractNodeIds(result: unknown): string[] {
   if (!result || typeof result !== 'object') return []
-  const obj = result as JsonObject
+  const obj = result as JSONObject
   if (typeof obj.deleted === 'string') return []
   const ids: string[] = []
   if (typeof obj.id === 'string') ids.push(obj.id)
   if (Array.isArray(obj.results)) {
     for (const item of obj.results) {
-      if (item && typeof item === 'object' && typeof (item as JsonObject).id === 'string')
-        ids.push((item as JsonObject).id as string)
+      if (item && typeof item === 'object' && typeof (item as JSONObject).id === 'string')
+        ids.push((item as JSONObject).id as string)
     }
   }
   return ids

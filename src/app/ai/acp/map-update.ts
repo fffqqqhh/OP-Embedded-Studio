@@ -1,21 +1,11 @@
-import type { ContentBlock, SessionUpdate } from '@agentclientprotocol/sdk'
+import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import type { UIMessageChunk } from 'ai'
 
-import type { JsonObject } from '@open-pencil/scene-graph/primitives'
+import type { JSONObject } from '@open-pencil/scene-graph/primitives'
 
 export interface MapResult {
   chunks: UIMessageChunk[]
   textStarted: boolean
-}
-
-function isRenderableImage(
-  content: ContentBlock
-): content is Extract<ContentBlock, { type: 'image' }> {
-  return (
-    content.type === 'image' &&
-    typeof content.mimeType === 'string' &&
-    typeof content.data === 'string'
-  )
 }
 
 export function mapUpdate(update: SessionUpdate, textId: string, textStarted: boolean): MapResult {
@@ -32,12 +22,6 @@ export function mapUpdate(update: SessionUpdate, textId: string, textStarted: bo
           type: 'text-delta',
           id: textId,
           delta: update.content.text
-        })
-      } else if (isRenderableImage(update.content)) {
-        chunks.push({
-          type: 'file',
-          url: `data:${update.content.mimeType};base64,${update.content.data}`,
-          mediaType: update.content.mimeType
         })
       } else if (update.content.type !== 'text') {
         console.warn('[ACP] Unhandled content type:', update.content.type)
@@ -104,12 +88,12 @@ export function mapUpdate(update: SessionUpdate, textId: string, textStarted: bo
   return { chunks, textStarted }
 }
 
-export function textFromContent(content: JsonObject[] | undefined): string | undefined {
+export function textFromContent(content: JSONObject[] | undefined): string | undefined {
   if (!content) return undefined
   const parts: string[] = []
   for (const c of content) {
     if (c.type !== 'content') continue
-    const inner = c.content as JsonObject | undefined
+    const inner = c.content as JSONObject | undefined
     if (inner?.type === 'text' && typeof inner.text === 'string') {
       parts.push(inner.text)
     }

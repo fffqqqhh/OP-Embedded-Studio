@@ -1,18 +1,19 @@
 import { inflateSync, deflateSync } from 'fflate'
 
-import { initCodec, getCompiledSchema, getSchemaBytes } from '@open-pencil/kiwi/fig/codec'
-import type { NodeChange as KiwiNodeChange } from '@open-pencil/kiwi/fig/codec'
-import { decodeBinarySchema, compileSchema, ByteBuffer } from '@open-pencil/kiwi/schema-runtime'
-import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
-
-import { shapeTextForClipboard } from './canvas/text'
-import { populateAndApplyOverrides } from './kiwi/fig/instance-overrides'
-import type { InstanceNodeChange } from './kiwi/fig/instance-overrides'
+import { populateAndApplyOverrides } from '@open-pencil/fig/instance-overrides'
+import type { InstanceNodeChange } from '@open-pencil/fig/instance-overrides'
 import {
   nodeChangeToProps,
   shouldImportTextAsAutoSize,
   sortChildren
-} from './kiwi/fig/node-change/convert'
+} from '@open-pencil/fig/node-change'
+import { initCodec, getCompiledSchema, getSchemaBytes } from '@open-pencil/kiwi/fig/codec'
+import type { GUID, NodeChange as KiwiNodeChange } from '@open-pencil/kiwi/fig/codec'
+import { decodeBinarySchema, compileSchema, ByteBuffer } from '@open-pencil/kiwi/schema-runtime'
+import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
+
+import { decodeBase64, decodeBase64Text, encodeBase64, encodeBase64Text } from './bytes'
+import { shapeTextForClipboard } from './canvas/text/clipboard'
 import {
   sceneNodeToKiwi,
   buildFigKiwi,
@@ -44,8 +45,8 @@ export async function parseFigmaClipboard(
   const bufMatch = html.match(/\(figma\)(.*?)\(\/figma\)/s)
   if (!metaMatch || !bufMatch) return null
 
-  const meta: FigmaClipboardMeta = JSON.parse(atob(metaMatch[1]))
-  const binary = Uint8Array.fromBase64(bufMatch[1])
+  const meta: FigmaClipboardMeta = JSON.parse(decodeBase64Text(metaMatch[1]))
+  const binary = decodeBase64(bufMatch[1])
 
   try {
     const chunks = parseFigKiwiChunks(binary)
@@ -138,25 +139,31 @@ export function figmaNodesBounds(
 interface ClipboardImportMaps {
   guidMap: Map<string, KiwiNodeChange>
   parentMap: Map<string, string>
+  childMap: Map<string, string[]>
 }
 
 function buildClipboardMaps(nodeChanges: KiwiNodeChange[]): ClipboardImportMaps {
   const guidMap = new Map<string, KiwiNodeChange>()
   const parentMap = new Map<string, string>()
+  const childMap = new Map<string, string[]>()
   for (const nc of nodeChanges) {
     if (!nc.guid) continue
     const id = `${nc.guid.sessionID}:${nc.guid.localID}`
     guidMap.set(id, nc)
     if (nc.parentIndex?.guid) {
-      parentMap.set(id, `${nc.parentIndex.guid.sessionID}:${nc.parentIndex.guid.localID}`)
+      const parentId = `${nc.parentIndex.guid.sessionID}:${nc.parentIndex.guid.localID}`
+      parentMap.set(id, parentId)
+      const siblings = childMap.get(parentId)
+      if (siblings) siblings.push(id)
+      else childMap.set(parentId, [id])
     }
   }
-  return { guidMap, parentMap }
+  return { guidMap, parentMap, childMap }
 }
 
 function findInternalNodeIds(
   guidMap: Map<string, KiwiNodeChange>,
-  parentMap: Map<string, string>
+  childMap: Map<string, string[]>
 ): { internalCanvasIds: Set<string>; internalFigmaIds: Set<string> } {
   const internalCanvasIds = new Set<string>()
   for (const [id, nc] of guidMap) {
@@ -168,8 +175,8 @@ function findInternalNodeIds(
   const internalFigmaIds = new Set<string>()
   function markInternal(id: string) {
     internalFigmaIds.add(id)
-    for (const [childId, pid] of parentMap) {
-      if (pid === id && !internalFigmaIds.has(childId)) markInternal(childId)
+    for (const childId of childMap.get(id) ?? []) {
+      if (!internalFigmaIds.has(childId)) markInternal(childId)
     }
   }
   for (const canvasId of internalCanvasIds) markInternal(canvasId)
@@ -229,8 +236,8 @@ export function importClipboardNodes(
   offsetY = 0,
   blobs: Uint8Array[] = []
 ): string[] {
-  const { guidMap, parentMap } = buildClipboardMaps(nodeChanges)
-  const { internalCanvasIds, internalFigmaIds } = findInternalNodeIds(guidMap, parentMap)
+  const { guidMap, parentMap, childMap } = buildClipboardMaps(nodeChanges)
+  const { internalCanvasIds, internalFigmaIds } = findInternalNodeIds(guidMap, childMap)
   const { topLevel, internalTopLevel } = classifyTopLevelNodes(
     guidMap,
     parentMap,
@@ -261,12 +268,9 @@ export function importClipboardNodes(
     created.set(figmaId, node.id)
     if (ourParentId === targetParentId && !internalFigmaIds.has(figmaId)) createdIds.push(node.id)
 
-    const children: string[] = []
-    for (const [childId, pid] of parentMap) {
-      if (pid === figmaId && !NON_VISUAL_TYPES.has(guidMap.get(childId)?.type ?? '')) {
-        children.push(childId)
-      }
-    }
+    const children = (childMap.get(figmaId) ?? []).filter(
+      (childId) => !NON_VISUAL_TYPES.has(guidMap.get(childId)?.type ?? '')
+    )
     sortChildren(children, nc, guidMap)
     for (const childId of children) {
       createNode(childId, node.id)
@@ -282,7 +286,9 @@ export function importClipboardNodes(
 
   remapComponentIds(created, graph)
 
-  populateAndApplyOverrides(graph, guidMap as Map<string, InstanceNodeChange>, created, blobs)
+  graph.preserveSourceMetadataDuring(() => {
+    populateAndApplyOverrides(graph, guidMap as Map<string, InstanceNodeChange>, created, blobs)
+  })
 
   for (const figmaId of internalTopLevel) {
     const ourId = created.get(figmaId)
@@ -320,6 +326,8 @@ export async function buildFigmaClipboardHTML(
     }
   }
 
+  const nodeIdToGuid = new Map<string, GUID>()
+  const assignedGuidValues = new Set<string>()
   const blobs: Uint8Array[] = []
   for (let i = 0; i < nodes.length; i++) {
     collectTextNodes(nodes[i])
@@ -331,8 +339,12 @@ export async function buildFigmaClipboardHTML(
         localIdCounter,
         graph,
         blobs,
+        nodeIdToGuid,
+        fontDigestMap,
         undefined,
-        fontDigestMap
+        undefined,
+        undefined,
+        assignedGuidValues
       )
     )
   }
@@ -369,14 +381,14 @@ export async function buildFigmaClipboardHTML(
 
   const dataRaw = compiled.encodeMessage(msg)
   const figKiwiBinary = buildFigKiwi(schemaDeflated, dataRaw)
-  const bufferB64 = figKiwiBinary.toBase64()
+  const bufferB64 = encodeBase64(figKiwiBinary)
 
   const meta: FigmaClipboardMeta = {
     fileKey: 'openpencil',
     pasteID: msg.pasteID as number,
     dataType: 'scene'
   }
-  const metaB64 = btoa(JSON.stringify(meta))
+  const metaB64 = encodeBase64Text(JSON.stringify(meta))
 
   return (
     `<meta charset='utf-8'>` +

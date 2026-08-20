@@ -10,6 +10,7 @@ import find from './commands/find'
 import formats from './commands/formats'
 import importCmd from './commands/import'
 import info from './commands/info'
+import libraries from './commands/libraries'
 import lint from './commands/lint'
 import node from './commands/node'
 import pages from './commands/pages'
@@ -23,7 +24,7 @@ const { version } = await import('../package.json')
 const main = defineCommand({
   meta: {
     name: 'openpencil',
-    description: 'OP Embedded Studio CLI — inspect, export, and lint design documents',
+    description: 'OpenPencil CLI — inspect, export, and lint OpenPencil design documents',
     version
   },
   subCommands: {
@@ -37,6 +38,7 @@ const main = defineCommand({
     formats,
     info,
     lint,
+    libraries,
     query,
     node,
     pages,

@@ -1,19 +1,34 @@
 import type { Color } from '@open-pencil/scene-graph/primitives'
 
 import { populateLazyFigImportRoots } from '#core/kiwi/fig/lazy-import'
+import {
+  canUseFigPopulationWorker,
+  createFigPopulationWorker
+} from '#core/kiwi/fig/population/client'
 import { computeAllLayouts } from '#core/layout'
-import { ensureTextFallbackPacksForNodes } from '#core/text/coverage'
 import { fontManager } from '#core/text/fonts'
+import { collectGraphFontRequirements } from '#core/text/requirements'
+import { missingGraphFontScripts } from '#core/text/resolved-requirements'
 
 import { createPageViewportStore } from './page-viewports'
 import type { EditorContext } from './types'
 
 export function createPageActions(ctx: EditorContext) {
   const pageViewportStore = createPageViewportStore(ctx)
+  let populationWorkerInstance: ReturnType<typeof createFigPopulationWorker> | undefined
+  let populationWorkerGeneration = 0
+  let pageSwitchGeneration = 0
+
+  function populationWorker() {
+    if (!canUseFigPopulationWorker(ctx.graph)) return null
+    populationWorkerInstance ??= createFigPopulationWorker(ctx.graph)
+    return populationWorkerInstance
+  }
 
   async function switchPage(pageId: string) {
     const page = ctx.graph.getNode(pageId)
     if (page?.type !== 'CANVAS') return
+    const switchGeneration = ++pageSwitchGeneration
 
     pageViewportStore.saveCurrentPageViewport()
 
@@ -25,35 +40,62 @@ export function createPageActions(ctx: EditorContext) {
 
     pageViewportStore.restorePageViewport(pageId)
 
-    const populated = populateLazyFigImportRoots(ctx.graph, [pageId])
-
-    // Load every text face on this page (open + lazy multi-page populate).
-    // collectFontKeys walks the page subtree including styleRuns.
-    const pageRootIds = [pageId]
-    const toLoad = fontManager.collectFontKeys(ctx.graph, pageRootIds)
-    let anyLoaded = false
-    let fallbacksLoaded = false
+    ctx.state.loading = true
+    let populated: boolean
     try {
-      const loadResults =
-        toLoad.length > 0
-          ? await Promise.all(toLoad.map(([family, style]) => ctx.loadFont(family, style)))
-          : []
-      anyLoaded = loadResults.some((result) => result != null)
-      fallbacksLoaded = await ensureTextFallbackPacksForNodes(ctx.graph, pageRootIds)
-    } catch (err) {
-      console.error('Failed to load fonts during page switch:', err)
-    }
-
-    if (anyLoaded || fallbacksLoaded) {
-      for (const [, node] of ctx.graph.nodes) {
-        if (node.type === 'TEXT') node.textPicture = null
+      const worker = populationWorker()
+      const workerGeneration = populationWorkerGeneration
+      const workerResult = worker ? await worker.populate(pageId) : null
+      if (workerGeneration !== populationWorkerGeneration) return
+      if (workerResult === null) {
+        worker?.terminate()
+        populationWorkerInstance = undefined
+        populated = populateLazyFigImportRoots(ctx.graph, [pageId])
+      } else {
+        populated = workerResult
       }
+    } finally {
+      if (switchGeneration === pageSwitchGeneration) ctx.state.loading = false
     }
+    if (switchGeneration !== pageSwitchGeneration) return
 
-    if (ctx.getRenderer() || populated || anyLoaded || fallbacksLoaded) {
+    const childIds = ctx.graph.getChildren(pageId).map((node) => node.id)
+    const toLoad = fontManager.collectFontKeys(ctx.graph, childIds)
+    const requirements = collectGraphFontRequirements(ctx.graph, childIds)
+    fontManager.blockNodesUntilFontsResolve(childIds)
+    try {
+      const results = await Promise.all(
+        toLoad.map(([family, style]) => ctx.loadFont(family, style, requirements.characters))
+      )
+      const requiredFallbacks = missingGraphFontScripts(requirements)
+      const fallbacks = await fontManager.ensureFallbackPack(
+        requiredFallbacks,
+        requirements.characters
+      )
+      const facesReady = results.every((result) => result !== null)
+      const fallbacksReady = requiredFallbacks.every(
+        (script) => (fallbacks[script]?.length ?? 0) > 0
+      )
+      if (facesReady && fallbacksReady) {
+        for (const node of requirements.nodes) if (node.type === 'TEXT') node.textPicture = null
+      }
+    } finally {
+      fontManager.unblockNodes(childIds)
+      ctx.getRenderer()?.invalidateAllPictures()
+    }
+    if (ctx.getRenderer() || populated) {
       computeAllLayouts(ctx.graph, pageId)
     }
     ctx.requestRender()
+  }
+
+  function clearPageViewports() {
+    populationWorkerGeneration++
+    pageSwitchGeneration++
+    ctx.state.loading = false
+    populationWorkerInstance?.terminate()
+    populationWorkerInstance = undefined
+    pageViewportStore.clearPageViewports()
   }
 
   function addPage(name?: string) {
@@ -104,6 +146,6 @@ export function createPageActions(ctx: EditorContext) {
     movePage,
     renamePage,
     setPageColor,
-    clearPageViewports: pageViewportStore.clearPageViewports
+    clearPageViewports
   }
 }

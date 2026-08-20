@@ -7,6 +7,22 @@ import {
 
 export type FontFallbackScript = 'cjk' | 'cjk-sc' | 'cjk-tc' | 'cjk-jp' | 'cjk-kr' | 'arabic'
 
+export function cjkFallbackScriptForLanguage(
+  language: string | null | undefined
+): Extract<FontFallbackScript, 'cjk-sc' | 'cjk-tc' | 'cjk-jp' | 'cjk-kr'> | null {
+  if (!language) return null
+  const normalized = language.toLowerCase().replaceAll('_', '-')
+  const [primary] = normalized.split('-')
+  if (primary === 'ja') return 'cjk-jp'
+  if (primary === 'ko') return 'cjk-kr'
+  if (primary !== 'zh') return null
+  const subtags = new Set(normalized.split('-').slice(1))
+  if (subtags.has('hant') || subtags.has('tw') || subtags.has('hk') || subtags.has('mo')) {
+    return 'cjk-tc'
+  }
+  return 'cjk-sc'
+}
+
 export interface FontFallbackManifestEntry {
   script: FontFallbackScript
   localFamilies: string[]
@@ -60,9 +76,9 @@ function cjkScriptLocalFallbackFamilies(
       })
     case 'cjk-kr':
       return platformCJKFamilies(userAgent, {
-        mac: ['Apple SD Gothic Neo'],
-        windows: ['Malgun Gothic'],
-        linux: ['Noto Sans CJK KR', 'Droid Sans Fallback']
+        mac: ['Apple SD Gothic Neo', 'PingFang SC', 'Hiragino Sans'],
+        windows: ['Malgun Gothic', 'Microsoft YaHei', 'Yu Gothic'],
+        linux: ['Noto Sans CJK KR', 'Noto Sans CJK SC', 'Droid Sans Fallback']
       })
     default:
       return platformCJKFamilies(userAgent, {
@@ -80,7 +96,7 @@ const CJK_SCRIPT_REMOTE_FAMILIES: Record<
   'cjk-sc': ['Noto Sans SC'],
   'cjk-tc': ['Noto Sans TC', 'Noto Sans SC'],
   'cjk-jp': ['Noto Sans JP', 'Noto Sans SC'],
-  'cjk-kr': ['Noto Sans KR']
+  'cjk-kr': ['Noto Sans KR', 'Noto Sans SC']
 }
 
 export function fontFallbackManifest(

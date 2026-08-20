@@ -1,4 +1,5 @@
 import type { Editor } from '@open-pencil/core/editor'
+import { decodeBase64, encodeBase64 } from '@open-pencil/core/bytes'
 import type { SceneNode } from '@open-pencil/scene-graph'
 import type { Rect, Vector } from '@open-pencil/scene-graph/primitives'
 
@@ -64,7 +65,7 @@ export function appendClipboardCompatibilityMetadata(
   html: string,
   metadata: ClipboardCompatibilityMetadata
 ): string {
-  const encoded = new TextEncoder().encode(JSON.stringify(metadata)).toBase64()
+  const encoded = encodeBase64(new TextEncoder().encode(JSON.stringify(metadata)))
   const cleaned = html.replace(METADATA_PATTERN, '')
   return `${cleaned}<!--(op-canvas-compat)${encoded}(/op-canvas-compat)-->`
 }
@@ -76,7 +77,7 @@ export function parseClipboardCompatibilityMetadata(
   if (!match) return null
   try {
     const decoded = JSON.parse(
-      new TextDecoder().decode(Uint8Array.fromBase64(match[1]))
+      new TextDecoder().decode(decodeBase64(match[1]))
     ) as ClipboardCompatibilityMetadata
     return decoded.version === 1 && Array.isArray(decoded.roots) ? decoded : null
   } catch {

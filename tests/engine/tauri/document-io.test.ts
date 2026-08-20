@@ -40,6 +40,7 @@ describe('Tauri document IO helpers', () => {
       state: { sceneVersion: 42 } as Parameters<typeof createDocumentWriter>[0]['state'],
       getFilePath: () => '/tmp/document.fig',
       getFileHandle: () => null,
+      getStorageBinding: () => null,
       setSavedVersion: (version) => savedVersions.push(version),
       setLastWriteTime: () => undefined
     })
@@ -53,6 +54,23 @@ describe('Tauri document IO helpers', () => {
       headers: { path: '%2Ftmp%2Fdocument.fig', options: undefined }
     })
     expect(savedVersions).toEqual([42])
+  })
+
+  test('keeps a completed write successful when recovery cleanup fails', async () => {
+    await mockTauriIPC(() => null)
+    const savedVersions: number[] = []
+    const write = createDocumentWriter({
+      state: { sceneVersion: 42 } as Parameters<typeof createDocumentWriter>[0]['state'],
+      getFilePath: () => '/tmp/document.fig',
+      getFileHandle: () => null,
+      getStorageBinding: () => null,
+      setSavedVersion: (version) => savedVersions.push(version),
+      setLastWriteTime: () => undefined,
+      onWriteSuccess: () => Promise.reject(new Error('IndexedDB blocked'))
+    })
+
+    await expect(write(new Uint8Array([1]), 17)).resolves.toBe(true)
+    expect(savedVersions).toEqual([17])
   })
 
   test('chooses a Tauri save path through plugin-dialog', async () => {

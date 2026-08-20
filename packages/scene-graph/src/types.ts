@@ -1,3 +1,4 @@
+import type { CanvasGuide } from './guides'
 import type { Color, Matrix, Rect, Vector } from './primitives'
 
 export interface SceneGraphEvents {
@@ -36,6 +37,7 @@ export interface SourceMetadata {
   format: 'fig' | null
   id: string | null
   orderKey: string | null
+  editedFields: string[]
   fig: FigmaSourcePayload
 }
 
@@ -72,6 +74,10 @@ export interface VectorNetwork {
 export interface GeometryPath {
   windingRule: WindingRule
   commandsBlob: Uint8Array
+  /** Resolved paints for geometry using a format-specific style override. */
+  fills?: Fill[]
+  /** Shared fill style attached to this geometry region, when available. */
+  fillStyleId?: string
 }
 
 export type NodeType =
@@ -161,7 +167,30 @@ export interface Fill {
 
 export type StrokeCap = 'NONE' | 'ROUND' | 'SQUARE' | 'ARROW_LINES' | 'ARROW_EQUILATERAL'
 export type StrokeJoin = 'MITER' | 'BEVEL' | 'ROUND'
+export type SharedStyleType = 'FILL' | 'TEXT' | 'EFFECT' | 'GRID'
+export type SharedStyleKind = 'fill' | 'stroke' | 'text' | 'effect' | 'grid'
 export type MaskType = 'ALPHA' | 'VECTOR' | 'LUMINANCE'
+
+export interface LayoutGrid {
+  visible?: boolean
+  color?: Color
+  pattern?: 'COLUMNS' | 'ROWS' | 'GRID'
+  axis?: 'X' | 'Y'
+  type?: 'MIN' | 'CENTER' | 'MAX' | 'STRETCH'
+  alignment?: 'MIN' | 'CENTER' | 'MAX' | 'STRETCH'
+  numSections?: number
+  count?: number
+  offset?: number
+  sectionSize?: number
+  gutterSize?: number
+}
+
+export interface SharedStyle {
+  id: string
+  nodeId: string
+  name: string
+  type: SharedStyleType
+}
 
 export interface Stroke {
   color: Color
@@ -221,6 +250,7 @@ export interface CharacterStyleOverride {
   fills?: Fill[]
   fontVariations?: FontVariation[]
   fontFeatures?: FontFeature[]
+  textLanguage?: string | null
 }
 
 export interface StyleRun {
@@ -276,11 +306,33 @@ export interface PluginRelaunchDataEntry {
   isDeleted: boolean
 }
 
-export interface FigmaDerivedTextGlyph {
+/**
+ * One derived glyph outline for display (path text / missing-font fidelity).
+ * Figma import is one producer; OpenPencil editing and reflow can regenerate it.
+ * commandsBlob is in font units; paint multiplies by fontSize (and scaleX/Y).
+ */
+export interface TextPathData {
+  network: VectorNetwork
+  normalizedSize: Vector
+  tValue: number
+  forward: boolean
+}
+
+export interface DerivedTextGlyph {
   commandsBlob: Uint8Array
   x: number
   y: number
   fontSize: number
+  /** Figma Glyph.rotation — radians, not degrees. Zero for axis-aligned text. */
+  rotation?: number
+  /**
+   * Accumulated non-uniform resize scale (default 1). Paint order is
+   * translate → scale(scaleX,Y) → rotate → scale(fontSize,-fontSize) so
+   * anisotropic stretch matches scaleGeometryPaths(strokeGeometry).
+   * Do not fold this into fontSize or rotated letters desync from outlines.
+   */
+  scaleX?: number
+  scaleY?: number
 }
 
 export interface SymbolLink {
@@ -322,6 +374,24 @@ export type FigmaLayoutMetadata = Partial<
     Record<'bordersTakeSpace' | 'stackReverseZIndex', boolean>
 >
 
+export interface LibraryAssetIdentity {
+  libraryId: string
+  assetKey: string
+  revisionId: string
+}
+
+export interface LibraryAssetSource {
+  identity: LibraryAssetIdentity
+  sourceNodeId: string | null
+  readOnly: boolean
+}
+
+export interface EnabledLibraryBinding {
+  libraryId: string
+  revisionId: string
+  enabled: boolean
+}
+
 export interface SceneNode {
   id: string
   type: NodeType
@@ -335,11 +405,20 @@ export interface SceneNode {
   height: number
   rotation: number
   source: SourceMetadata
-  figmaDerivedLayout: Partial<Rect> | null
+  /** Materialized layout hint imported or generated outside the live Yoga layout pass. */
+  derivedLayout: Partial<Rect> | null
 
   fills: Fill[]
   strokes: Stroke[]
   effects: Effect[]
+  layoutGrids: LayoutGrid[]
+  guides: CanvasGuide[]
+  fillStyleId: string | null
+  strokeStyleId: string | null
+  textStyleId: string | null
+  effectStyleId: string | null
+  gridStyleId: string | null
+  sharedStyleType: SharedStyleType | null
   opacity: number
 
   cornerRadius: number
@@ -363,6 +442,7 @@ export interface SceneNode {
   italic: boolean
   textAlignHorizontal: 'LEFT' | 'CENTER' | 'RIGHT' | 'JUSTIFIED'
   textDirection: TextDirection
+  textLanguage: string | null
   textAlignVertical: TextAlignVertical
   textAutoResize: TextAutoResize
   textCase: TextCase
@@ -403,6 +483,7 @@ export interface SceneNode {
   layoutAlignSelf: LayoutAlignSelf
 
   vectorNetwork: VectorNetwork | null
+  handleMirroring: HandleMirroring
   booleanOperation?: 'UNION' | 'SUBTRACT' | 'INTERSECT' | 'EXCLUDE'
   fillGeometry: GeometryPath[]
   strokeGeometry: GeometryPath[]
@@ -450,6 +531,8 @@ export interface SceneNode {
   componentId: string | null
   overrides: Record<string, unknown>
   componentPropertyDefinitions: ComponentPropertyDefinition[]
+  componentPropertyReferences: ComponentPropertyReference[]
+  componentPropertyAssignments: Record<string, string>
   componentPropertyValues: Record<string, string>
   componentKey: string | null
   sourceLibraryKey: string | null
@@ -457,6 +540,7 @@ export interface SceneNode {
   overrideKey: string | null
   sharedSymbolVersion: string | null
   publishedVersion: string | null
+  librarySource: LibraryAssetSource | null
   isPublishable: boolean
   isSymbolPublishable: boolean
   symbolDescription: string
@@ -464,6 +548,7 @@ export interface SceneNode {
   variantPropSpecs: VariantPropSpec[]
 
   boundVariables: Record<string, string>
+  variableModes: VariableModeMap
   exportSettings: ExportSetting[]
 
   pluginData: PluginDataEntry[]
@@ -475,10 +560,21 @@ export interface SceneNode {
   flipY: boolean
 
   textPicture: Uint8Array | null
-  figmaDerivedTextGlyphs: FigmaDerivedTextGlyph[] | null
+  derivedTextGlyphs: DerivedTextGlyph[] | null
+  /** Format-neutral layout path for text-on-path nodes. */
+  textPathData: TextPathData | null
+  /** Node-local box that maps textPathData into the node coordinate space. */
+  textPathBox: Rect | null
 }
 
 export type ComponentPropertyType = 'VARIANT' | 'TEXT' | 'BOOLEAN' | 'INSTANCE_SWAP'
+
+export type ComponentPropertyReferenceField = 'VISIBLE' | 'TEXT' | 'INSTANCE_SWAP'
+
+export interface ComponentPropertyReference {
+  propertyId: string
+  field: ComponentPropertyReferenceField
+}
 
 export interface ComponentPropertyDefinition {
   id: string
@@ -486,10 +582,12 @@ export interface ComponentPropertyDefinition {
   type: ComponentPropertyType
   defaultValue: string
   variantOptions?: string[]
+  preferredValues?: string[]
 }
 
 export type VariableType = 'COLOR' | 'FLOAT' | 'STRING' | 'BOOLEAN'
 export type VariableValue = Color | number | string | boolean | { aliasId: string }
+export type VariableModeMap = Record<string, string>
 
 export interface Variable {
   id: string

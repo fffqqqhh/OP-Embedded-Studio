@@ -2,21 +2,21 @@ import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } from '@agentclie
 import type {
   Client,
   Agent,
-  ContentBlock,
   SessionNotification,
   RequestPermissionRequest,
   RequestPermissionResponse
 } from '@agentclientprotocol/sdk'
-import type { ChatTransport, FileUIPart, UIMessage, UIMessageChunk } from 'ai'
+import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai'
 
 import type { ACPAgentDef } from '@open-pencil/core/constants'
 
-import { parseImageDataUrl } from '@/app/ai/chat/attachments'
+import SYSTEM_PROMPT from '@/app/ai/chat/system-prompt.md?raw'
+import { buildACPMCPServers } from '@/app/integrations/mcp'
 
 import { mapUpdate } from './map-update'
-import { spawnAcpProcess } from './process'
+import { spawnACPProcess } from './process'
 
-type TauriChild = Awaited<ReturnType<typeof spawnAcpProcess>>['child']
+type TauriChild = Awaited<ReturnType<typeof spawnACPProcess>>['child']
 
 interface ACPDebugEntry {
   ts: number
@@ -30,7 +30,6 @@ interface ACPSession {
   child: TauriChild
   onUpdate: ((params: SessionNotification) => void) | null
   dead: boolean
-  supportsImages: boolean
 }
 
 const MAX_LOG_AGE_MS = 5 * 60 * 1000
@@ -45,18 +44,18 @@ function pruneOldEntries() {
   }
 }
 
-export function getAcpDebugText(): string {
+export function getACPDebugText(): string {
   pruneOldEntries()
   return acpDebugLog
     .map((e) => `[${new Date(e.ts).toISOString()}] ${e.type}\n${JSON.stringify(e.data, null, 2)}`)
     .join('\n\n---\n\n')
 }
 
-export function clearAcpDebugLog() {
+export function clearACPDebugLog() {
   acpDebugLog.length = 0
 }
 
-export function hasAcpDebugEntries(): boolean {
+export function hasACPDebugEntries(): boolean {
   pruneOldEntries()
   return acpDebugLog.length > 0
 }
@@ -69,7 +68,7 @@ function isMissingCommandError(message: string): boolean {
 function missingCommandMessage(agentDef?: ACPAgentDef): string {
   if (!agentDef) return 'ACP agent CLI is not installed.'
   if (!agentDef.installCommand) {
-    return `"${agentDef.command}" is not installed. Install it and restart OP Embedded Studio.`
+    return `"${agentDef.command}" is not installed. Install it and restart OpenPencil.`
   }
   return `"${agentDef.command}" is not installed. Install it with: ${agentDef.installCommand}`
 }
@@ -106,28 +105,16 @@ export function buildCrashChunks(
   return { chunks, shouldNullSession: true }
 }
 
-export function fileUIPartToACPImage(part: FileUIPart): ContentBlock {
-  const parsed = parseImageDataUrl(part.url)
-  if (!parsed) throw new Error('ACP image attachments must use PNG, JPEG, or WebP data URLs.')
-  return {
-    type: 'image',
-    data: parsed.data,
-    mimeType: parsed.mimeType
-  }
-}
-
 export class ACPChatTransport implements ChatTransport<UIMessage> {
   private session: ACPSession | null = null
   private agentDef: ACPAgentDef
   private cwd: string
   private sentContext = false
   private destroying = false
-  private getSystemPrompt: () => string
 
-  constructor(options: { agentDef: ACPAgentDef; cwd?: string; getSystemPrompt?: () => string }) {
+  constructor(options: { agentDef: ACPAgentDef; cwd?: string }) {
     this.agentDef = options.agentDef
     this.cwd = options.cwd ?? '.'
-    this.getSystemPrompt = options.getSystemPrompt ?? (() => '')
   }
 
   async sendMessages({
@@ -142,8 +129,6 @@ export class ACPChatTransport implements ChatTransport<UIMessage> {
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
         .map((p) => p.text)
         .join('\n') ?? ''
-    const files =
-      lastUserMessage?.parts.filter((part): part is FileUIPart => part.type === 'file') ?? []
 
     if (this.session?.dead) {
       this.session = null
@@ -153,16 +138,7 @@ export class ACPChatTransport implements ChatTransport<UIMessage> {
       this.session = await this.spawnAgent()
     }
 
-    if (files.length > 0 && !this.session.supportsImages) {
-      throw new Error(
-        `${this.agentDef.name} does not advertise image input support. Remove the reference images or choose a vision-capable agent.`
-      )
-    }
-
-    const promptText = this.sentContext ? text : `${this.getSystemPrompt()}\n\n${text}`.trim()
-    const prompt: ContentBlock[] = []
-    if (promptText) prompt.push({ type: 'text', text: promptText })
-    prompt.push(...files.map(fileUIPartToACPImage))
+    const promptText = this.sentContext ? text : `${SYSTEM_PROMPT}\n\n${text}`
     this.sentContext = true
 
     const { connection, sessionId } = this.session
@@ -212,7 +188,7 @@ export class ACPChatTransport implements ChatTransport<UIMessage> {
         connection
           .prompt({
             sessionId,
-            prompt
+            prompt: [{ type: 'text', text: promptText }]
           })
           .then((result) => {
             finish(result.stopReason === 'end_turn' ? 'stop' : 'other')
@@ -238,9 +214,9 @@ export class ACPChatTransport implements ChatTransport<UIMessage> {
   }
 
   private async spawnAgent(): Promise<ACPSession> {
-    let process: Awaited<ReturnType<typeof spawnAcpProcess>>
+    let process: Awaited<ReturnType<typeof spawnACPProcess>>
     try {
-      process = await spawnAcpProcess({
+      process = await spawnACPProcess({
         command: this.agentDef.command,
         args: this.agentDef.args,
         logId: this.agentDef.id,
@@ -274,30 +250,32 @@ export class ACPChatTransport implements ChatTransport<UIMessage> {
 
     const connection = new ClientSideConnection((_agent: Agent) => clientImpl, stream)
     const { getAutomationAuthToken } = await import('@/app/automation/mcp/spawn')
-    const automationAuthToken = await getAutomationAuthToken()
+    let automationAuthToken: string | null
+    try {
+      automationAuthToken = await getAutomationAuthToken()
+    } catch (e) {
+      await child.kill().catch(() => undefined)
+      throw new Error(formatConnectionError(e, this.agentDef))
+    }
 
-    const initializeResult = await connection.initialize({
-      protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: {}
-    })
+    try {
+      await connection.initialize({
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: {}
+      })
+    } catch (e) {
+      await child.kill().catch(() => undefined)
+      throw new Error(formatConnectionError(e, this.agentDef))
+    }
 
     let sessionResult
     try {
       sessionResult = await connection.newSession({
         cwd: this.cwd,
-        mcpServers: [
-          {
-            type: 'http' as const,
-            name: 'open-pencil',
-            url: 'http://127.0.0.1:7600/mcp',
-            headers: automationAuthToken
-              ? [{ name: 'Authorization', value: `Bearer ${automationAuthToken}` }]
-              : []
-          }
-        ]
+        mcpServers: await buildACPMCPServers({ authorizationToken: automationAuthToken })
       })
     } catch (e) {
-      await child.kill()
+      await child.kill().catch(() => undefined)
       throw new Error(formatConnectionError(e, this.agentDef))
     }
 
@@ -306,7 +284,6 @@ export class ACPChatTransport implements ChatTransport<UIMessage> {
       sessionId: sessionResult.sessionId,
       child,
       dead: false,
-      supportsImages: initializeResult.agentCapabilities?.promptCapabilities?.image === true,
       get onUpdate() {
         return onUpdate
       },

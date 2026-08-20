@@ -55,6 +55,7 @@ export function renderFromEditorState(
     state.selectedIds,
     {
       hoveredNodeId: state.hoveredNodeId,
+      measurementMode: state.measurementMode,
       enteredContainerId: state.enteredContainerId,
       editingTextId: state.editingTextId,
       textEditor: textEditor as RenderOverlays['textEditor'],
@@ -101,6 +102,7 @@ function scenePictureMissReason(
   if (graph.positionPreviewVersion !== r.scenePicturePositionPreviewVersion)
     return 'position-preview-version'
   if (sceneVersion !== r.scenePictureVersion) return 'scene-version'
+  if (r.fontGeneration !== r.scenePictureFontGeneration) return 'font-generation'
   if (r.pageId !== r.scenePicturePageId) return 'page'
   return 'unknown'
 }
@@ -116,6 +118,7 @@ function canUseScenePicture(
     !!r.scenePicture &&
     graph.positionPreviewVersion === r.scenePicturePositionPreviewVersion &&
     sceneVersion === r.scenePictureVersion &&
+    r.fontGeneration === r.scenePictureFontGeneration &&
     r.pageId === r.scenePicturePageId
   )
 }
@@ -128,6 +131,36 @@ function measure<T>(fn: () => T): { value: T; duration: number } {
   return { value, duration: now() - start }
 }
 
+function measurementVisible(overlays: RenderOverlays): boolean {
+  return (
+    overlays.measurementMode !== undefined &&
+    overlays.measurementMode !== 'off' &&
+    !overlays.editingTextId &&
+    !overlays.nodeEditState &&
+    !overlays.penState
+  )
+}
+
+function drawInteractiveOverlays(
+  r: SkiaRenderer,
+  canvas: Canvas,
+  graph: SceneGraph,
+  selectedIds: Set<string>,
+  overlays: RenderOverlays
+) {
+  const measuring = measurementVisible(overlays)
+  const hoveredNodeId =
+    measuring || overlays.hoveredNodeId === overlays.nodeEditState?.nodeId
+      ? null
+      : overlays.hoveredNodeId
+  r.drawHoverHighlight(canvas, graph, hoveredNodeId)
+  r.drawEnteredContainer(canvas, graph, overlays.enteredContainerId)
+  r.profiler.beginPhase('render:selection')
+  r.drawSelection(canvas, graph, selectedIds, overlays)
+  if (measuring) r.drawMeasurements(canvas, graph, selectedIds, overlays.hoveredNodeId)
+  r.profiler.endPhase('render:selection')
+}
+
 export function render(
   r: SkiaRenderer,
   graph: SceneGraph,
@@ -136,6 +169,7 @@ export function render(
   sceneVersion = -1,
   layer: RenderLayer = 'full'
 ): void {
+  r.syncFontGeneration()
   const p = r.profiler
   p.beginFrame()
   p.setScenePictureDrawTime(0)
@@ -218,21 +252,15 @@ export function render(
     canvas.save()
     canvas.scale(r.dpr, r.dpr)
 
-    r.drawHoverHighlight(
-      canvas,
-      graph,
-      overlays.hoveredNodeId === overlays.nodeEditState?.nodeId ? null : overlays.hoveredNodeId
-    )
-    r.drawEnteredContainer(canvas, graph, overlays.enteredContainerId)
-    p.beginPhase('render:selection')
-    r.drawSelection(canvas, graph, selectedIds, overlays)
-    p.endPhase('render:selection')
+    drawInteractiveOverlays(r, canvas, graph, selectedIds, overlays)
     r.drawFlashes(canvas, graph)
     drawPageGuides(r, canvas, graph)
     r.drawSnapGuides(canvas, overlays.snapGuides)
     r.drawMarquee(canvas, overlays.marquee)
     r.drawLayoutInsertIndicator(canvas, overlays.layoutInsertIndicator)
-    r.drawAutoLayoutHover(canvas, graph, overlays.autoLayoutHover)
+    if (!measurementVisible(overlays)) {
+      r.drawAutoLayoutHover(canvas, graph, overlays.autoLayoutHover)
+    }
     r.drawNodeEditOverlay(canvas, graph, overlays.nodeEditState)
     r.drawPenOverlay(canvas, overlays.penState)
     r.drawRemoteCursors(canvas, graph, overlays.remoteCursors)
@@ -348,6 +376,7 @@ function recordScenePicture(
   recorder.delete()
   r.worldViewport = prevViewport
   r.scenePictureVersion = sceneVersion
+  r.scenePictureFontGeneration = r.fontGeneration
   r.scenePicturePositionPreviewVersion = graph.positionPreviewVersion
   r.scenePicturePageId = r.pageId
   canvas.drawPicture(r.scenePicture)

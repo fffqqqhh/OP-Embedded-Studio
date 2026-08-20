@@ -1,4 +1,4 @@
-export type AppTargetCliArgs = {
+export type AppTargetCLIArgs = {
   'document-id'?: string
   'page-id'?: string
 }
@@ -6,7 +6,7 @@ export type AppTargetCliArgs = {
 export const appTargetOptions = {
   'document-id': {
     type: 'string',
-    description: 'Target OP Embedded Studio document/tab ID when connected to the running app',
+    description: 'Target OpenPencil document/tab ID when connected to the running app',
     required: false
   },
   'page-id': {
@@ -16,7 +16,7 @@ export const appTargetOptions = {
   }
 } as const
 
-export function appTargetRpcArgs(args: AppTargetCliArgs): {
+export function appTargetRPCArgs(args: AppTargetCLIArgs): {
   document_id?: string
   page_id?: string
 } {

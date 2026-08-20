@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 
-import {
-  modelSupportsImageInput,
-  providerRequiresCustomModelID,
-  resolveLanguageModelID
-} from '@/app/ai/chat/model'
+import { AI_PROVIDERS } from '@open-pencil/core/constants'
+
+import { resolveLanguageModelID } from '@/app/ai/chat/model'
 import { normalizeOpenRouterModel } from '@/app/ai/chat/provider-models'
+import { createAnthropicCompatibleAdapter } from '@/app/ai/providers/compatible'
+import { modelProviderAdapter } from '@/app/ai/providers/registry'
+import type { ModelConfig } from '@/app/ai/providers/types'
 
 describe('resolveLanguageModelID', () => {
   test('uses the selected OpenRouter model when no custom model is configured', () => {
@@ -29,22 +30,82 @@ describe('resolveLanguageModelID', () => {
   })
 })
 
-describe('providerRequiresCustomModelID', () => {
-  test('lets OpenRouter use the selected model when the custom model field is empty', () => {
-    expect(providerRequiresCustomModelID('openrouter', { supportsCustomModel: true })).toBe(false)
+describe('model provider registry', () => {
+  test('offers MiniMax-M3 as the default MiniMax model', () => {
+    const provider = AI_PROVIDERS.find(({ id }) => id === 'minimax')
+    expect(provider?.defaultModel).toBe('MiniMax-M3')
+    expect(provider?.models[0]).toMatchObject({ id: 'MiniMax-M3' })
   })
 
-  test('requires custom model IDs for compatible providers without curated model lists', () => {
-    expect(providerRequiresCustomModelID('openai-compatible', { supportsCustomModel: true })).toBe(
-      true
+  test('sends MiniMax-M3 through the OpenAI-compatible chat endpoint', async () => {
+    let requestURL = ''
+    let requestBody = ''
+    const fetchSpy: typeof fetch = async (input, init) => {
+      requestURL = String(input)
+      requestBody = String(init?.body)
+      throw new Error('stop')
+    }
+    const config: ModelConfig = {
+      providerID: 'minimax',
+      apiKey: 'test-key',
+      modelID: 'MiniMax-M3',
+      customModelID: '',
+      customBaseURL: '',
+      customAPIType: 'completions'
+    }
+
+    const model = modelProviderAdapter('minimax').create(config, { fetch: fetchSpy })
+    await model
+      .doGenerate({ prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] })
+      .catch(() => undefined)
+
+    expect(requestURL).toBe('https://api.minimax.io/v1/chat/completions')
+    expect(requestBody).toContain('"model":"MiniMax-M3"')
+  })
+
+  test('registers every direct provider without handling agent runtimes as models', () => {
+    for (const provider of AI_PROVIDERS.filter((entry) => entry.id !== 'harness:pi')) {
+      expect(modelProviderAdapter(provider.id).create).toBeFunction()
+    }
+    expect(() => modelProviderAdapter('harness:pi')).toThrow('Harness agents')
+    expect(() => modelProviderAdapter('acp:claude-code')).toThrow(
+      'ACP providers and Harness agents do not use direct API models'
     )
-    expect(
-      providerRequiresCustomModelID('anthropic-compatible', { supportsCustomModel: true })
-    ).toBe(true)
   })
+})
 
-  test('does not require a custom model for fixed-model providers', () => {
-    expect(providerRequiresCustomModelID('anthropic', {})).toBe(false)
+describe('anthropic compatible adapter', () => {
+  const config: ModelConfig = {
+    providerID: 'anthropic',
+    apiKey: 'test-key',
+    modelID: 'claude-sonnet-4.6',
+    customModelID: '',
+    customBaseURL: '',
+    customAPIType: 'completions'
+  }
+
+  async function capturedHeaders(): Promise<Record<string, string>> {
+    let captured: Record<string, string> = {}
+    const fetchSpy: typeof fetch = async (_input, init) => {
+      captured = Object.fromEntries(new Headers(init?.headers).entries())
+      throw new Error('stop')
+    }
+
+    const model = createAnthropicCompatibleAdapter().create(config, { fetch: fetchSpy })
+    await model
+      .doGenerate({ prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] })
+      .catch(() => undefined)
+
+    return captured
+  }
+
+  test('opts into direct browser access so Anthropic returns CORS headers', async () => {
+    // Anthropic omits Access-Control-Allow-Origin unless this header is sent, which makes the
+    // web build fail with an opaque network error. See #436.
+    expect(await capturedHeaders()).toHaveProperty(
+      'anthropic-dangerous-direct-browser-access',
+      'true'
+    )
   })
 })
 
@@ -54,9 +115,16 @@ describe('normalizeOpenRouterModel', () => {
       normalizeOpenRouterModel({
         id: 'meta-llama/llama-3.3-70b-instruct',
         name: 'Llama 3.3 70B Instruct',
-        supported_parameters: ['tools']
+        supported_parameters: ['tools'],
+        architecture: { input_modalities: ['text', 'image'] },
+        top_provider: { max_completion_tokens: 32_768 }
       })
-    ).toEqual({ id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' })
+    ).toEqual({
+      id: 'meta-llama/llama-3.3-70b-instruct',
+      name: 'Llama 3.3 70B Instruct',
+      capabilities: ['tools', 'vision'],
+      recommendedMaxOutputTokens: 32_768
+    })
   })
 
   test('skips OpenRouter models without tool support', () => {
@@ -67,23 +135,5 @@ describe('normalizeOpenRouterModel', () => {
         supported_parameters: []
       })
     ).toBeNull()
-  })
-})
-
-describe('modelSupportsImageInput', () => {
-  const config = { modelID: 'model', customModelID: '' }
-
-  test('enables image input for established multimodal providers and ACP negotiation', () => {
-    expect(modelSupportsImageInput({ ...config, providerID: 'openai' })).toBe(true)
-    expect(modelSupportsImageInput({ ...config, providerID: 'anthropic' })).toBe(true)
-    expect(modelSupportsImageInput({ ...config, providerID: 'google' })).toBe(true)
-    expect(modelSupportsImageInput({ ...config, providerID: 'openrouter' })).toBe(true)
-    expect(modelSupportsImageInput({ ...config, providerID: 'acp:claude-code' })).toBe(true)
-  })
-
-  test('does not claim image input for text-focused provider integrations', () => {
-    expect(modelSupportsImageInput({ ...config, providerID: 'deepseek' })).toBe(false)
-    expect(modelSupportsImageInput({ ...config, providerID: 'zai' })).toBe(false)
-    expect(modelSupportsImageInput({ ...config, providerID: 'minimax' })).toBe(false)
   })
 })

@@ -4,26 +4,29 @@ Embedded UI design and flashing platform built on OpenPencil. Vue 3 + CanvasKit 
 
 **Roadmap:** `packages/docs/development/roadmap.md` tracks product direction, Figma compatibility gaps, and raw metadata coverage. This file keeps agent-facing architecture, conventions, and commands; detailed public docs live under `packages/docs/**`.
 
+**Roadmap:** `packages/docs/development/roadmap.md` tracks product direction, Figma compatibility gaps, and raw metadata coverage. This file keeps agent-facing architecture, conventions, and commands; detailed public docs live under `packages/docs/**`.
+
 ## Monorepo
 
 Bun workspace packages:
 
 - `packages/scene-graph` — `@open-pencil/scene-graph`: SceneGraph, node types, copy/snap/undo helpers, variables, instances, hit testing. Framework-agnostic.
-- `packages/pen` — `@open-pencil/pen`: Pen/vector editing helpers shared by core/editor surfaces.
+- `packages/pen` — `@open-pencil/pen`: Pencil.dev `.pen` document model, parser, and SceneGraph import adapter.
 - `packages/kiwi` — `@open-pencil/kiwi`: pure Kiwi schema/runtime/protocol package. Owns low-level Figma Kiwi codec/container/parse helpers and stays SceneGraph-agnostic.
-- `packages/fig` — `@open-pencil/fig`: publishable `.fig` package shell and low-level smoke/test boundary. Production SceneGraph `.fig` policy still lives mostly in core while this package grows.
+- `packages/fig` — `@open-pencil/fig`: `.fig` archive/parser package owning Figma-specific SceneGraph conversion, raw metadata policy, and component/instance interpretation. Core keeps format-neutral IO registration and runtime rendering/font integration.
 - `packages/core` — `@open-pencil/core`: renderer, layout, editor core, Figma API, tools, clipboard, vector conversion, and app/CLI-facing document I/O. Depends on scene-graph/pen/kiwi but keeps browser DOM out of core.
 - `packages/dom-css` — `@open-pencil/dom-css`: DOM/CSS projection layer for HTML/CSS/JSX/Tailwind compatibility. Owns DesignDOM types and browser/headless CSS runtime adapters; keeps DOM/CSS parser dependencies out of core.
 - `packages/vue` — `@open-pencil/vue`: headless Vue 3 SDK (Reka UI-style) for building custom OpenPencil-powered editor shells and embedded editing surfaces. Renderless components and composables. The app is one consumer of the SDK.
 - `packages/cli` — `@open-pencil/cli`: headless CLI for .fig inspection, export, linting. Uses `citty` + `agentfmt`.
 - `packages/mcp` — `@open-pencil/mcp`: MCP server for AI coding tools. Stdio + HTTP (Hono). Reuses core tools.
-- `packages/docs` — `@open-pencil/docs`: published VitePress documentation site. Run with `bun run docs:dev`.
+- `packages/harness` — `@open-pencil/harness`: optional Node companion CLI for backend-neutral coding-agent sessions. Owns HarnessAgent adapters, opaque resume-state persistence, and the JSONL host protocol; the desktop detects and launches the separately installed command instead of bundling a JavaScript runtime.
+- `packages/docs` — `@open-pencil/docs`: published VitePress documentation site. Use `bun run docs:dev` for authoring, `bun run docs:build` for the default fast local render check without minification or generated LLM files, and `bun run docs:build:production` for the complete deployment output.
 
 The root app (`src/`) is the Tauri/Vite desktop editor. App-specific editor, document, AI, collaboration, shell, tabs, demo, and automation code lives under `src/app/*`. The app consumes scene graph primitives from `@open-pencil/scene-graph`, editor/rendering services through targeted `@open-pencil/core` subpath exports, and `@open-pencil/vue` through the public Vue SDK entrypoint.
 
 ### Public package exports
 
-Use public package exports across package/app boundaries. Do not import workspace package internals from app code.
+Use public package exports across package/app boundaries. Do not import workspace package internals from app code. Do not create cross-package re-export shim files whose only purpose is forwarding another package's API. Import the owning package directly at call sites; public compatibility barrels may re-export the owner directly when preserving an established package API.
 
 - `@open-pencil/scene-graph` — SceneGraph, node types, primitives, copy/snap/undo, instance helpers, variable helpers, vector-network types.
 - `@open-pencil/core` — broad compatibility barrel for editor/rendering/tooling APIs.
@@ -50,6 +53,18 @@ Headless SDK fields compose variable/token binding through `BindingProvider` and
 
 Property-panel anatomy in `packages/vue/src/primitives/PropertySection/`, `SegmentedControl/`, and `PropertyList/` is controlled and editor-agnostic. Connect PropertyList events to OpenPencil selection and undo through `useEditorPropertyList()` or an app adapter; never call `useEditor()` from these primitives.
 
+### Settings and credentials
+
+Credential persistence lives under `src/app/settings/credentials/`. Settings components receive `CredentialManager` and may inspect status, replace, or clear credentials; runtime adapters receive `CredentialResolver`. Components must not read saved secrets or keep them in long-lived reactive refs. Non-secret provider preferences remain in normal settings storage.
+
+Tauri stores secrets in the native system credential store through `desktop/src/credentials.rs`; browsers default to WebCrypto-encrypted IndexedDB storage and may explicitly opt out to session-only memory. Native failures must never silently fall back to browser or plaintext storage. New integration credentials use stable `CredentialRef` values and join the unified Settings surface rather than adding feature-local key forms.
+
+Storage-provider schemas and runtime adapters live under `src/app/integrations/storage/`; non-secret preferences and credential references stay separate, and adapters resolve secrets at operation time. Local-first document caching and outbox synchronization live under `src/app/storage/`. A remote storage binding augments document source state and must not replace local file identity.
+
+Bitmap-to-vector conversion lives in `packages/core/src/vector/vectorize/`; app provider clients, preferences, and lazy credential resolution live under `src/app/editor/vectorize/`. Keep provider credentials in the centralized credential manager, bound request and response sizes, and validate provider-owned download URLs before importing returned SVG.
+
+App dialogs compose the Reka-backed components under `src/components/ui/dialog/` and the typed theme in `src/theme/dialog.ts`. Do not repeat portal, overlay, content, header, or footer infrastructure in feature dialogs.
+
 ## Commands
 
 - `bun run check` — type-aware lint + typecheck via oxlint + tsgo + architecture checks (run before committing)
@@ -65,41 +80,35 @@ Property-panel anatomy in `packages/vue/src/primitives/PropertySection/`, `Segme
 
 ## Releases & CI
 
-### Desktop Studio releases
+### How to release
 
-OP Embedded Studio and the Android BLE uploader have independent versions and tag namespaces. Never reuse an Android version as the desktop version.
-
-1. Update the desktop version in the root `package.json`, `desktop/tauri.conf.json`, and `desktop/Cargo.toml`. Do not bump publishable `@open-pencil/*` packages for a Studio-only release.
-2. Update `CHANGELOG.md` and move the relevant "Unreleased" items under the new version heading with the date.
-3. Commit: `Release OP Embedded Studio 0.x.y`.
-4. Tag the exact matching version: `git tag studio-v0.x.y && git push origin studio-v0.x.y`.
-5. The `build.yml` workflow validates the tag against `package.json`, builds desktop binaries, and creates a draft GitHub Release named for OP Embedded Studio. It does not publish inherited `@open-pencil/*` packages.
-6. Review the draft release and publish it manually.
-
-Desktop automatic updates are disabled until OP Embedded Studio owns its updater signing key and release manifest. Do not restore an OpenPencil updater endpoint or signing key.
-
-### Android uploader releases
-
-1. Update `versionCode` and `versionName` in `tools/android-ble-uploader/app/build.gradle`.
-2. Build and verify the APK with `bun run mobile:apk`.
-3. Commit: `Release Android BLE uploader 0.x.y`.
-4. Tag: `git tag android-v0.x.y && git push origin android-v0.x.y`.
-5. Create or update the matching GitHub Release and attach the APK.
-
-The historical `v0.3.5` tag is the final unscoped Android tag. Keep it intact; all later releases use `studio-v*` or `android-v*`.
+1. Update version in the root `package.json`, publishable `packages/*/package.json`, `desktop/tauri.conf.json`, and `desktop/Cargo.toml`
+2. Update `CHANGELOG.md` — move "Unreleased" items under new version heading with date
+3. Commit: `Release v0.x.y`
+4. Tag: `git tag v0.x.y && git push --tags`
+5. Ensure GitHub release secrets include `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the updater key is password-protected); the public updater key is configured in `desktop/tauri.conf.json`. macOS signing and notarization additionally require `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`.
+6. The `build.yml` workflow triggers on `v*` tags and:
+   - Builds Tauri binaries for macOS (arm64 + x64), Windows (x64 + arm64), Linux (x64)
+   - Creates a draft GitHub Release whose title exactly matches the tag and whose body is the matching version section from `CHANGELOG.md`
+   - Uploads platform installers, updater signatures, and `latest.json`
+   - Publishes public workspace packages to npm with provenance. Keep the exact package list in sync with `.github/workflows/build.yml` and `tools/release-packages/src/publish-dirs.ts`.
+7. The production web app/docs deploy workflows (`app.yml`, `docs.yml`) also trigger on `v*` tags. They do **not** deploy on ordinary `master` pushes.
+8. Verify the draft’s title and changelog-derived body, then publish it. Publishing the GitHub Release triggers `homebrew.yml`, which updates the Homebrew cask from the signed macOS updater archives.
 
 ### CI workflows
 
-Key workflows live in `.github/workflows/`. Use `build.yml` as the source of truth for desktop release packaging, `ci.yml` / `heavy-tests.yml` for validation gates, and `app.yml` for the GitHub Pages web deployment from `main`.
+Key workflows live in `.github/workflows/`. Use `build.yml` as the source of truth for release packaging and npm publishing, `ci.yml` / `heavy-tests.yml` for validation gates, and `app.yml` / `docs.yml` for Cloudflare Pages deploys.
+
+Production Cloudflare Pages deploys are intentionally release/manual only: `app.yml` and `docs.yml` run on `v*` tags and `workflow_dispatch`, not on `master` pushes. To deploy manually, run the relevant workflow from GitHub Actions (`Deploy app` or `Deploy docs`) on the desired ref; the workflow deploys to the configured production branch (`master`).
 
 ## Documentation
 
 - `CHANGELOG.md` — all user-facing changes, grouped by version. "Unreleased" section at top for in-progress work.
 - `README.md` — user-facing: features, getting started, CLI, project structure. No implementation details.
 - `AGENTS.md` (this file) — contributor/agent reference: architecture, conventions, how to release.
-- `packages/docs/` — VitePress site deployed at `openpencil.dev`. User guide, SDK, automation, reference, and development docs. Do not create English placeholder copies under locale directories; until a real translation exists, localized navigation should link to the canonical English page.
+- `packages/docs/` — VitePress site deployed at `openpencil.dev`. Keep its public information architecture explicit: `/getting-started` for installation, `/overview/**` for product overview and comparisons, `/user-guide/**` for editor workflows, `/programmable/**` for automation and SDK docs, `/reference/**` for compatibility and technical reference, and `/development/**` for contributor internals and the roadmap. Do not reintroduce a generic `/guide/**` section. Preserve moved public routes in `packages/docs/public/_redirects`. Do not create English placeholder copies under locale directories; until a real translation exists, localized navigation should link to the canonical English page.
 
-When adding features, update `CHANGELOG.md` (Unreleased section) and `README.md` (if user-facing). Update `AGENTS.md` when architecture or conventions change. Do not put speculative/internal implementation plans in `packages/docs/**`; VitePress docs are published. Keep temporary plans in ignored `scratch/` or distill durable public direction into the canonical roadmap.
+When adding features, update `CHANGELOG.md` (Unreleased section) and `README.md` (if user-facing). Changelog entries use the public categories `Breaking changes`, `Added`, `Changed`, `Fixed`, `Performance`, and `Security`; omit empty categories. Use `## x.y.z — YYYY-MM-DD` for release headings, describe one user-visible outcome per bullet in present tense, end complete sentences with periods, and append related issue or PR references such as `(#395)`. Avoid implementation details, test counts, and internal refactors unless they affect users or package consumers. Update `AGENTS.md` when architecture or conventions change. Do not put speculative/internal implementation plans in `packages/docs/**`; VitePress docs are published. Keep temporary plans in ignored `scratch/` or distill durable public direction into the canonical roadmap.
 
 ## Commit messages
 
@@ -121,7 +130,7 @@ fix(editor): preserve text edit undo state
 - Restore both on undo instead of comparing against the live node
 ```
 
-Release commits are the exception: use `Release OP Embedded Studio 0.x.y` or `Release Android BLE uploader 0.x.y`.
+Release commits are the exception: keep using `Release v0.x.y`.
 
 ## CLI
 
@@ -136,8 +145,9 @@ Release commits are the exception: use `Release OP Embedded Studio 0.x.y` or `Re
 - Registries (`registry*.ts`) assemble tool sets. Add new tools to the appropriate registry so AI chat, MCP, and CLI eval paths can see them.
 - AI adapter (`packages/core/src/tools/ai-adapter.ts`) converts ToolDefs to Vercel AI tools with valibot schemas. `src/app/ai/tools/index.ts` is a thin app wire that creates `FigmaAPI` from the active editor.
 - CLI commands in `packages/cli/src/commands/**` are not generated from ToolDefs; they own CLI UX, pagination, and agentfmt formatting. The `eval` command exposes ToolDef operations through `FigmaAPI`.
-- MCP server code lives in `packages/mcp/src/server.ts`. MCP-only tools such as `open_file`, `new_document`, `save_file`, and `get_codegen_prompt` are registered there because they need server filesystem access or are not scene-graph tools.
-- `open_file` and `new_document` are only registered when `OPENPENCIL_MCP_ROOT` is set. Export tools can write files under that root when given a `path`.
+- MCP server code lives under `packages/mcp/src/`. MCP-only tools such as `open_file`, `new_document`, `save_file`, and `get_codegen_prompt` are registered in `tool/registration.ts` because they need server filesystem access or are not scene-graph tools. Listener lifecycle and session ownership live under `src/server/`; the stdio client bridge lives under `src/stdio/`.
+- Local MCP transport discovery lives under `packages/mcp/src/transport/`: macOS/Linux prefer an owner-only Unix socket, Windows uses localhost TCP, and `mcp.json` advertises the active transport and token. Keep transport tests grouped under `tests/engine/mcp/{server,stdio,transport}/`, shared MCP fixtures under `tests/helpers/mcp/`, and test discovery paths isolated from the user's runtime file.
+- `open_file` and `new_document` are only registered when `OPENPENCIL_MCP_ROOT` is set. Export tools can write files under that root when given a `path`; path checks must resolve symlinks before filesystem access.
 - Core codegen prompts live as markdown under `packages/core/src/tools/prompts/`; app chat/ACP prompts live under `src/app/ai/**` markdown files.
 - `FigmaAPI` (`packages/core/src/figma-api/`) is the execution target for tools and CLI eval. It is Figma Plugin API compatible and uses Symbols for hidden internals.
 
@@ -145,7 +155,8 @@ Release commits are the exception: use `Release OP Embedded Studio 0.x.y` or `Re
 
 Keep this section light; implementation details move often.
 
-- ACP UI/transport lives under `src/app/ai/acp/**`; provider definitions live in `packages/core/src/constants.ts`; app prompts live under `src/app/ai/**`. Public docs: `packages/docs/programmable/ai-chat.md` and `packages/docs/programmable/mcp-server.md`.
+- Harness-based coding agents live in the optional `@open-pencil/harness` Node companion rather than the browser app. Keep its session service backend-neutral, persist only opaque non-secret resume state, and expose host integration through its bounded JSONL protocol. Do not bundle a JavaScript runtime into Tauri; launch the separately installed `openpencil-harness` command. Pi may use local `just-bash`, but that in-memory sandbox does not provide process-restart recovery.
+- ACP UI/transport lives under `src/app/ai/acp/**`; provider definitions live in `packages/core/src/constants.ts`; app prompts live under `src/app/ai/**`. Direct model configuration lives under `src/app/ai/models/**`: reusable profiles reference provider connections, roles resolve to profiles, and runtime creation resolves credentials lazily. Keep model profiles, provider connections, and role assignments separate rather than returning to singleton provider/model settings. Public docs: `packages/docs/programmable/ai-chat.md` and `packages/docs/programmable/mcp-server.md`.
 - ACP transport uses Tauri shell permissions, so check `desktop/capabilities/**` when changing agent launch behavior.
 - Collaboration lives under `src/app/collab/**` and is documented in `packages/docs/programmable/collaboration.md`. It uses Trystero + Yjs + awareness; preserve crypto-safe room IDs and peer cleanup semantics when changing it.
 
@@ -229,6 +240,12 @@ Self-review checklist:
 - If upstream docs contradict local patterns, prefer current upstream APIs and update local wrappers deliberately.
 - `es-toolkit` is available in core for small, focused utility helpers when it clearly improves readability. Prefer subpath imports such as `es-toolkit/object`, `es-toolkit/array`, and `es-toolkit/predicate`; good fits include `omit` / `pick` for object key selection, `uniq` for dedupe, and `isNotNil` for typed nullish filtering. Do not replace clear native JavaScript just for consistency, and avoid `es-toolkit/compat` unless deliberately migrating lodash-compatible behavior.
 
+### Native WebView tests
+
+Native desktop interaction checks live under `tests/e2e/native/**` and run through WebdriverIO against an explicit test-only Tauri binary. Use `bun run test:native` to build and run them, or `bun run build:native-test` when only the binary is needed. The embedded WebDriver plugin is compiled only with the `native-test` Cargo feature and must never be enabled in normal development or production binaries.
+
+Keep responsibilities distinct: engine tests cover state contracts, Playwright browser E2E covers application integration, and native tests answer only whether the real platform WebView and Tauri shell deliver an interaction correctly. Platform-limited checks must skip rather than claim coverage. Synthetic composition tests do not prove real IME behavior, and native clipboard behavior remains a separate acceptance gap unless the test receives trusted OS clipboard events.
+
 ## Rendering
 
 - Canvas is CanvasKit (Skia WASM) on a WebGL surface, not DOM
@@ -265,6 +282,7 @@ Self-review checklist:
 - `computeAllLayouts()` must be called after demo creation and after opening .fig files
 - Yoga WASM handles flexbox; CSS Grid blocked on upstream (facebook/yoga#1893)
 - Auto-layout creation (Shift+A) must recompute layout immediately to update selection bounds
+- Editing a Hug/Fill width or height switches only that axis to Fixed on the first value mutation; focus stays non-destructive, and mode plus value changes belong to one undo transaction
 
 ## UI
 
@@ -274,10 +292,12 @@ Self-review checklist:
 - `src/components/Shell/**` is for app shell chrome and global app services rendered as components (menu bar, toast viewport, update/status chrome). Shell components may use app shell/editor stores.
 - `src/components/properties/**`, `src/components/chat/**`, `src/components/LayerTree/**`, `src/components/Toolbar/**`, and similar folders are feature/domain component namespaces. Keep feature-specific controls there unless they are genuinely reusable UI primitives.
 - Treat existing root-level picker/input/control components as migration candidates when touched; do not expand that pattern.
+- Property-panel composition uses `PanelGrid`, `PanelFieldGroup`, `PanelItemRow`, and `PropertyItemRow`; do not reintroduce generic row wrappers such as the removed `PanelRow`. Variable-capable fields compose `BindableValue` providers, and fill UIs compose `FillRoot` / `FillSwatch` with a consumer-owned popover rather than rebuilding a combined picker wrapper.
 - Test locators follow Playwright's user-facing priority: role/name, label, and text first. Multi-part components expose scoped `data-slot` anatomy; app concepts use semantic attributes such as `data-property`, `data-command`, and `data-node-id` when accessible identity is insufficient. Reserve `data-test-id` for rare integration boundaries such as the canvas/editor host, never add `testId`/`testHook` props, and do not manufacture globally unique compound IDs inside shared components.
 
 - Use reka-ui for UI components (Splitter, ContextMenu, DropdownMenu, etc.)
 - Vue UI styling APIs follow the Nuxt UI architecture: static Tailwind Variants themes live under `src/theme/**` with `slots`, `variants`, `compoundVariants`, and `defaultVariants`; components resolve the theme with `tv()` and merge per-instance `ui` overrides at each rendered slot. Single-root components expose `class` rather than a one-slot `ui` object. Do not add one-off `fooClass`, `barClass`, `emptyActionClass`, etc. props. Use `UI` casing in type names (`SelectUI`, not `SelectUi`).
+- Steiger parses Vue templates and rejects visual-state Tailwind utility branches, template-time `use*UI()` calls, and raw SVG app icons. Bind semantic state through `data-*` attributes and resolve typed theme variants in script instead of bypassing the rule.
 - Storybook is the internal component-state workshop (`bun run storybook`, `bun run build-storybook`), while VitePress is the canonical public SDK documentation. Colocate `*.stories.ts` with app UI components and use toolbar themes for light/dark states instead of adding test-only routes or showcase pages to the app.
 - Reuse colocated Vue demo components between Storybook and VitePress rather than maintaining separate examples. Style shared demos with Tailwind; the docs theme scans Vue SDK primitive demos through its dedicated Tailwind source.
 - Public component API tables are generated from Vue source and JSDoc with `vue-component-meta`; do not manually duplicate props, events, slots, or exposed APIs in Markdown. SDK examples are processed by VitePress Twoslash and must resolve against the public `@open-pencil/vue` API.
@@ -299,9 +319,9 @@ Self-review checklist:
 
 ## File format
 
-- `.fig` files use Figma's Kiwi schema and `NodeChange[]` records. Low-level schema/runtime/codec/container/parse helpers live in `packages/kiwi/src/fig/**` and `packages/kiwi/src/schema-runtime/**`.
-- Core still owns SceneGraph `.fig` policy: import/export orchestration in `packages/core/src/io/formats/fig/**`, SceneGraph ⇄ NodeChange conversion in `packages/core/src/kiwi/fig/node-change/**`, and component/instance override interpretation in `packages/core/src/kiwi/fig/instance-overrides/**`.
-- `packages/fig` is the publishable boundary for future `.fig` policy extraction; do not move behavior there without package-local tests and dist smoke.
+- `.fig` files use Figma's Kiwi schema and `NodeChange[]` records. Low-level schema/runtime/codec/container helpers live in `packages/kiwi/src/fig/**` and `packages/kiwi/src/schema-runtime/**`; complete `.fig` archive parsing lives in `packages/fig`.
+- `@open-pencil/fig` owns SceneGraph ⇄ NodeChange conversion in `packages/fig/src/node-change/**`, component/instance interpretation in `packages/fig/src/instance-overrides/**`, and effective raw metadata policy in `packages/fig/src/source-metadata.ts`.
+- Core owns `.fig` IO orchestration in `packages/core/src/io/formats/fig/**`, runtime font/glyph integration, workers, and CanvasKit thumbnails. Keep Fig behavior covered by package-local tests and dist smoke.
 - Vector data uses reverse-engineered `vectorNetworkBlob` binary format — encoder/decoder in `packages/core/src/vector/` and scene-graph vector-network types in `@open-pencil/scene-graph`.
 - `showOpenFilePicker` / `showSaveFilePicker` are File System Access API (Chrome/Edge), not Tauri-only; code must keep browser fallbacks.
 - Safari save: no File System Access API → use an `<a>` download fallback with deferred `revokeObjectURL`. SafariBanner warns users about limitations.

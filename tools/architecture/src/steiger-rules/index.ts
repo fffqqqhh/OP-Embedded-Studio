@@ -2,6 +2,11 @@ import path from 'node:path'
 
 import { parse as parseVueSfc } from 'vue/compiler-sfc'
 
+import { noCrossPackageReexportShims } from './cross-package-reexport-shims.ts'
+import {
+  noDynamicTailwindStateClasses,
+  noVueTemplateUIHooksOrSVG
+} from './dynamic-tailwind-classes.ts'
 import {
   collectFolders,
   createFileRule,
@@ -300,7 +305,7 @@ const noComponentsImportViews = createImportRule(
   }
 )
 
-const noNonUiImportsInSharedUi = createImportRule(
+const noNonUIImportsInSharedUI = createImportRule(
   'open-pencil/no-non-ui-imports-in-shared-ui',
   (sourceRel, _specifier, resolved) => {
     if (!sourceRel.startsWith('src/components/ui/')) return null
@@ -321,7 +326,7 @@ const noViewsImportedOutsideEntry = createImportRule(
   }
 )
 
-const noAppImportsInSharedUi = createImportRule(
+const noAppImportsInSharedUI = createImportRule(
   'open-pencil/no-app-imports-in-shared-ui',
   (sourceRel, _specifier, resolved) => {
     if (!sourceRel.startsWith('src/components/ui/')) return null
@@ -471,7 +476,7 @@ const noShortcutTextInLabels = createTextRule(
   }
 )
 
-const noUiImportsInCore = createImportRule(
+const noUIImportsInCore = createImportRule(
   'open-pencil/no-ui-imports-in-core',
   (sourceRel, specifier) => {
     if (!sourceRel.startsWith('packages/core/src/')) return null
@@ -492,6 +497,7 @@ export const openPencilArchitecturePlugin = {
   meta: { name: 'open-pencil-architecture', version: '0.0.0' },
   ruleDefinitions: [
     preferDomainFoldersOverFilenamePrefixes,
+    noCrossPackageReexportShims,
     scriptsAreEntrypointShims,
     strictToolsLayout,
     strictTestFilePlacement,
@@ -508,13 +514,15 @@ export const openPencilArchitecturePlugin = {
     noAppImportsComponentsOrViews,
     noComponentsImportViews,
     noViewsImportedOutsideEntry,
-    noNonUiImportsInSharedUi,
-    noAppImportsInSharedUi,
+    noNonUIImportsInSharedUI,
+    noAppImportsInSharedUI,
     noPropertyPanelInternalsOutsidePanel,
     noProductionTestIdsInSharedLayers,
+    noDynamicTailwindStateClasses,
+    noVueTemplateUIHooksOrSVG,
     noNativeTitleAttributesInVue,
     noShortcutTextInLabels,
     noHardcodedMacOSShortcutGlyphs,
-    noUiImportsInCore
+    noUIImportsInCore
   ]
 }

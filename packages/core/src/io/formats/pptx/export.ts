@@ -3,6 +3,8 @@ import type PptxGenJS from 'pptxgenjs'
 import type { Fill, Mat3, SceneGraph, SceneNode } from '@open-pencil/scene-graph'
 import { TransformMatrix, getWorldMatrix } from '@open-pencil/scene-graph'
 
+import { encodeBase64 } from '#core/bytes'
+
 import {
   hasUnsupportedTransform,
   inch,
@@ -61,12 +63,6 @@ const SHAPE_TYPES = new Set<SceneNode['type']>([
   'LINE'
 ])
 const CONTAINER_TYPES = new Set<SceneNode['type']>(['FRAME', 'GROUP', 'SECTION'])
-
-function encodeBase64(data: Uint8Array): string {
-  let binary = ''
-  for (const byte of data) binary += String.fromCharCode(byte)
-  return btoa(binary)
-}
 
 interface ExportCtx {
   slide: PptxGenJS.Slide

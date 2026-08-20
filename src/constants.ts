@@ -9,7 +9,7 @@ export {
   COMPONENT_COLOR,
   SNAP_COLOR,
   CANVAS_BG_COLOR,
-  SNAP_THRESHOLD,
+  SNAP_THRESHOLD_SCREEN_PX,
   RULER_SIZE,
   RULER_BG_COLOR,
   RULER_TICK_COLOR,
@@ -69,7 +69,7 @@ export const ROOM_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
 
 export const WEB_APP_ORIGIN = 'https://app.openpencil.dev'
 
-export function getShareUrl(roomId: string): string {
+export function getShareURL(roomId: string): string {
   const base = IS_TAURI || !IS_BROWSER ? WEB_APP_ORIGIN : window.location.origin
   return `${base}/share/${roomId}`
 }
@@ -95,6 +95,10 @@ export {
   ZOOM_SCALE_MAX
 } from '@open-pencil/core/constants'
 
+export const ASSET_GRID_THUMBNAIL_SIZE = 96
+export const ASSET_LIST_THUMBNAIL_SIZE = 40
+export const ASSET_THUMBNAIL_RENDER_SCALE = 2
+
 export const HANDLE_SIZE = 6
 
 export const HALF_FRAC = 3 / 7
@@ -116,9 +120,5 @@ export const AUTO_LAYOUT_BREAK_THRESHOLD = 8
 export const HANDLE_HIT_RADIUS = 6
 
 export const ACP_PERMISSION_TIMEOUT_MS = 60_000
-export const PROVIDER_CONNECTION_TEST_TIMEOUT_MS = 15_000
-export const AI_CHAT_STEP_TIMEOUT_MS = 90_000
-export const AI_CHAT_CHUNK_TIMEOUT_MS = 45_000
-export const AI_CHAT_TOTAL_TIMEOUT_MS = 300_000
 
 export { ACP_DESIGN_CONTEXT }

@@ -8,21 +8,15 @@ import {
 } from '#core/clipboard'
 import { computeAllLayouts } from '#core/layout'
 
+import { createClipboardAssetActions } from './clipboard/assets'
 import { createClipboardCopyActions } from './clipboard/copy'
 import { createClipboardExportActions } from './clipboard/export'
 import { createClipboardFontActions } from './clipboard/fonts'
-import {
-  deleteIds,
-  type DeletedEntry,
-  recreateSnapshots,
-  restoreDeletedEntries
-} from './clipboard/history'
-import { createClipboardImageActions } from './clipboard/images'
+import { deleteIds, recreateSnapshots, restoreDeletedEntries } from './clipboard/history'
 import { replaceTargetsWithCreated, selectedReplacementTargets } from './clipboard/paste-replace'
 import { resolvePasteTarget } from './clipboard/paste-target'
 import { createClipboardPlacementActions } from './clipboard/placement'
 import { collectSubtrees, restoreSubtree, snapshotSubtree } from './clipboard/subtree-history'
-import { findAncestorComponentId } from './component-sync'
 import type { EditorContext } from './types'
 
 type PasteOptions = {
@@ -72,11 +66,11 @@ export function createClipboardActions(ctx: EditorContext) {
     }
   }
 
-  function pushPasteUndo(created: string[], prevSelection: Set<string>) {
+  function pushCreatedNodesUndo(created: string[], prevSelection: Set<string>, label = 'Paste') {
     const allNodes = collectSubtrees(ctx.graph, created)
     const pageId = ctx.state.currentPageId
     ctx.undo.push({
-      label: 'Paste',
+      label,
       forward: () => {
         recreateSnapshots(ctx, allNodes, pageId)
         computeAllLayouts(ctx.graph, pageId)
@@ -93,7 +87,8 @@ export function createClipboardActions(ctx: EditorContext) {
   async function pasteFromHTML(html: string, cursorPos?: Vector, options: PasteOptions = {}) {
     const openPencil = parseOpenPencilClipboard(html)
     if (openPencil) {
-      pasteOpenPencilNodes(openPencil.nodes, openPencil.images, cursorPos, options)
+      const created = pasteOpenPencilNodes(openPencil.nodes, openPencil.images, cursorPos, options)
+      await fontActions.loadFontsForNodes(created)
       return
     }
 
@@ -103,32 +98,31 @@ export function createClipboardActions(ctx: EditorContext) {
       const replacementTargets = options.replaceSelection ? selectedReplacementTargets(ctx) : []
       const pasteTarget = replacementTargets[0]?.parentId ?? resolvePasteTarget(ctx)
       const created = importClipboardNodes(figma.nodes, ctx.graph, pasteTarget, 0, 0, figma.blobs)
-      if (created.length > 0) {
-        if (replacementTargets.length > 0) {
-          replaceTargetsWithCreated(
-            ctx,
-            placementActions.centerNodesAt,
-            created,
-            replacementTargets,
-            prevSelection
-          )
-          void fontActions.loadFontsForNodes(created)
-          warnMissingImages(created)
-          ctx.requestRender()
-          return
-        }
+      if (created.length === 0) return
+
+      if (replacementTargets.length > 0) {
+        replaceTargetsWithCreated(
+          ctx,
+          placementActions.centerNodesAt,
+          created,
+          replacementTargets,
+          prevSelection
+        )
+      } else {
         const { width: viewW, height: viewH } = ctx.getViewportSize()
         const cx = cursorPos?.x ?? (-ctx.state.panX + viewW / 2) / ctx.state.zoom
         const cy = cursorPos?.y ?? (-ctx.state.panY + viewH / 2) / ctx.state.zoom
         placementActions.centerNodesAt(created, cx, cy)
         computeAllLayouts(ctx.graph, ctx.state.currentPageId)
         ctx.setSelectedIds(new Set(created))
-
-        pushPasteUndo(created, prevSelection)
-        void fontActions.loadFontsForNodes(created)
-        warnMissingImages(created)
-        ctx.requestRender()
+        pushCreatedNodesUndo(created, prevSelection)
       }
+
+      await Promise.all([
+        hydrateFigmaClipboardImages(figma.meta.fileKey, created),
+        fontActions.loadFontsForNodes(created)
+      ])
+      ctx.requestRender()
     }
   }
 
@@ -157,7 +151,7 @@ export function createClipboardActions(ctx: EditorContext) {
 
     const pasteTarget = replacementTargets[0]?.parentId ?? resolvePasteTarget(ctx)
     for (const node of nodes) created.push(createNodeTree(node, pasteTarget))
-    if (created.length === 0) return
+    if (created.length === 0) return created
 
     if (replacementTargets.length > 0) {
       replaceTargetsWithCreated(
@@ -167,25 +161,67 @@ export function createClipboardActions(ctx: EditorContext) {
         replacementTargets,
         prevSelection
       )
-      return
+      return created
     }
 
     if (cursorPos) placementActions.centerNodesAt(created, cursorPos.x, cursorPos.y)
     computeAllLayouts(ctx.graph, ctx.state.currentPageId)
     ctx.setSelectedIds(new Set(created))
 
-    pushPasteUndo(created, prevSelection)
+    pushCreatedNodesUndo(created, prevSelection)
+    return created
+  }
+
+  function missingImageHashes(nodeIds: string[]) {
+    const hashes = new Set<string>()
+    for (const node of collectSubtrees(ctx.graph, nodeIds)) {
+      for (const fill of node.fills) {
+        if (fill.type === 'IMAGE' && fill.imageHash && !ctx.graph.images.has(fill.imageHash)) {
+          hashes.add(fill.imageHash)
+        }
+      }
+    }
+    return [...hashes]
+  }
+
+  async function hydrateFigmaClipboardImages(fileKey: string, nodeIds: string[]) {
+    const hashes = missingImageHashes(nodeIds)
+    if (hashes.length === 0) return
+
+    const resolver = ctx.resolveFigmaClipboardImages
+    if (resolver) {
+      try {
+        const images = await resolver(fileKey, hashes)
+        for (const hash of hashes) {
+          const bytes = images.get(hash)
+          if (bytes) ctx.graph.images.set(hash, bytes)
+        }
+      } catch (error) {
+        console.warn('Failed to fetch Figma clipboard images', error)
+      }
+    }
+
+    const missing = missingImageHashes(nodeIds).length
+    if (missing > 0) {
+      ctx.emitEditorEvent('clipboard:images-missing', {
+        total: hashes.length,
+        missing,
+        fetchAttempted: Boolean(resolver)
+      })
+    }
   }
 
   function warnMissingImages(nodeIds: string[]) {
-    const allNodes = collectSubtrees(ctx.graph, nodeIds)
-    return allNodes.some((n) =>
-      n.fills.some((f) => f.type === 'IMAGE' && f.imageHash && !ctx.graph.images.has(f.imageHash))
-    )
+    return missingImageHashes(nodeIds).length > 0
   }
 
   function deleteSelected() {
-    const entries: DeletedEntry[] = []
+    const entries: Array<{
+      id: string
+      parentId: string
+      index: number
+      subtree: Map<string, SceneNode>
+    }> = []
     for (const id of ctx.state.selectedIds) {
       const node = ctx.graph.getNode(id)
       if (!node || node.locked) continue
@@ -196,31 +232,25 @@ export function createClipboardActions(ctx: EditorContext) {
     }
     if (entries.length === 0) return
 
-    const syncedInstanceEntries = collectSyncedInstanceDeleteEntries(entries)
-    const relayoutEntries = [...entries, ...syncedInstanceEntries]
-
     const relayoutParents = () => {
-      for (const parentId of new Set(relayoutEntries.map((entry) => entry.parentId))) {
+      for (const parentId of new Set(entries.map((entry) => entry.parentId))) {
         ctx.runLayoutForNode(parentId)
       }
     }
 
     const prevSelection = new Set(ctx.state.selectedIds)
     for (const { id } of entries) ctx.graph.deleteNode(id)
-    for (const { id } of syncedInstanceEntries) ctx.graph.deleteNode(id)
     relayoutParents()
 
     ctx.undo.push({
       label: 'Delete',
       forward: () => {
         for (const { id } of entries) ctx.graph.deleteNode(id)
-        for (const { id } of syncedInstanceEntries) ctx.graph.deleteNode(id)
         relayoutParents()
         ctx.setSelectedIds(new Set())
       },
       inverse: () => {
         restoreDeletedEntries(ctx, entries)
-        restoreDeletedEntries(ctx, syncedInstanceEntries)
         relayoutParents()
         ctx.setSelectedIds(prevSelection)
       }
@@ -228,79 +258,10 @@ export function createClipboardActions(ctx: EditorContext) {
     ctx.setSelectedIds(new Set())
   }
 
-  function collectSyncedInstanceDeleteEntries(entries: readonly DeletedEntry[]): DeletedEntry[] {
-    const deletedComponentNodeIds = new Set<string>()
-    const containingComponentIds = new Set<string>()
-    for (const entry of entries) {
-      const rootNode = entry.subtree.get(entry.id)
-      const rootOwnerId = rootNode?.parentId
-        ? findAncestorComponentId(ctx.graph, rootNode.parentId)
-        : null
-
-      const collect = (nodeId: string, ownerId: string | null) => {
-        const node = entry.subtree.get(nodeId)
-        if (!node) return
-        if (ownerId) {
-          deletedComponentNodeIds.add(nodeId)
-          containingComponentIds.add(ownerId)
-        }
-        const nextOwnerId = node.type === 'COMPONENT' ? null : ownerId
-        for (const childId of node.childIds) collect(childId, nextOwnerId)
-      }
-
-      collect(entry.id, rootOwnerId)
-    }
-    if (deletedComponentNodeIds.size === 0 || containingComponentIds.size === 0) return []
-
-    const collected = new Set<string>()
-    const sideEffects: DeletedEntry[] = []
-    for (const componentId of containingComponentIds) {
-      for (const instanceId of ctx.graph.instanceIndex.get(componentId) ?? []) {
-        collectMappedInstanceDeletes(instanceId, deletedComponentNodeIds, collected, sideEffects)
-      }
-    }
-    return sideEffects
-  }
-
-  function collectMappedInstanceDeletes(
-    nodeId: string,
-    deletedComponentNodeIds: ReadonlySet<string>,
-    collected: Set<string>,
-    sideEffects: DeletedEntry[],
-    hasDeletedMappedAncestor = false
-  ): void {
-    const node = ctx.graph.getNode(nodeId)
-    if (!node) return
-    const isDeletedMapping = Boolean(
-      node.componentId && deletedComponentNodeIds.has(node.componentId)
-    )
-    if (isDeletedMapping && !hasDeletedMappedAncestor && !collected.has(node.id)) {
-      const parentId = node.parentId ?? ctx.state.currentPageId
-      const parent = ctx.graph.getNode(parentId)
-      sideEffects.push({
-        id: node.id,
-        parentId,
-        index: parent?.childIds.indexOf(node.id) ?? -1,
-        subtree: snapshotSubtree(ctx.graph, node.id)
-      })
-      collected.add(node.id)
-    }
-    const nextHasDeletedMappedAncestor = hasDeletedMappedAncestor || isDeletedMapping
-    for (const childId of node.childIds) {
-      collectMappedInstanceDeletes(
-        childId,
-        deletedComponentNodeIds,
-        collected,
-        sideEffects,
-        nextHasDeletedMappedAncestor
-      )
-    }
-  }
-
   const copyActions = createClipboardCopyActions(ctx)
   const exportActions = createClipboardExportActions(ctx)
   const fontActions = createClipboardFontActions(ctx)
-  const imageActions = createClipboardImageActions(ctx)
+  const assetActions = createClipboardAssetActions(ctx, pushCreatedNodesUndo)
   const placementActions = createClipboardPlacementActions(ctx)
 
   return {
@@ -312,7 +273,7 @@ export function createClipboardActions(ctx: EditorContext) {
     pasteFromHTML,
     warnMissingImages,
     deleteSelected,
-    ...imageActions,
+    ...assetActions,
     ...exportActions
   }
 }

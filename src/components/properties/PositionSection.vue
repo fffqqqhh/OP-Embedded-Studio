@@ -30,25 +30,25 @@ function handleAlign(
     v-slot="{ active, isMulti, xValue, yValue, wValue, hValue, rotationValue, actions }"
   >
     <PanelSection v-if="active" :label="panels.position">
-      <div role="toolbar" :aria-label="panels.position" class="mb-panel flex justify-between">
+      <div role="toolbar" :aria-label="panels.position" class="mb-1.5 flex justify-between">
         <div class="flex gap-0.5">
           <IconButton
             :label="panels.alignLeft"
-            size="md"
+            size="xs"
             @click="handleAlign(actions.align, 'horizontal', 'min')"
           >
             <icon-lucide-align-start-vertical class="size-3.5" />
           </IconButton>
           <IconButton
             :label="panels.alignCenterHorizontally"
-            size="md"
+            size="xs"
             @click="handleAlign(actions.align, 'horizontal', 'center')"
           >
             <icon-lucide-align-center-vertical class="size-3.5" />
           </IconButton>
           <IconButton
             :label="panels.alignRight"
-            size="md"
+            size="xs"
             @click="handleAlign(actions.align, 'horizontal', 'max')"
           >
             <icon-lucide-align-end-vertical class="size-3.5" />
@@ -57,21 +57,21 @@ function handleAlign(
         <div class="flex gap-0.5">
           <IconButton
             :label="panels.alignTop"
-            size="md"
+            size="xs"
             @click="handleAlign(actions.align, 'vertical', 'min')"
           >
             <icon-lucide-align-start-horizontal class="size-3.5" />
           </IconButton>
           <IconButton
             :label="panels.alignCenterVertically"
-            size="md"
+            size="xs"
             @click="handleAlign(actions.align, 'vertical', 'center')"
           >
             <icon-lucide-align-center-horizontal class="size-3.5" />
           </IconButton>
           <IconButton
             :label="panels.alignBottom"
-            size="md"
+            size="xs"
             @click="handleAlign(actions.align, 'vertical', 'max')"
           >
             <icon-lucide-align-end-horizontal class="size-3.5" />
@@ -79,7 +79,7 @@ function handleAlign(
         </div>
       </div>
 
-      <PanelGrid columns="two">
+      <PanelGrid :columns="2">
         <Tip :label="panels.xAxis">
           <NumberField
             icon="X"
@@ -102,7 +102,7 @@ function handleAlign(
         </Tip>
       </PanelGrid>
 
-      <PanelGrid v-if="isMulti" columns="two" class="mt-panel">
+      <PanelGrid v-if="isMulti" :columns="2" class="mt-1.5">
         <Tip :label="panels.width">
           <NumberField
             icon="W"
@@ -127,7 +127,7 @@ function handleAlign(
         </Tip>
       </PanelGrid>
 
-      <div class="mt-panel grid grid-cols-[minmax(0,1fr)_repeat(3,var(--spacing-control))] gap-0.5">
+      <PanelGrid :columns="2" class="mt-1.5">
         <Tip :label="panels.rotation">
           <NumberField
             suffix="°"
@@ -144,16 +144,18 @@ function handleAlign(
             </template>
           </NumberField>
         </Tip>
-        <IconButton :label="panels.flipHorizontal" size="md" @click="actions.flip('horizontal')">
-          <icon-lucide-flip-horizontal-2 class="size-3.5" />
-        </IconButton>
-        <IconButton :label="panels.flipVertical" size="md" @click="actions.flip('vertical')">
-          <icon-lucide-flip-vertical-2 class="size-3.5" />
-        </IconButton>
-        <IconButton :label="panels.rotate90" size="md" @click="actions.rotate(90)">
-          <icon-lucide-rotate-cw-square class="size-3.5" />
-        </IconButton>
-      </div>
+        <div class="flex h-6 items-center justify-end gap-0.5">
+          <IconButton :label="panels.flipHorizontal" size="xs" @click="actions.flip('horizontal')">
+            <icon-lucide-flip-horizontal-2 class="size-3.5" />
+          </IconButton>
+          <IconButton :label="panels.flipVertical" size="xs" @click="actions.flip('vertical')">
+            <icon-lucide-flip-vertical-2 class="size-3.5" />
+          </IconButton>
+          <IconButton :label="panels.rotate90" size="xs" @click="actions.rotate(90)">
+            <icon-lucide-rotate-cw-square class="size-3.5" />
+          </IconButton>
+        </div>
+      </PanelGrid>
     </PanelSection>
   </PositionControlsRoot>
 </template>

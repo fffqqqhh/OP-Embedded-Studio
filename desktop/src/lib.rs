@@ -1,3 +1,4 @@
+mod credentials;
 mod fig_container;
 mod fonts;
 mod http;
@@ -6,10 +7,14 @@ mod menu_events;
 #[cfg(target_os = "macos")]
 mod window;
 
+use credentials::{
+    credential_read, credential_remove, credential_status, credential_store_availability,
+    credential_write,
+};
 use fig_container::build_fig_file;
 use fonts::{list_system_fonts, load_system_font};
 use http::proxy_http_request;
-use menu::install_app_menu;
+use menu::{install_app_menu, native_menu_checked, set_native_menu_checked};
 use menu_events::handle_menu_event;
 use std::{
     path::{Path, PathBuf},
@@ -34,6 +39,11 @@ fn take_pending_open(state: tauri::State<PendingOpen>) -> Vec<PendingOpenFile> {
         .lock()
         .map(|mut pending| pending.drain(..).collect())
         .unwrap_or_default()
+}
+
+#[tauri::command]
+fn mcp_executable_available() -> bool {
+    which::which("openpencil-mcp-http").is_ok()
 }
 
 fn file_association_path(path: PathBuf) -> Option<PathBuf> {
@@ -107,7 +117,15 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default();
 
-    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    #[cfg(feature = "native-test")]
+    {
+        builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    }
+
+    #[cfg(all(
+        any(target_os = "macos", windows, target_os = "linux"),
+        not(feature = "native-test")
+    ))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             queue_open_paths(app, open_paths_from_args(args, Path::new(&cwd)));
@@ -118,9 +136,17 @@ pub fn run() {
         .manage(PendingOpen(Mutex::new(Vec::new())))
         .invoke_handler(tauri::generate_handler![
             build_fig_file,
+            credential_read,
+            credential_remove,
+            credential_status,
+            credential_store_availability,
+            credential_write,
+            mcp_executable_available,
             list_system_fonts,
             load_system_font,
             proxy_http_request,
+            native_menu_checked,
+            set_native_menu_checked,
             take_pending_open
         ])
         .plugin(tauri_plugin_opener::init())
@@ -128,6 +154,8 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .on_menu_event(|app, event| {
             handle_menu_event(app, event.id().0.as_str());
         })

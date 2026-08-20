@@ -1,5 +1,25 @@
 import { BLACK, DEFAULT_FONT_FAMILY, DEFAULT_STROKE_MITER_LIMIT } from './constants'
-import type { NodeType, SceneNode } from './types'
+import type { NodeType, SceneNode, SourceMetadata } from './types'
+
+export function createDefaultSourceMetadata(): SourceMetadata {
+  return {
+    format: null,
+    id: null,
+    orderKey: null,
+    editedFields: [],
+    fig: {
+      rawSize: null,
+      rawTransform: null,
+      rawNodeFields: {},
+      layout: null,
+      symbolOverrides: [],
+      componentPropAssignments: [],
+      derivedSymbolData: [],
+      derivedSymbolDataLayoutVersion: null,
+      uniformScaleFactor: null
+    }
+  }
+}
 
 export function createDefaultNode(
   generateId: () => string,
@@ -17,27 +37,20 @@ export function createDefaultNode(
     width: 100,
     height: 100,
     rotation: 0,
-    source: {
-      format: null,
-      id: null,
-      orderKey: null,
-      fig: {
-        rawSize: null,
-        rawTransform: null,
-        rawNodeFields: {},
-        layout: null,
-        symbolOverrides: [],
-        componentPropAssignments: [],
-        derivedSymbolData: [],
-        derivedSymbolDataLayoutVersion: null,
-        uniformScaleFactor: null
-      }
-    },
-    figmaDerivedLayout: null,
+    source: createDefaultSourceMetadata(),
+    derivedLayout: null,
     fills:
       type === 'TEXT' ? [{ type: 'SOLID' as const, color: BLACK, opacity: 1, visible: true }] : [],
     strokes: [],
     effects: [],
+    layoutGrids: [],
+    guides: [],
+    fillStyleId: null,
+    strokeStyleId: null,
+    textStyleId: null,
+    effectStyleId: null,
+    gridStyleId: null,
+    sharedStyleType: null,
     opacity: 1,
     cornerRadius: 0,
     topLeftRadius: 0,
@@ -56,6 +69,7 @@ export function createDefaultNode(
     italic: false,
     textAlignHorizontal: 'LEFT',
     textDirection: 'AUTO',
+    textLanguage: null,
     leadingTrim: 'NONE',
     lineHeight: null,
     letterSpacing: 0,
@@ -77,6 +91,7 @@ export function createDefaultNode(
     layoutGrow: 0,
     layoutAlignSelf: 'AUTO',
     vectorNetwork: null,
+    handleMirroring: 'NONE',
     fillGeometry: [],
     strokeGeometry: [],
     arcData: null,
@@ -127,6 +142,8 @@ export function createDefaultNode(
     componentId: null,
     overrides: {},
     componentPropertyDefinitions: [],
+    componentPropertyReferences: [],
+    componentPropertyAssignments: {},
     componentPropertyValues: {},
     componentKey: null,
     sourceLibraryKey: null,
@@ -134,12 +151,14 @@ export function createDefaultNode(
     overrideKey: null,
     sharedSymbolVersion: null,
     publishedVersion: null,
+    librarySource: null,
     isPublishable: false,
     isSymbolPublishable: false,
     symbolDescription: '',
     symbolLinks: [],
     variantPropSpecs: [],
     boundVariables: {},
+    variableModes: {},
     exportSettings: [],
     pluginData: [],
     pluginRelaunchData: [],
@@ -147,7 +166,9 @@ export function createDefaultNode(
     flipX: false,
     flipY: false,
     textPicture: null,
-    figmaDerivedTextGlyphs: null,
+    derivedTextGlyphs: null,
+    textPathData: null,
+    textPathBox: null,
     ...overrides
   }
 }

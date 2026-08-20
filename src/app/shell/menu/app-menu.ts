@@ -1,18 +1,21 @@
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 
 import type { MenuEntry } from '@open-pencil/vue'
 import { useEditorCommands, useI18n } from '@open-pencil/vue'
 
 import { useEditorStore } from '@/app/editor/active-store'
-import { executeClipboardCommand } from '@/app/editor/clipboard/system'
-import { showTopLayersFirst } from '@/app/editor/layer-tree-preferences'
+import { openSettingsDialog } from '@/app/settings/dialog'
+import { setSnappingPreference } from '@/app/settings/preferences/apply'
 import { createSharedEditorMenuActions } from '@/app/shell/menu/editor-actions'
+import { openStorageWorkspace } from '@/app/shell/menu/navigation'
 import type { AppMenuActionItem, AppMenuEntry, AppMenuGroupSchema } from '@/app/shell/menu/schema'
 import { APP_MENU_SCHEMA } from '@/app/shell/menu/schema'
+import { createSelectionMenuActions } from '@/app/shell/menu/selection-actions'
 import { appMenuShortcutLabel } from '@/app/shell/menu/shortcut'
 import { openFileDialog } from '@/app/shell/menu/use'
 import { useAppTheme } from '@/app/shell/theme'
-import { embeddedDisplayAdvancedDebugMode } from '@/features/embedded-display/debug'
+import { closeTab, activeTab } from '@/app/tabs'
 
 export interface AppMenuGroup {
   label: string
@@ -29,13 +32,20 @@ function isSeparator(entry: AppMenuEntry): entry is Extract<AppMenuEntry, { type
 
 export function useAppMenu() {
   const store = useEditorStore()
-  const { menuItem: commandMenuItem } = useEditorCommands()
+  const router = useRouter()
+  const {
+    commands,
+    menuItem: commandMenuItem,
+    otherPages,
+    moveSelectionToPage
+  } = useEditorCommands()
   const { menu, locale, availableLocales, localeLabels, setLocale } = useI18n()
   const { theme, setTheme } = useAppTheme()
 
   const translatedMenuItemLabels: Partial<Record<string, keyof typeof menu.value>> = {
     new: 'new',
     open: 'open',
+    'open-storage-workspace': 'openStorageWorkspace',
     save: 'save',
     'save-as': 'saveAs',
     'export-selection': 'exportSelection',
@@ -45,8 +55,16 @@ export function useAppMenu() {
     cut: 'cut',
     paste: 'paste',
     'paste-to-replace': 'pasteToReplace',
-    'layer-order-front-first': 'layersTopFirst',
+    'selection.rename': 'renameSelection',
+    'selection.moveToPage': 'moveToPage',
     language: 'language',
+    preferences: 'preferences',
+    settings: 'settings',
+    'view-rulers': 'rulers',
+    'view-multiplayer-cursors': 'multiplayerCursors',
+    'snap-geometry': 'snapToGeometry',
+    'snap-objects': 'snapToObjects',
+    'snap-pixel-grid': 'snapToPixelGrid',
     profiler: 'profiler',
     'toggle-ui': 'toggleUI',
     theme: 'theme',
@@ -55,6 +73,8 @@ export function useAppMenu() {
     'theme-auto': 'themeAuto',
     'zoom-in': 'zoomIn',
     'zoom-out': 'zoomOut',
+    'view-split-right': 'splitRight',
+    'view-split-down': 'splitDown',
     'text.bold': 'bold',
     'text.italic': 'italic',
     'text.underline': 'underline',
@@ -85,12 +105,15 @@ export function useAppMenu() {
       void import('@/app/tabs').then((m) => m.createTab())
     },
     open: () => void openFileDialog(),
+    'open-storage-workspace': () => openStorageWorkspace(router),
     save: () => void store.saveFigFile(),
     'save-as': () => void store.saveFigFileAs(),
     'export-selection': () => exportSelection('png'),
-    copy: () => void executeClipboardCommand(store, 'copy'),
-    cut: () => void executeClipboardCommand(store, 'cut'),
-    paste: () => void executeClipboardCommand(store, 'paste'),
+    ...createSelectionMenuActions(store),
+    close: () => {
+      if (activeTab.value) void closeTab(activeTab.value.id)
+    },
+    settings: openSettingsDialog,
     'export-png': () => exportSelection('png'),
     'export-svg': () => exportSelection('svg'),
     'export-pptx': () => exportSelection('pptx'),
@@ -108,10 +131,16 @@ export function useAppMenu() {
         return store.state.autosaveEnabled
       case 'profiler':
         return store.renderer?.profiler.hudVisible ?? false
-      case 'layer-order-front-first':
-        return showTopLayersFirst.value
-      case 'embedded-display-advanced-debug':
-        return embeddedDisplayAdvancedDebugMode.value
+      case 'view-rulers':
+        return store.state.showRulers
+      case 'view-multiplayer-cursors':
+        return store.state.showRemoteCursors
+      case 'snap-geometry':
+        return store.state.snappingPreferences.geometry
+      case 'snap-objects':
+        return store.state.snappingPreferences.objects
+      case 'snap-pixel-grid':
+        return store.state.snappingPreferences.pixelGrid
       case 'theme-light':
         return theme.value === 'light'
       case 'theme-dark':
@@ -131,20 +160,36 @@ export function useAppMenu() {
         }
       case 'profiler':
         return () => store.toggleProfiler()
-      case 'layer-order-front-first':
+      case 'view-rulers':
         return (value: boolean) => {
-          showTopLayersFirst.value = value
+          if (store.state.showRulers !== value) itemAction(item)?.()
         }
-      case 'embedded-display-advanced-debug':
+      case 'view-multiplayer-cursors':
         return (value: boolean) => {
-          embeddedDisplayAdvancedDebugMode.value = value
+          if (store.state.showRemoteCursors !== value) itemAction(item)?.()
         }
+      case 'snap-geometry':
+        return (value: boolean) => setSnappingPreference('geometry', value)
+      case 'snap-objects':
+        return (value: boolean) => setSnappingPreference('objects', value)
+      case 'snap-pixel-grid':
+        return (value: boolean) => setSnappingPreference('pixelGrid', value)
       case 'theme-light':
       case 'theme-dark':
       case 'theme-auto':
         return (value: boolean) => {
           if (value) itemAction(item)?.()
         }
+      default:
+        return undefined
+    }
+  }
+
+  function disabled(item: AppMenuActionItem): boolean | undefined {
+    switch (item.id) {
+      case 'view-split-right':
+      case 'view-split-down':
+        return store.visiblePaneCount.value >= store.panes.maxVisiblePanes
       default:
         return undefined
     }
@@ -163,6 +208,20 @@ export function useAppMenu() {
       return { label: menuLabel(entry), sub: languageMenu.value }
     }
 
+    if (entry.id === 'selection.moveToPage') {
+      if (otherPages.value.length === 0) return null
+      const disabled = !commands['selection.moveToPage'].enabled.value
+      return {
+        label: menuLabel(entry),
+        disabled,
+        sub: otherPages.value.map((page) => ({
+          label: page.name,
+          disabled,
+          action: () => moveSelectionToPage(page.id)
+        }))
+      }
+    }
+
     if (entry.command) {
       return commandMenuItem(entry.command, appMenuShortcutLabel(entry.id))
     }
@@ -171,6 +230,7 @@ export function useAppMenu() {
       label: menuLabel(entry),
       shortcut: appMenuShortcutLabel(entry.id),
       action: itemAction(entry),
+      disabled: disabled(entry),
       checked: checked(entry),
       onCheckedChange: onCheckedChange(entry),
       sub: entry.sub?.map(buildEntry).filter((item): item is MenuEntry => item !== null)

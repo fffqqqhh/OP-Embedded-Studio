@@ -115,25 +115,6 @@ describe('FontManager loaded font cache', () => {
     expect(fontManager.isLoaded(family)).toBe(true)
   })
 
-  test('bindProvider re-registers style-specific render families', () => {
-    const manager = new FontManager()
-    const canvasKit = {} as CanvasKit
-    const first = createRecordingProvider()
-    const second = createRecordingProvider()
-    const data = new ArrayBuffer(12)
-
-    manager.attachProvider(canvasKit, first.provider)
-    manager.markLoaded('Galada', 'Regular', data)
-
-    expect(first.registrations.some((r) => r.family === 'Galada')).toBe(true)
-    expect(first.registrations.some((r) => r.family === '__op_font__Galada__Regular')).toBe(true)
-
-    manager.bindProvider(canvasKit, second.provider)
-    expect(second.registrations.some((r) => r.family === 'Galada')).toBe(true)
-    expect(second.registrations.some((r) => r.family === '__op_font__Galada__Regular')).toBe(true)
-    expect(manager.renderFamily('Galada', 'Regular')).toBe('__op_font__Galada__Regular')
-  })
-
   test('different styles for same family', () => {
     const family = `MultiStyle_${Date.now()}`
     expect(fontManager.isLoaded(family)).toBe(false)
@@ -151,16 +132,21 @@ describe('FontManager loaded font cache', () => {
 
     manager.attachProvider(canvasKit, first.provider)
     manager.markLoaded('ProviderLifecycle', 'Regular', new ArrayBuffer(12))
-    expect(first.registrations).toEqual([
-      { family: 'ProviderLifecycle', byteLength: 12 },
-      { family: '__op_font__ProviderLifecycle__Regular', byteLength: 12 }
-    ])
+    expect(first.registrations).toEqual([{ family: 'ProviderLifecycle', byteLength: 12 }])
 
     manager.attachProvider(canvasKit, second.provider)
-    expect(second.registrations).toEqual([
-      { family: 'ProviderLifecycle', byteLength: 12 },
-      { family: '__op_font__ProviderLifecycle__Regular', byteLength: 12 }
-    ])
+    expect(second.registrations).toEqual([{ family: 'ProviderLifecycle', byteLength: 12 }])
+
+    manager.markLoaded('SharedProviderLifecycle', 'Regular', new ArrayBuffer(16))
+    expect(first.registrations.at(-1)).toEqual({
+      family: 'SharedProviderLifecycle',
+      byteLength: 16
+    })
+    expect(second.registrations.at(-1)).toEqual({
+      family: 'SharedProviderLifecycle',
+      byteLength: 16
+    })
+
     manager.detachProvider(first.provider)
     expect(manager.provider()).toBe(second.provider)
 
@@ -168,7 +154,7 @@ describe('FontManager loaded font cache', () => {
     expect(manager.provider()).toBeNull()
   })
 
-  test('registers loaded faces under exact render families', () => {
+  test('renders loaded faces under their source families', () => {
     const manager = new FontManager()
     const recording = createRecordingProvider()
 
@@ -177,50 +163,35 @@ describe('FontManager loaded font cache', () => {
 
     const renderFamily = manager.renderFamily('Inter', 'SemiBold')
 
-    expect(renderFamily).toBe('__op_font__Inter__SemiBold')
-    expect(recording.registrations).toEqual([
-      { family: 'Inter', byteLength: 12 },
-      { family: '__op_font__Inter__SemiBold', byteLength: 12 }
-    ])
+    expect(renderFamily).toBe('Inter')
+    expect(recording.registrations).toEqual([{ family: 'Inter', byteLength: 12 }])
     expect(manager.renderFamily('Inter', 'SemiBold')).toBe(renderFamily)
-    expect(recording.registrations).toHaveLength(2)
+    expect(recording.registrations).toHaveLength(1)
   })
 
-  test('tracks CJK fallback packs per requested script', async () => {
+  test('prefers local font data before downloaded cache', async () => {
     const manager = new FontManager()
-    const requestedFamilies: string[] = []
-    manager.setFallbackUserAgent('X11; Linux x86_64')
-    manager.loadFont = async (family: string) => {
-      requestedFamilies.push(family)
-      return family === 'Noto Sans SC' || family === 'Noto Sans KR' ? new ArrayBuffer(12) : null
-    }
+    const recording = createRecordingProvider()
+    let cacheReads = 0
 
-    const simplified = await manager.ensureFallbackPack(['cjk-sc'])
+    manager.attachProvider({} as CanvasKit, recording.provider)
+    manager.setHostFontLoader(async () => new ArrayBuffer(20))
+    manager.setDownloadedFontCache({
+      async read() {
+        cacheReads++
+        return new ArrayBuffer(16)
+      },
+      async write() {
+        return undefined
+      }
+    })
 
-    expect(simplified['cjk-sc']).toEqual(['Noto Sans SC'])
-    expect(manager.hasFallbackForScript('cjk-sc')).toBe(true)
-    expect(manager.hasFallbackForScript('cjk-kr')).toBe(false)
-
-    const korean = await manager.ensureFallbackPack(['cjk-kr'])
-
-    expect(korean['cjk-kr']).toContain('Noto Sans KR')
-    expect(requestedFamilies).toContain('Noto Sans KR')
-    expect(manager.hasFallbackForScript('cjk-kr')).toBe(true)
-    expect(manager.getCJKFallbackFamilies()).toEqual(['Noto Sans SC', 'Noto Sans KR'])
+    const data = await manager.loadFont('LocalPriority', 'Regular')
+    expect(data?.byteLength).toBe(20)
+    expect(cacheReads).toBe(0)
   })
 
-  test('keeps generic CJK fallback usable without marking script-specific packs loaded', () => {
-    const manager = new FontManager()
-
-    manager.setCJKFallbackFamily('Generic CJK')
-
-    expect(manager.hasFallbackForScript('cjk')).toBe(true)
-    expect(manager.hasFallbackForScript('cjk-sc')).toBe(false)
-    expect(manager.hasFallbackForScript('cjk-jp')).toBe(false)
-    expect(manager.getFallbackFamiliesForScript('cjk-kr')).toEqual(['Generic CJK'])
-  })
-
-  test('loads downloaded cache before other sources', async () => {
+  test('loads downloaded cache when local sources are unavailable', async () => {
     const manager = new FontManager()
     const recording = createRecordingProvider()
     const data = new ArrayBuffer(16)
@@ -237,10 +208,7 @@ describe('FontManager loaded font cache', () => {
     })
 
     await expect(manager.loadFont('DownloadedCache', 'Regular')).resolves.toBe(data)
-    expect(recording.registrations).toEqual([
-      { family: 'DownloadedCache', byteLength: 16 },
-      { family: '__op_font__DownloadedCache__Regular', byteLength: 16 }
-    ])
+    expect(recording.registrations).toEqual([{ family: 'DownloadedCache', byteLength: 16 }])
     expect(writes).toBe(0)
   })
 
@@ -257,10 +225,7 @@ describe('FontManager loaded font cache', () => {
       const data = await manager.loadFont('Inter', 'ExtraBold')
 
       expect(data?.byteLength).toBeGreaterThan(0)
-      expect(recording.registrations).toEqual([
-        { family: 'Inter', byteLength: data?.byteLength },
-        { family: '__op_font__Inter__ExtraBold', byteLength: data?.byteLength }
-      ])
+      expect(recording.registrations).toEqual([{ family: 'Inter', byteLength: data?.byteLength }])
     } finally {
       globalThis.fetch = originalFetch
     }

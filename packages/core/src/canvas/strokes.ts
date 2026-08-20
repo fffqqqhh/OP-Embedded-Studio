@@ -55,7 +55,8 @@ export function drawDashedRRectWithSolidCorners(
   r.strokePaint.setStrokeWidth(stroke.weight)
   r.strokePaint.setAlphaf(stroke.opacity)
   r.strokePaint.setStrokeCap(r.ck.StrokeCap.Butt)
-  r.strokePaint.setStrokeJoin(getStrokeJoinEntity(r, stroke.join))
+  r.strokePaint.setStrokeJoin(getStrokeJoinEntity(r, stroke.join ?? node.strokeJoin))
+  r.strokePaint.setStrokeMiter(node.strokeMiterLimit)
   r.strokePaint.setPathEffect(null)
 
   canvas.drawArc(
@@ -95,6 +96,20 @@ export function drawDashedRRectWithSolidCorners(
   r.strokePaint.setPathEffect(null)
 }
 
+export function configureStrokePaint(
+  r: SkiaRenderer,
+  node: SceneNode,
+  stroke: Stroke,
+  color: Color
+): void {
+  r.strokePaint.setColor(r.ck.Color4f(color.r, color.g, color.b, color.a))
+  r.strokePaint.setStrokeWidth(stroke.weight)
+  r.strokePaint.setAlphaf(stroke.opacity)
+  r.strokePaint.setStrokeCap(getStrokeCapEntity(r, stroke.cap ?? node.strokeCap))
+  r.strokePaint.setStrokeJoin(getStrokeJoinEntity(r, stroke.join ?? node.strokeJoin))
+  r.strokePaint.setStrokeMiter(node.strokeMiterLimit)
+}
+
 export function drawStyledRRectStroke(
   r: SkiaRenderer,
   canvas: Canvas,
@@ -105,11 +120,7 @@ export function drawStyledRRectStroke(
   dashPhase = 0
 ): void {
   const dash = stroke.dashPattern ?? []
-  r.strokePaint.setColor(r.ck.Color4f(color.r, color.g, color.b, color.a))
-  r.strokePaint.setStrokeWidth(stroke.weight)
-  r.strokePaint.setAlphaf(stroke.opacity)
-  r.strokePaint.setStrokeCap(getStrokeCapEntity(r, stroke.cap))
-  r.strokePaint.setStrokeJoin(getStrokeJoinEntity(r, stroke.join))
+  configureStrokePaint(r, node, stroke, color)
   r.strokePaint.setPathEffect(dash.length > 0 ? r.ck.PathEffect.MakeDash(dash, dashPhase) : null)
   r.drawRRectStrokeWithAlign(canvas, rrect, node, stroke)
   r.strokePaint.setPathEffect(null)
@@ -180,13 +191,19 @@ export function drawStrokeWithAlign(
   } else if (align === 'OUTSIDE') {
     canvas.save()
     const bigRect = r.ck.LTRBRect(-node.width, -node.height, node.width * 2, node.height * 2)
-    const outerPath = new r.ck.Path()
+    const outerPath = new r.ck.PathBuilder()
     outerPath.addRect(bigRect)
     const innerPath = r.makeNodeShapePath(node, rect, hasRadius)
-    outerPath.op(innerPath, r.ck.PathOp.Difference)
+    const immutableOuterPath = outerPath.detachAndDelete()
+    const clipPath = r.ck.Path.MakeFromOp(immutableOuterPath, innerPath, r.ck.PathOp.Difference)
+    immutableOuterPath.delete()
     innerPath.delete()
-    canvas.clipPath(outerPath, r.ck.ClipOp.Intersect, true)
-    outerPath.delete()
+    if (!clipPath) {
+      canvas.restore()
+      return
+    }
+    canvas.clipPath(clipPath, r.ck.ClipOp.Intersect, true)
+    clipPath.delete()
     const origWidth = r.strokePaint.getStrokeWidth()
     r.strokePaint.setStrokeWidth(origWidth * 2)
     r.drawNodeStroke(canvas, node, rect, hasRadius)
@@ -225,14 +242,25 @@ export function drawRRectStrokeWithAlign(
     canvas.restore()
   } else if (stroke.align === 'OUTSIDE') {
     canvas.save()
-    const outerPath = new r.ck.Path()
+    const outerPath = new r.ck.PathBuilder()
     outerPath.addRect(r.ck.LTRBRect(-node.width, -node.height, node.width * 2, node.height * 2))
-    const innerPath = new r.ck.Path()
+    const innerPath = new r.ck.PathBuilder()
     innerPath.addRRect(rrect)
-    outerPath.op(innerPath, r.ck.PathOp.Difference)
-    innerPath.delete()
-    canvas.clipPath(outerPath, r.ck.ClipOp.Intersect, true)
-    outerPath.delete()
+    const immutableOuterPath = outerPath.detachAndDelete()
+    const immutableInnerPath = innerPath.detachAndDelete()
+    const clipPath = r.ck.Path.MakeFromOp(
+      immutableOuterPath,
+      immutableInnerPath,
+      r.ck.PathOp.Difference
+    )
+    immutableOuterPath.delete()
+    immutableInnerPath.delete()
+    if (!clipPath) {
+      canvas.restore()
+      return
+    }
+    canvas.clipPath(clipPath, r.ck.ClipOp.Intersect, true)
+    clipPath.delete()
     r.strokePaint.setStrokeWidth(stroke.weight * 2)
     canvas.drawRRect(rrect, r.strokePaint)
     r.strokePaint.setStrokeWidth(stroke.weight)

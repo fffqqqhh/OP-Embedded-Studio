@@ -1,7 +1,7 @@
 import { useLocalStorage } from '@vueuse/core'
 import { computed } from 'vue'
 
-import type { LayerTreeDisplayOrder } from '@open-pencil/vue'
+type LayerTreeDisplayOrder = 'document' | 'front-first'
 
 export const layerTreeDisplayOrder = useLocalStorage<LayerTreeDisplayOrder>(
   'op-layer-tree-display-order',

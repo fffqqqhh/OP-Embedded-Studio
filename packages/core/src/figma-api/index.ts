@@ -12,11 +12,13 @@ import { computeBounds } from '@open-pencil/scene-graph/geometry'
 import { computeImageHash } from '@open-pencil/scene-graph/images'
 import type { Rect, Vector } from '@open-pencil/scene-graph/primitives'
 
+import { decodeBase64, encodeBase64 } from '#core/bytes'
 import type { SkiaRenderer } from '#core/canvas'
 import { canMakeBooleanSourceNode } from '#core/canvas/boolean'
 import { flattenNodesToVectorProps } from '#core/canvas/flatten'
 import { IS_BROWSER } from '#core/constants'
 import type { RasterExportFormat } from '#core/io/formats/raster'
+import { documentFontStatus, type DocumentFontStatus } from '#core/text/font/status'
 
 import { combineComponentsAsVariants } from './components'
 import type {
@@ -537,12 +539,16 @@ export class FigmaAPI implements NodeProxyHost {
     return []
   }
 
+  getFontStatus(): DocumentFontStatus {
+    return documentFontStatus(this.graph, this.currentPageId)
+  }
+
   base64Encode(data: Uint8Array): string {
-    return data.toBase64()
+    return encodeBase64(data)
   }
 
   base64Decode(data: string): Uint8Array {
-    return Uint8Array.fromBase64(data)
+    return decodeBase64(data)
   }
 
   notify(message: string): { cancel: () => void } {

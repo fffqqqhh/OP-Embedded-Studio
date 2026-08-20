@@ -12,8 +12,10 @@ import type { SnapGuide } from '@open-pencil/scene-graph/snap'
 import type { UndoManager } from '@open-pencil/scene-graph/undo'
 
 import type { RulerTheme, SkiaRenderer } from '#core/canvas/renderer'
-import type { RenderOverlays } from '#core/canvas/renderer/types'
+import type { MeasurementMode, RenderOverlays } from '#core/canvas/renderer/types'
+import type { SnappingPreferences } from '#core/editor/preferences'
 import type { TextEditor } from '#core/text/editor'
+import type { FontResolutionEvent, FontResolutionSnapshot } from '#core/text/resolver'
 
 export type Tool =
   | 'SELECT'
@@ -28,8 +30,23 @@ export type Tool =
   | 'PEN'
   | 'HAND'
 
-export interface EditorState {
+export interface EditorSharedState {
   activeTool: Tool
+  snappingPreferences: SnappingPreferences
+  remoteCursors: Array<{
+    name: string
+    color: Color
+    x: number
+    y: number
+    selection?: string[]
+  }>
+  documentName: string
+  rulerTheme?: RulerTheme
+  sceneVersion: number
+  loading: boolean
+}
+
+export interface EditorViewState {
   currentPageId: string
   selectedIds: Set<string>
   marquee: Rect | null
@@ -45,6 +62,7 @@ export interface EditorState {
     direction: 'HORIZONTAL' | 'VERTICAL'
   } | null
   hoveredNodeId: string | null
+  measurementMode: MeasurementMode
   editingTextId: string | null
   penState: {
     vertices: VectorVertex[]
@@ -59,33 +77,35 @@ export interface EditorState {
   } | null
   penCursorX: number | null
   penCursorY: number | null
-  remoteCursors: Array<{
-    name: string
-    color: Color
-    x: number
-    y: number
-    selection?: string[]
-  }>
   autoLayoutHover: {
     nodeId: string
     kind: 'frame' | 'children' | 'spacing' | 'spacing-value' | 'padding' | 'padding-value'
     index?: number
     side?: 'top' | 'right' | 'bottom' | 'left'
   } | null
-  documentName: string
   panX: number
   pageColor: Color
-  rulerTheme?: RulerTheme
   panY: number
   zoom: number
   renderVersion: number
-  sceneVersion: number
-  loading: boolean
   enteredContainerId: string | null
   nodeEditState?: RenderOverlays['nodeEditState'] | null
   cursorCanvasX?: number | null
   cursorCanvasY?: number | null
 }
+
+export interface EditorState extends EditorSharedState, EditorViewState {}
+
+export interface ClipboardImageResolution {
+  total: number
+  missing: number
+  fetchAttempted: boolean
+}
+
+export type FigmaClipboardImageResolver = (
+  fileKey: string,
+  hashes: string[]
+) => Promise<ReadonlyMap<string, Uint8Array>>
 
 export interface EditorEvents extends SceneGraphEvents {
   'render:requested': (versions: { renderVersion: number; sceneVersion: number }) => void
@@ -94,6 +114,8 @@ export interface EditorEvents extends SceneGraphEvents {
   'selection:changed': (selectedIds: string[], previousIds: string[]) => void
   'tool:changed': (tool: Tool, previousTool: Tool) => void
   'page:changed': (pageId: string, previousPageId: string) => void
+  'clipboard:images-missing': (resolution: ClipboardImageResolution) => void
+  'font:resolution-changed': (event: FontResolutionEvent, snapshot: FontResolutionSnapshot) => void
   'viewport:changed': (
     viewport: { panX: number; panY: number; zoom: number },
     previous: { panX: number; panY: number; zoom: number }
@@ -105,7 +127,8 @@ export type EditorEventName = keyof EditorEvents
 export interface EditorOptions {
   graph?: SceneGraph
   state?: EditorState
-  loadFont?: (family: string, style: string) => Promise<ArrayBuffer | null>
+  loadFont?: (family: string, style: string, characters?: string) => Promise<ArrayBuffer | null>
+  resolveFigmaClipboardImages?: FigmaClipboardImageResolver
   getViewportSize?: () => { width: number; height: number }
   skipInitialGraphSetup?: boolean
 }
@@ -115,7 +138,8 @@ export interface EditorContext {
   set graph(g: SceneGraph)
   undo: UndoManager
   state: EditorState
-  loadFont: (family: string, style: string) => Promise<ArrayBuffer | null>
+  loadFont: (family: string, style: string, characters?: string) => Promise<ArrayBuffer | null>
+  resolveFigmaClipboardImages: FigmaClipboardImageResolver | null
   getViewportSize: () => { width: number; height: number }
   getCk: () => CanvasKit | null
   getRenderer: () => SkiaRenderer | null

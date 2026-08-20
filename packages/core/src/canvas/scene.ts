@@ -1,27 +1,40 @@
 /* eslint-disable max-lines -- scene dispatch stays together while shape domains live in sibling modules */
 import type { Canvas, Path } from 'canvaskit-wasm'
 
-import type { SceneNode, SceneGraph, Fill } from '@open-pencil/scene-graph'
+import {
+  getAbsolutePositionFull,
+  type SceneNode,
+  type SceneGraph,
+  type Fill
+} from '@open-pencil/scene-graph'
 import { computeDescendantVisualBounds } from '@open-pencil/scene-graph/geometry'
 import type { Color } from '@open-pencil/scene-graph/primitives'
 
 import { DROP_HIGHLIGHT_ALPHA, DROP_HIGHLIGHT_STROKE, SECTION_CORNER_RADIUS } from '#core/constants'
+import { transformTextCase } from '#core/text/case'
+import { fontManager } from '#core/text/fonts'
 import { vectorNetworkToCenterlinePath } from '#core/vector'
 
 import { figmaBlendModeToSkia, needsIsolatedBlendLayer } from './blend'
 import { renderBooleanOperation } from './boolean'
+import { drawVectorMultiStyleFills, paintFills } from './fills'
 import { drawLayoutGrids } from './layout-grids'
 import { renderMaskedChildIds } from './masks'
 import type { SkiaRenderer, RenderOverlays } from './renderer'
 import { makeSmoothRRectPath, nodeHasRadius, nodeHasSmoothCorners } from './shapes'
 import {
+  configureStrokePaint,
   drawDashedRRectWithSolidCorners,
   drawStyledRRectStroke,
   getStrokeCapEntity,
   getStrokeJoinEntity
 } from './strokes'
-import { drawFigmaDerivedText } from './text-derived'
-import { textNodeToOutlinePath } from './text-outlines'
+import {
+  drawDerivedText,
+  drawReflowedPathTextSilhouettes,
+  isReflowedPathText
+} from './text/derived'
+import { textNodeToOutlinePath } from './text/outlines'
 
 function drawVisibleFills(
   r: SkiaRenderer,
@@ -29,25 +42,45 @@ function drawVisibleFills(
   graph: SceneGraph,
   draw: (fill: Fill) => void
 ): void {
-  for (let fi = 0; fi < node.fills.length; fi++) {
-    const fill = node.fills[fi]
-    if (!fill.visible) continue
-    if (!r.applyFill(fill, node, graph, fi)) continue
-    r.fillPaint.setAlphaf(fill.opacity)
-    r.fillPaint.setBlendMode(figmaBlendModeToSkia(r.ck, fill.blendMode))
-    draw(fill)
-    r.fillPaint.setShader(null)
-    r.fillPaint.setBlendMode(r.ck.BlendMode.SrcOver)
-  }
+  paintFills(r, node.fills, node, graph, draw)
 }
-function isCulled(r: SkiaRenderer, node: SceneNode, absX: number, absY: number): boolean {
+
+function hasNodeTransform(node: SceneNode): boolean {
+  return node.rotation !== 0 || node.flipX || node.flipY
+}
+
+function hasOverflowPathTextPaint(node: SceneNode): boolean {
+  return (
+    node.textPathData != null &&
+    ((node.derivedTextGlyphs?.length ?? 0) > 0 ||
+      (Array.isArray(node.strokeGeometry) && node.strokeGeometry.length > 0))
+  )
+}
+
+function isCulled(
+  r: SkiaRenderer,
+  graph: SceneGraph,
+  node: SceneNode,
+  absX: number,
+  absY: number,
+  hasTransformedAncestor: boolean
+): boolean {
   const canCull =
     node.childIds.length === 0 ||
     ((node.type === 'FRAME' || node.type === 'COMPONENT' || node.type === 'INSTANCE') &&
       node.clipsContent)
-  if (!canCull) return false
+  if (!canCull || hasOverflowPathTextPaint(node)) return false
 
   const vp = r.worldViewport
+  if (hasTransformedAncestor) {
+    const bounds = getAbsolutePositionFull(node, graph)
+    return (
+      bounds.boundX > vp.x + vp.w ||
+      bounds.boundY > vp.y + vp.h ||
+      bounds.boundX + bounds.width < vp.x ||
+      bounds.boundY + bounds.height < vp.y
+    )
+  }
   const bw = node.width
   const bh = node.height
   if (node.rotation !== 0) {
@@ -73,14 +106,17 @@ function applyNodeTransforms(
 ): void {
   const rotation =
     overlays.rotationPreview?.nodeId === nodeId ? overlays.rotationPreview.angle : node.rotation
-  if (rotation !== 0) {
-    if (node.type === 'LINE') canvas.rotate(rotation, 0, 0)
-    else canvas.rotate(rotation, node.width / 2, node.height / 2)
-  }
-
   if (node.flipX || node.flipY) {
     canvas.translate(node.flipX ? node.width : 0, node.flipY ? node.height : 0)
     canvas.scale(node.flipX ? -1 : 1, node.flipY ? -1 : 1)
+  }
+
+  // Keep drawing transforms in the same order as getNodeLocalMatrix and Figma's raw matrix.
+  // Reflected quarter-turn connector instances are visibly reversed when rotation is applied
+  // before the reflection.
+  if (rotation !== 0) {
+    if (node.type === 'LINE') canvas.rotate(rotation, 0, 0)
+    else canvas.rotate(rotation, node.width / 2, node.height / 2)
   }
 }
 function renderNodeContent(
@@ -134,7 +170,8 @@ function renderChildIds(
   childIds: string[],
   overlays: RenderOverlays,
   absX: number,
-  absY: number
+  absY: number,
+  hasTransformedAncestor: boolean
 ): void {
   renderMaskedChildIds(
     r,
@@ -144,7 +181,7 @@ function renderChildIds(
       const child = graph.getNode(childId)
       return child?.visible && child.isMask ? child.maskType : null
     },
-    (childId) => r.renderNode(canvas, graph, childId, overlays, absX, absY),
+    (childId) => r.renderNode(canvas, graph, childId, overlays, absX, absY, hasTransformedAncestor),
     (childId) => {
       const child = graph.getNode(childId)
       if (child) renderMaskNodeContent(r, canvas, graph, child, childId, overlays)
@@ -164,7 +201,8 @@ function renderChildren(
   node: SceneNode,
   overlays: RenderOverlays,
   absX: number,
-  absY: number
+  absY: number,
+  hasTransformedAncestor: boolean
 ): void {
   if (node.type === 'BOOLEAN_OPERATION') return
   const isClippableContainer =
@@ -180,10 +218,10 @@ function renderChildren(
     } else {
       canvas.clipRect(r.ck.LTRBRect(0, 0, node.width, node.height), r.ck.ClipOp.Intersect, true)
     }
-    renderChildIds(r, canvas, graph, node.childIds, overlays, absX, absY)
+    renderChildIds(r, canvas, graph, node.childIds, overlays, absX, absY, hasTransformedAncestor)
     canvas.restore()
   } else {
-    renderChildIds(r, canvas, graph, node.childIds, overlays, absX, absY)
+    renderChildIds(r, canvas, graph, node.childIds, overlays, absX, absY, hasTransformedAncestor)
   }
 }
 export function renderNode(
@@ -193,10 +231,19 @@ export function renderNode(
   nodeId: string,
   overlays: RenderOverlays,
   parentAbsX = 0,
-  parentAbsY = 0
+  parentAbsY = 0,
+  hasTransformedAncestor = false
 ): void {
   const node = graph.getNode(nodeId)
-  if (!node || !node.visible || node.isMask) return
+  if (
+    !node ||
+    node.internalOnly ||
+    !node.visible ||
+    node.isMask ||
+    fontManager.isNodeBlocked(nodeId)
+  ) {
+    return
+  }
 
   // Hide the node being edited in node-edit mode (overlay draws it live)
   if (overlays.nodeEditState?.nodeId === nodeId) return
@@ -206,7 +253,7 @@ export function renderNode(
   const absX = parentAbsX + node.x
   const absY = parentAbsY + node.y
 
-  if (isCulled(r, node, absX, absY)) {
+  if (isCulled(r, graph, node, absX, absY, hasTransformedAncestor)) {
     r._culledCount++
     return
   }
@@ -254,7 +301,16 @@ export function renderNode(
   applyNodeTransforms(r, canvas, node, nodeId, overlays)
   renderNodeContent(r, canvas, graph, node, nodeId, overlays)
   drawLayoutGrids(r, canvas, node)
-  renderChildren(r, canvas, graph, node, overlays, absX, absY)
+  renderChildren(
+    r,
+    canvas,
+    graph,
+    node,
+    overlays,
+    absX,
+    absY,
+    hasTransformedAncestor || hasNodeTransform(node)
+  )
 
   if (layerBlur) {
     canvas.restore()
@@ -300,9 +356,7 @@ export function renderSection(
   drawVisibleFills(r, node, graph, () => canvas.drawRRect(rrect, r.fillPaint))
 
   forVisibleStrokes(r, node, graph, (stroke, color) => {
-    r.strokePaint.setColor(r.ck.Color4f(color.r, color.g, color.b, color.a))
-    r.strokePaint.setStrokeWidth(stroke.weight)
-    r.strokePaint.setAlphaf(stroke.opacity)
+    configureStrokePaint(r, node, stroke, color)
 
     if (node.independentStrokeWeights) r.drawIndividualSideStrokes(canvas, node, stroke.align)
     else r.drawRRectStrokeWithAlign(canvas, rrect, node, stroke)
@@ -351,10 +405,14 @@ export function renderShape(
 
   if (hasEffects) {
     const cached = r.nodePictureCache.get(node.id)
-    if (cached) {
+    const cachedGeneration = r.nodePictureCacheGenerations.get(node.id)
+    if (cached && cachedGeneration === r.fontGeneration) {
       canvas.drawPicture(cached)
       return
     }
+    if (cached) cached.delete()
+    r.nodePictureCache.delete(node.id)
+    r.nodePictureCacheGenerations.delete(node.id)
 
     const margin = r.effectOverflow(node)
     const bounds = r.ck.LTRBRect(-margin, -margin, node.width + margin, node.height + margin)
@@ -364,6 +422,7 @@ export function renderShape(
     const picture = recorder.finishRecordingAsPicture()
     recorder.delete()
     r.nodePictureCache.set(node.id, picture)
+    r.nodePictureCacheGenerations.set(node.id, r.fontGeneration)
     canvas.drawPicture(picture)
   } else {
     r.renderShapeUncached(canvas, node, graph)
@@ -402,7 +461,7 @@ function vectorStrokePaths(r: SkiaRenderer, node: SceneNode): Path[] | null {
     const start = node.vectorNetwork.vertices[segment.start]
     const end = node.vectorNetwork.vertices[segment.end]
 
-    const path = new r.ck.Path()
+    const path = new r.ck.PathBuilder()
     path.moveTo(start.x, start.y)
     const isStraight =
       Math.abs(segment.tangentStart.x) < 0.001 &&
@@ -421,7 +480,7 @@ function vectorStrokePaths(r: SkiaRenderer, node: SceneNode): Path[] | null {
         end.y
       )
     }
-    paths.push(path)
+    paths.push(path.detachAndDelete())
   }
 
   if (paths.length === 0) return null
@@ -435,6 +494,7 @@ function drawVectorPathStrokes(
   vectorPaths: Path[],
   stroke: SceneNode['strokes'][0],
   sc: Color,
+  miterLimit: number,
   outlineCacheKey?: string
 ): void {
   const dash = stroke.dashPattern
@@ -444,6 +504,7 @@ function drawVectorPathStrokes(
     r.strokePaint.setStrokeWidth(stroke.weight)
     r.strokePaint.setStrokeCap(getStrokeCapEntity(r, stroke.cap ?? 'NONE'))
     r.strokePaint.setStrokeJoin(getStrokeJoinEntity(r, stroke.join ?? 'MITER'))
+    r.strokePaint.setStrokeMiter(miterLimit)
     r.strokePaint.setShader(null)
     const effect = r.ck.PathEffect.MakeDash(dash, 0)
     r.strokePaint.setPathEffect(effect)
@@ -454,7 +515,7 @@ function drawVectorPathStrokes(
   }
   const strokeOpts = {
     width: stroke.weight,
-    miter_limit: 4,
+    miter_limit: miterLimit,
     cap: getStrokeCapEntity(r, stroke.cap ?? 'NONE'),
     join: getStrokeJoinEntity(r, stroke.join ?? 'MITER')
   }
@@ -466,7 +527,7 @@ function drawVectorPathStrokes(
   if (!outlines) {
     outlines = []
     for (const vp of vectorPaths) {
-      const outline = vp.copy().stroke(strokeOpts)
+      const outline = vp.makeStroked(strokeOpts)
       if (outline) outlines.push(outline)
     }
     if (outlineCacheKey) r.vectorStrokeOutlineCache.set(outlineCacheKey, outlines)
@@ -483,16 +544,7 @@ function drawRegularStroke(
   stroke: SceneNode['strokes'][0],
   sc: Color
 ): void {
-  r.strokePaint.setColor(r.ck.Color4f(sc.r, sc.g, sc.b, sc.a))
-  r.strokePaint.setStrokeWidth(stroke.weight)
-  r.strokePaint.setAlphaf(stroke.opacity)
-
-  if (stroke.cap) {
-    r.strokePaint.setStrokeCap(getStrokeCapEntity(r, stroke.cap))
-  }
-  if (stroke.join) {
-    r.strokePaint.setStrokeJoin(getStrokeJoinEntity(r, stroke.join))
-  }
+  configureStrokePaint(r, node, stroke, sc)
   if (stroke.dashPattern && stroke.dashPattern.length > 0) {
     r.strokePaint.setPathEffect(r.ck.PathEffect.MakeDash(stroke.dashPattern, 0))
   } else {
@@ -525,18 +577,20 @@ function drawNodeStroke(
     node.type === 'VECTOR' &&
     !node.fills.some((fill) => fill.visible)
   if (shouldStrokeVectorCenterline) {
-    const outlineKey = `${node.id}|${stroke.weight}|${stroke.cap ?? 'NONE'}|${stroke.join ?? 'MITER'}`
-    drawVectorPathStrokes(r, canvas, vectorStroke, stroke, sc, outlineKey)
+    const outlineKey = `${node.id}|${stroke.weight}|${stroke.cap ?? node.strokeCap}|${stroke.join ?? node.strokeJoin}|${node.strokeMiterLimit}`
+    drawVectorPathStrokes(r, canvas, vectorStroke, stroke, sc, node.strokeMiterLimit, outlineKey)
     return
   }
   if (!sg) {
-    if (vectorPaths) drawVectorPathStrokes(r, canvas, vectorPaths, stroke, sc)
-    else drawRegularStroke(r, canvas, node, rect, hasRadius, stroke, sc)
+    if (vectorPaths) {
+      drawVectorPathStrokes(r, canvas, vectorPaths, stroke, sc, node.strokeMiterLimit)
+    } else drawRegularStroke(r, canvas, node, rect, hasRadius, stroke, sc)
     return
   }
   if (stroke.align !== 'INSIDE') {
-    if (node.type === 'VECTOR') drawVectorStrokeGeometry(r, canvas, sg, sc, stroke.opacity)
-    else drawRegularStroke(r, canvas, node, rect, hasRadius, stroke, sc)
+    if (node.type === 'VECTOR' || node.type === 'TEXT') {
+      drawVectorStrokeGeometry(r, canvas, sg, sc, stroke.opacity)
+    } else drawRegularStroke(r, canvas, node, rect, hasRadius, stroke, sc)
     return
   }
 
@@ -556,6 +610,42 @@ function drawNodeStroke(
   canvas.restore()
 }
 
+function isPathTextWithStrokeGeometry(node: SceneNode): boolean {
+  return (
+    node.type === 'TEXT' &&
+    node.textPathData !== null &&
+    (node.derivedTextGlyphs?.length ?? 0) > 0 &&
+    node.strokeGeometry.length > 0
+  )
+}
+
+function paintNodeStrokes(
+  r: SkiaRenderer,
+  canvas: Canvas,
+  node: SceneNode,
+  graph: SceneGraph,
+  rect: Float32Array,
+  hasRadius: boolean,
+  sg: Path[] | null,
+  vectorPaths: Path[] | null,
+  vectorStroke: Path[] | null
+): void {
+  forVisibleStrokes(r, node, graph, (stroke, color) => {
+    if (
+      stroke.dashPattern &&
+      stroke.dashPattern.length > 0 &&
+      node.type === 'VECTOR' &&
+      node.vectorNetwork
+    ) {
+      const centerline = vectorNetworkToCenterlinePath(r.ck, node.vectorNetwork)
+      drawVectorPathStrokes(r, canvas, [centerline], stroke, color, node.strokeMiterLimit)
+      centerline.delete()
+      return
+    }
+    drawNodeStroke(r, canvas, node, rect, hasRadius, stroke, color, sg, vectorPaths, vectorStroke)
+  })
+}
+
 export function renderShapeUncached(
   r: SkiaRenderer,
   canvas: Canvas,
@@ -568,25 +658,28 @@ export function renderShapeUncached(
   const shadowChild = getShadowShapeChild(node, graph)
   r.renderEffects(canvas, node, rect, hasRadius, 'behind', shadowChild)
 
-  drawVisibleFills(r, node, graph, (fill) => r.drawNodeFill(canvas, node, rect, hasRadius, fill))
-
   const sg = node.strokeGeometry.length > 0 ? r.getStrokeGeometry(node) : null
   const vectorPaths = node.type === 'VECTOR' ? r.getVectorPaths(node) : null
   const vectorStroke = node.type === 'VECTOR' ? vectorStrokePaths(r, node) : null
-  forVisibleStrokes(r, node, graph, (stroke, color) => {
-    if (
-      stroke.dashPattern &&
-      stroke.dashPattern.length > 0 &&
-      node.type === 'VECTOR' &&
-      node.vectorNetwork
-    ) {
-      const centerline = vectorNetworkToCenterlinePath(r.ck, node.vectorNetwork)
-      drawVectorPathStrokes(r, canvas, [centerline], stroke, color)
-      centerline.delete()
-      return
-    }
-    drawNodeStroke(r, canvas, node, rect, hasRadius, stroke, color, sg, vectorPaths, vectorStroke)
-  })
+  const pathTextStrokeFirst = isPathTextWithStrokeGeometry(node)
+  const reflowedPathText = isReflowedPathText(node)
+
+  if (pathTextStrokeFirst) {
+    paintNodeStrokes(r, canvas, node, graph, rect, hasRadius, sg, vectorPaths, vectorStroke)
+  }
+  if (reflowedPathText) {
+    forVisibleStrokes(r, node, graph, (stroke, color) =>
+      drawReflowedPathTextSilhouettes(r, canvas, node, stroke, color)
+    )
+  }
+
+  if (!drawVectorMultiStyleFills(r, canvas, node, graph)) {
+    drawVisibleFills(r, node, graph, (fill) => r.drawNodeFill(canvas, node, rect, hasRadius, fill))
+  }
+
+  if (!pathTextStrokeFirst && !reflowedPathText) {
+    paintNodeStrokes(r, canvas, node, graph, rect, hasRadius, sg, vectorPaths, vectorStroke)
+  }
   r.renderEffects(canvas, node, rect, hasRadius, 'front', shadowChild)
 }
 
@@ -598,72 +691,41 @@ function shouldRenderTextAsOutline(fill?: Fill): boolean {
   return fill !== undefined && fill.type !== 'SOLID'
 }
 
-function drawOutlinedText(r: SkiaRenderer, canvas: Canvas, node: SceneNode): boolean {
-  const path = textNodeToOutlinePath(r, node)
-  if (!path) return false
-  canvas.drawPath(path, r.fillPaint)
-  path.delete()
-  return true
+export function textVerticalOffset(node: SceneNode, contentHeight: number): number {
+  const available = Math.max(0, node.height - contentHeight)
+  if (node.textAlignVertical === 'CENTER') return available / 2
+  if (node.textAlignVertical === 'BOTTOM') return available
+  return 0
 }
 
-const CJK_TEXT_PATTERN = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/u
-
-function hasVisibleFill(fills: readonly Fill[] | undefined): boolean {
-  return fills?.some((fill) => fill.visible) === true
-}
-
-function hasArrayItems(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0
-}
-
-function hasNonDefaultLeadingTrim(value: unknown): boolean {
-  return value !== undefined && value !== 'NONE'
-}
-
-function nodeTextNeedsParagraphFeatures(node: SceneNode): boolean {
-  if (node.textTruncation === 'ENDING') return true
-  if (node.textAlignHorizontal === 'JUSTIFIED') return true
-  if (hasNonDefaultLeadingTrim(node.leadingTrim)) return true
-  if (hasArrayItems(node.fontFeatures)) return true
-  if (hasArrayItems(node.fontVariations)) return true
-  if (node.textDecoration !== 'NONE') return true
-  if (hasVisibleFill(node.textDecorationFills)) return true
-  if (node.maxLines != null && node.maxLines > 0) return true
-
-  return node.styleRuns.some((run) => {
-    const style = run.style
-    return (
-      hasVisibleFill(style.fills) ||
-      style.lineHeight !== undefined ||
-      (style.fontFeatures?.length ?? 0) > 0 ||
-      (style.fontVariations?.length ?? 0) > 0 ||
-      style.textDecoration !== undefined ||
-      style.textDecorationStyle !== undefined ||
-      style.textDecorationThickness !== undefined ||
-      hasVisibleFill(style.textDecorationFills)
-    )
-  })
-}
-
-function shouldRenderCJKAsOutline(node: SceneNode, fill?: Fill): boolean {
-  return (
-    fill?.type === 'SOLID' &&
-    fill.visible &&
-    CJK_TEXT_PATTERN.test(node.text) &&
-    !nodeTextNeedsParagraphFeatures(node)
-  )
-}
-
-function drawGradientText(
+function drawOutlinedText(
   r: SkiaRenderer,
   canvas: Canvas,
   node: SceneNode,
   paragraphY: number
 ): boolean {
+  const outlineNode =
+    node.textCase === 'ORIGINAL'
+      ? node
+      : { ...node, text: transformTextCase(node.text, node.textCase), styleRuns: [] }
+  const path = textNodeToOutlinePath(r, outlineNode)
+  if (!path) return false
+  canvas.save()
+  canvas.translate(0, paragraphY)
+  canvas.drawPath(path, r.fillPaint)
+  canvas.restore()
+  path.delete()
+  return true
+}
+
+function drawGradientText(r: SkiaRenderer, canvas: Canvas, node: SceneNode): boolean {
   if (!r.fontsLoaded || !r.fontProvider) return false
 
-  const paragraph = r.buildParagraph(node, r.ck.Color4f(0, 0, 0, 1))
+  const paragraph = r.buildParagraph(node, r.ck.Color4f(0, 0, 0, 1), {
+    halfLeading: true
+  })
   try {
+    const paragraphY = textVerticalOffset(node, paragraph.getHeight())
     r.effectLayerPaint.setImageFilter(null)
     r.effectLayerPaint.setColorFilter(null)
     r.effectLayerPaint.setBlendMode(r.ck.BlendMode.SrcOver)
@@ -685,52 +747,77 @@ function drawGradientText(
   }
 }
 
+function shouldClipTextToLayoutBox(node: SceneNode): boolean {
+  return (
+    !hasOverflowPathTextPaint(node) &&
+    (node.textAutoResize === 'NONE' || node.textAutoResize === 'TRUNCATE')
+  )
+}
+
 export function renderText(r: SkiaRenderer, canvas: Canvas, node: SceneNode, fill?: Fill): void {
   const text = node.text
   if (!text) return
 
   canvas.save()
-  const shouldClipText = node.textAutoResize === 'NONE' || node.textAutoResize === 'TRUNCATE'
-  if (shouldClipText) {
+  if (shouldClipTextToLayoutBox(node)) {
     canvas.clipRect(r.ck.LTRBRect(0, 0, node.width, node.height), r.ck.ClipOp.Intersect, false)
   }
 
-  const paragraphY = 0
-  if (node.textPicture) {
-    const pic = r.ck.MakePicture(node.textPicture)
-    if (pic) {
-      canvas.drawPicture(pic)
-      pic.delete()
+  const fontReadiness = r.nodeFontReadiness(node)
+  if (fontReadiness !== 'ready') {
+    if (fontReadiness === 'exhausted') {
+      if (node.textPicture && r.isTextPictureCurrent(node)) {
+        const pic = r.ck.MakePicture(node.textPicture)
+        if (pic) {
+          canvas.drawPicture(pic)
+          pic.delete()
+          canvas.restore()
+          return
+        }
+      }
+      if (drawDerivedText(r, canvas, node)) {
+        canvas.restore()
+        return
+      }
+    }
+    canvas.restore()
+    return
+  }
+  if (shouldRenderTextAsOutline(fill)) {
+    let paragraphY = 0
+    if (node.textAlignVertical !== 'TOP') {
+      const paragraph = r.buildParagraph(node, r.ck.Color4f(0, 0, 0, 1), {
+        halfLeading: true
+      })
+      paragraphY = textVerticalOffset(node, paragraph.getHeight())
+      paragraph.delete()
+    }
+    if (drawOutlinedText(r, canvas, node, paragraphY)) {
       canvas.restore()
       return
     }
   }
-  if (drawFigmaDerivedText(r, canvas, node)) {
-    canvas.restore()
-    return
-  }
-
-  if (!r.isNodeFontLoaded(node)) {
-    canvas.restore()
-    return
-  }
-  if (
-    (shouldRenderTextAsOutline(fill) || shouldRenderCJKAsOutline(node, fill)) &&
-    drawOutlinedText(r, canvas, node)
-  ) {
-    canvas.restore()
-    return
-  }
-  if (isGradientFill(fill) && drawGradientText(r, canvas, node, paragraphY)) {
+  if (isGradientFill(fill) && drawGradientText(r, canvas, node)) {
     canvas.restore()
     return
   }
   if (r.fontsLoaded && r.fontProvider) {
-    const paragraph = r.buildParagraph(node, r.fillPaint.getColor())
+    const paragraph = r.buildParagraph(node, r.fillPaint.getColor(), {
+      halfLeading: true
+    })
+    const paragraphY = textVerticalOffset(node, paragraph.getHeight())
     canvas.drawParagraph(paragraph, 0, paragraphY)
     paragraph.delete()
   } else if (r.textFont) {
-    canvas.drawText(text, 0, node.fontSize || r.DEFAULT_FONT_SIZE, r.fillPaint, r.textFont)
+    const fontSize = node.fontSize || r.DEFAULT_FONT_SIZE
+    const paragraphY = textVerticalOffset(node, fontSize)
+    canvas.drawText(
+      transformTextCase(text, node.textCase),
+      0,
+      paragraphY + fontSize,
+      r.fillPaint,
+      r.textFont
+    )
   }
 
   canvas.restore()

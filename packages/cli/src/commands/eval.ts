@@ -5,9 +5,9 @@ import { defineCommand } from 'citty'
 import { FigmaAPI } from '@open-pencil/core/figma-api'
 
 import { isAppMode, requireFile, rpc } from '#cli/app-client'
-import { appTargetOptions, appTargetRpcArgs } from '#cli/app-target'
+import { appTargetOptions, appTargetRPCArgs } from '#cli/app-target'
 import { printError } from '#cli/format'
-import { loadDocument } from '#cli/headless'
+import { loadDocument, populateWholeDocument } from '#cli/headless'
 
 function printResult(value: unknown, json: boolean) {
   if (json || !process.stdout.isTTY) {
@@ -62,7 +62,7 @@ export default defineCommand({
     }
 
     if (isAppMode(args.file)) {
-      const result = await rpc('eval', { code, ...appTargetRpcArgs(args) })
+      const result = await rpc('eval', { code, ...appTargetRPCArgs(args) })
       if (!args.quiet && result !== undefined && result !== null) {
         printResult(result, !!args.json)
       }
@@ -71,6 +71,7 @@ export default defineCommand({
 
     const file = requireFile(args.file)
     const graph = await loadDocument(file)
+    populateWholeDocument(graph)
     const figma = new FigmaAPI(graph)
 
     type AsyncFunctionConstructor = new (

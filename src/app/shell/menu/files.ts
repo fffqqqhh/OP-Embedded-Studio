@@ -1,6 +1,8 @@
 import { useFileDialog } from '@vueuse/core'
 
 import { setOpenPencilOpenFileHandler } from '@/app/browser-bridge'
+import { resolveBrowserFileURL } from '@/app/document/io/browser'
+import { notificationMessages } from '@/app/i18n/notifications'
 import { toast } from '@/app/shell/ui'
 import { openFileInNewTab } from '@/app/tabs'
 import { isTauri } from '@/app/tauri/env'
@@ -23,11 +25,12 @@ fileDialog.onChange((files) => {
 
 if (IS_BROWSER && 'window' in globalThis) {
   setOpenPencilOpenFileHandler(async (path: string) => {
-    const response = await fetch(path)
+    const resourceURL = resolveBrowserFileURL(path)
+    const response = await fetch(resourceURL)
     const blob = await response.blob()
-    const name = path.split('/').pop() ?? 'file.fig'
+    const name = resourceURL.pathname.split('/').pop() ?? 'file.fig'
     const file = new File([blob], name, { type: 'application/octet-stream' })
-    await openFileInNewTab(file, undefined, path)
+    await openFileInNewTab(file, undefined, resourceURL.href)
   })
 }
 
@@ -43,7 +46,7 @@ export async function openDesignFileBatch<T>(
       const name = displayName(item)
       const detail = error instanceof Error ? error.message : String(error)
       console.error(`Failed to open ${name}:`, error)
-      toast.error(`Failed to open ${name}: ${detail}`)
+      toast.error(notificationMessages.get().openFileFailed({ name, error: detail }))
     }
   }
 }

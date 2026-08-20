@@ -1,8 +1,9 @@
 import type { Effect, Fill, SceneGraph, SceneNode } from '@open-pencil/scene-graph'
 import type { Color } from '@open-pencil/scene-graph/primitives'
 
+import { encodeBase64 } from '#core/bytes'
 import { colorToHex } from '#core/color'
-import { colorToDisplayCss, getDefaultRenderColorSpace } from '#core/color/management'
+import { colorToDisplayCSS, getDefaultRenderColorSpace } from '#core/color/management'
 import type { RenderColorSpace } from '#core/color/management'
 
 import { svg, type SVGNode } from './node'
@@ -26,7 +27,7 @@ export function formatColor(
 ): string {
   const alphaColor = { ...color, a: color.a * opacity }
   if (colorSpace === 'display-p3') {
-    return colorToDisplayCss(alphaColor, { colorSpace })
+    return colorToDisplayCSS(alphaColor, { colorSpace })
   }
   return colorToHex(alphaColor)
 }
@@ -109,7 +110,7 @@ function createImagePattern(
   if (!data) return null
 
   const id = nextDefId(ctx, 'img')
-  const base64 = btoa(String.fromCharCode(...data))
+  const base64 = encodeBase64(data)
   const mime = detectImageMime(data)
 
   return {

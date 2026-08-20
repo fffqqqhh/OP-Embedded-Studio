@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'bun:test'
 
 import { ref } from 'vue'
 
-import { spawnAcpProcess } from '@/app/ai/acp/process'
+import { spawnACPProcess } from '@/app/ai/acp/process'
 import { checkForAppUpdate } from '@/app/shell/updater'
 
 import { clearTauriMocks, mockTauriIPC } from '#tests/helpers/tauri/mocks'
@@ -11,6 +11,7 @@ afterEach(async () => {
   await clearTauriMocks()
   vi.restoreAllMocks()
   Reflect.deleteProperty(globalThis, 'window')
+  Reflect.deleteProperty(globalThis, 'navigator')
 })
 
 describe('Tauri process helpers', () => {
@@ -23,7 +24,7 @@ describe('Tauri process helpers', () => {
         expect(args).toMatchObject({
           program: 'agent-cli',
           args: ['--stdio'],
-          options: { encoding: 'raw' }
+          options: { encoding: 'raw', env: {} }
         })
         onEvent = (args as { onEvent: { onmessage: (event: unknown) => void } }).onEvent.onmessage
         return 42
@@ -31,7 +32,7 @@ describe('Tauri process helpers', () => {
       return null
     })
 
-    const process = await spawnAcpProcess({
+    const process = await spawnACPProcess({
       command: 'agent-cli',
       args: ['--stdio'],
       logId: 'test',
@@ -56,6 +57,33 @@ describe('Tauri process helpers', () => {
     expect(calls[2]?.args).toEqual({ cmd: 'killChild', pid: 42 })
   })
 
+  test('starts Windows ACP command shims through cmd', async () => {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    })
+    await mockTauriIPC((cmd, args) => {
+      if (cmd === 'plugin:shell|spawn') {
+        expect(args).toMatchObject({
+          program: 'cmd',
+          args: ['/c', 'agent-cli', '--stdio'],
+          options: { encoding: 'raw', env: {} }
+        })
+        return 44
+      }
+      return null
+    })
+
+    const process = await spawnACPProcess({
+      command: 'agent-cli',
+      args: ['--stdio'],
+      logId: 'test',
+      destroying: () => false,
+      onUnexpectedClose: vi.fn()
+    })
+    await process.child.kill()
+  })
+
   test('signals unexpected ACP process close to the output stream', async () => {
     let onEvent: ((event: unknown) => void) | null = null
     const onUnexpectedClose = vi.fn()
@@ -67,7 +95,7 @@ describe('Tauri process helpers', () => {
       return null
     })
 
-    const process = await spawnAcpProcess({
+    const process = await spawnACPProcess({
       command: 'agent-cli',
       args: [],
       logId: 'test',
@@ -124,7 +152,10 @@ describe('Tauri updater helper', () => {
           rawJson: '{}'
         }
       }
-      if (cmd === 'plugin:dialog|confirm') return true
+      if (cmd === 'plugin:dialog|message') {
+        const options = args as { buttons?: string }
+        if (options.buttons === 'OkCancel') return 'Ok'
+      }
       if (cmd === 'plugin:updater|download_and_install') {
         const onEvent = (args as { onEvent: { onmessage: (event: unknown) => void } }).onEvent
         onEvent.onmessage({ event: 'Started', data: { contentLength: 10 } })
@@ -137,14 +168,15 @@ describe('Tauri updater helper', () => {
 
     expect(calls.map((call) => call.cmd)).toEqual([
       'plugin:updater|check',
-      'plugin:dialog|confirm',
+      'plugin:dialog|message',
       'plugin:updater|download_and_install',
       'plugin:dialog|message',
       'plugin:process|restart'
     ])
     expect(calls[1]?.args).toMatchObject({
       title: 'Update available',
-      kind: 'info'
+      kind: 'info',
+      buttons: 'OkCancel'
     })
     expect(calls[2]?.args).toMatchObject({ rid: 9 })
   })

@@ -16,7 +16,11 @@ import { focusTextAreaOnCanvasPointerDown, useTextEditingSession } from './texta
  * blinking, keyboard editing behavior, text formatting shortcuts, and syncing
  * text/style-run updates back into the scene graph.
  */
-export function useTextEdit(canvasRef: Ref<HTMLCanvasElement | null>, store: Editor) {
+export function useTextEdit(
+  canvasRef: Ref<HTMLCanvasElement | null>,
+  store: Editor,
+  options?: { isEnabled?: () => boolean }
+) {
   const textareaRef = shallowRef<HTMLTextAreaElement | null>(null)
   const { resetBlink, stopBlink } = createCaretBlink(store)
   const {
@@ -79,11 +83,10 @@ export function useTextEdit(canvasRef: Ref<HTMLCanvasElement | null>, store: Edi
 
   useTextEditingSession({
     store,
-    canvasRef,
     textareaRef,
     resetBlink,
     stopBlink,
     resetComposition,
-    isComposing
+    isEnabled: options?.isEnabled
   })
 }

@@ -1,5 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, dirname, extname, resolve } from 'node:path'
+import { basename, extname, resolve } from 'node:path'
 
 import { defineCommand } from 'citty'
 
@@ -37,7 +36,7 @@ function defaultOutput(input: string, format: string): string {
 }
 
 async function readTextFile(path: string): Promise<string> {
-  return readFile(requireFile(path), 'utf8')
+  return Bun.file(requireFile(path)).text()
 }
 
 async function cssTextForArgs(args: ImportArgs): Promise<string | undefined> {
@@ -91,20 +90,18 @@ async function writeOutput(
   const format = args.format.toLowerCase()
   const output = args.output ? resolve(args.output) : defaultOutput(requireFile(args.file), format)
 
-  await mkdir(dirname(output), { recursive: true })
-
   if (format === 'json') {
-    await writeFile(output, `${JSON.stringify(document, null, 2)}\n`)
+    await Bun.write(output, `${JSON.stringify(document, null, 2)}\n`)
     return output
   }
 
   const result = await io.writeDocument('fig', graph)
-  await writeFile(output, result.data as Uint8Array)
+  await Bun.write(output, result.data as Uint8Array)
   return output
 }
 
 export default defineCommand({
-  meta: { description: 'Import HTML/CSS/Tailwind into an OP Embedded Studio document' },
+  meta: { description: 'Import HTML/CSS/Tailwind into an OpenPencil document' },
   args: {
     file: {
       type: 'positional',

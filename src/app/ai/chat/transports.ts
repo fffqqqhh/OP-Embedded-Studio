@@ -1,69 +1,54 @@
 import { Chat } from '@ai-sdk/vue'
 import { DirectChatTransport, stepCountIs, ToolLoopAgent } from 'ai'
-import type { ChatTransport, ModelMessage, UIMessage } from 'ai'
+import type { ChatTransport, FinishReason, LanguageModel, UIMessage } from 'ai'
 import type { ComputedRef, Ref } from 'vue'
+import { ref } from 'vue'
 
 import { ACP_AGENTS } from '@open-pencil/core/constants'
 import type { ACPAgentID, AIProviderID } from '@open-pencil/core/constants'
 
-import { compactDesignContext } from '@/app/ai/chat/design-context'
-import { createLanguageModel, resolveLanguageModelID } from '@/app/ai/chat/model'
-import { createUnifiedSystemPrompt } from '@/app/ai/chat/system'
-import { recordDesignHandoff } from '@/app/ai/device/memory'
+import {
+  classifyAIChatError,
+  classifyAIChatFinish,
+  type AIChatFailure
+} from '@/app/ai/chat/failure'
+import { resolveLanguageModelID } from '@/app/ai/chat/model'
+import { buildReasoningProviderOptions, type AIProviderOptions } from '@/app/ai/chat/reasoning'
+import SYSTEM_PROMPT from '@/app/ai/chat/system-prompt.md?raw'
 import type { PrepareDevicePrototypeProposalInput } from '@/app/ai/device/prototype'
 import {
   createDeviceTools,
   prepareUsbFrameDeploymentOutput,
-  resolveEmbeddedImagePlacement,
-  prepareUsbPrototypeDeploymentOutput
+  prepareUsbPrototypeDeploymentOutput,
+  resolveEmbeddedImagePlacement
 } from '@/app/ai/device/tools'
-import { createAITools, MAX_AGENT_STEPS, recordStepUsage, resetRunSteps } from '@/app/ai/tools'
+import { createAIModelRuntime, resolveModelConnectionAPIKey } from '@/app/ai/models'
+import { MAX_AGENT_STEPS, createAITools, recordStepUsage, resetRunSteps } from '@/app/ai/tools'
 import type { getActiveEditorStore } from '@/app/editor/active-store'
 import { createEmbeddedDesignSource } from '@/app/editor/embedded-design-source'
-import {
-  AI_CHAT_CHUNK_TIMEOUT_MS,
-  AI_CHAT_STEP_TIMEOUT_MS,
-  AI_CHAT_TOTAL_TIMEOUT_MS
-} from '@/constants'
 
 type EditorStore = ReturnType<typeof getActiveEditorStore>
 
 type ChatSessionOptions = {
   isConfigured: ComputedRef<boolean>
   isACPProvider: ComputedRef<boolean>
+  isHarnessProvider: ComputedRef<boolean>
   providerID: Ref<AIProviderID>
-  apiKey: Ref<string>
-  modelID: Ref<string>
-  customModelID: Ref<string>
-  customBaseURL: Ref<string>
-  customAPIType: Ref<'completions' | 'responses'>
-  maxOutputTokens: Ref<number>
+  credentialsReady: Promise<void>
   getActiveEditorStore: () => EditorStore
 }
 
 type ToolLoopTransportOptions = {
   store: EditorStore
   providerID: AIProviderID
-  apiKey: string
-  modelID: string
-  customModelID: string
-  customBaseURL: string
-  customAPIType: 'completions' | 'responses'
+  model: LanguageModel
+  effectiveModelID: string
   maxOutputTokens: number
+  reasoningEffort: string
 }
 
 const ANTHROPIC_CACHE_CONTROL = {
   anthropic: { cacheControl: { type: 'ephemeral' } }
-} as const
-
-const DEEPSEEK_THINKING_DISABLED = {
-  deepseek: { thinking: { type: 'disabled' } }
-} as const
-
-const CHAT_TIMEOUT = {
-  totalMs: AI_CHAT_TOTAL_TIMEOUT_MS,
-  stepMs: AI_CHAT_STEP_TIMEOUT_MS,
-  chunkMs: AI_CHAT_CHUNK_TIMEOUT_MS
 } as const
 
 function supportsAnthropicCaching(providerID: AIProviderID, modelID: string): boolean {
@@ -74,109 +59,70 @@ function supportsAnthropicCaching(providerID: AIProviderID, modelID: string): bo
   )
 }
 
-export function chatProviderOptions(providerID: AIProviderID, modelID: string) {
-  if (providerID === 'deepseek') return DEEPSEEK_THINKING_DISABLED
-  return supportsAnthropicCaching(providerID, modelID) ? ANTHROPIC_CACHE_CONTROL : undefined
+function mergeProviderOptions(
+  cacheOptions: typeof ANTHROPIC_CACHE_CONTROL | undefined,
+  reasoningOptions: AIProviderOptions | undefined
+): AIProviderOptions | undefined {
+  if (!cacheOptions && !reasoningOptions) return undefined
+  return { ...cacheOptions, ...reasoningOptions }
 }
 
-export async function createACPTransport(providerID: AIProviderID, store?: EditorStore) {
+export async function createACPTransport(providerID: AIProviderID) {
   const agentId = providerID.replace('acp:', '') as ACPAgentID
   const agentDef = ACP_AGENTS.find((a) => a.id === agentId)
   if (!agentDef) throw new Error(`Unknown ACP agent: ${agentId}`)
 
   const { ACPChatTransport } = await import('@/app/ai/acp/transport')
   const { homeDir } = await import('@tauri-apps/api/path')
-  return new ACPChatTransport({
-    agentDef,
-    cwd: await homeDir(),
-    ...(store ? { getSystemPrompt: () => createUnifiedSystemPrompt(store) } : {})
-  })
-}
-
-function recordAgentUsage(
-  usage: {
-    inputTokens?: number
-    outputTokens?: number
-    inputTokenDetails: { cacheReadTokens?: number; cacheWriteTokens?: number }
-  },
-  store: EditorStore
-): void {
-  recordStepUsage(
-    {
-      inputTokens: usage.inputTokens ?? 0,
-      outputTokens: usage.outputTokens ?? 0,
-      cacheReadTokens: usage.inputTokenDetails.cacheReadTokens ?? 0,
-      cacheWriteTokens: usage.inputTokenDetails.cacheWriteTokens ?? 0,
-      timestamp: Date.now()
-    },
-    store
-  )
-}
-
-export function prepareDesignStep(messages: ModelMessage[]) {
-  return { messages: compactDesignContext(messages) }
-}
-
-export function createUnifiedAITools(store: EditorStore) {
-  const source = createEmbeddedDesignSource(store)
-  const designTools = createAITools(store, {
-    onRenderSuccess: ({ id, name }) => {
-      recordDesignHandoff(source, {
-        frameId: id,
-        frameName: name,
-        observation: 'Design AI rendered the current screen from complete JSX.',
-        intent: 'Keep this Frame as the current design and device deployment source.',
-        changes: ['Applied the latest complete Design JSX to the canvas.']
-      })
-    }
-  })
-  return { ...designTools, ...createDeviceTools(source) }
+  return new ACPChatTransport({ agentDef, cwd: await homeDir() })
 }
 
 export function createToolLoopTransport({
   store,
   providerID,
-  apiKey,
-  modelID,
-  customModelID,
-  customBaseURL,
-  customAPIType,
-  maxOutputTokens
+  model,
+  effectiveModelID,
+  maxOutputTokens,
+  reasoningEffort
 }: ToolLoopTransportOptions) {
-  const tools = createUnifiedAITools(store)
-  const effectiveModelID = resolveLanguageModelID({
-    providerID,
-    modelID,
-    customModelID
-  })
-  const providerOptions = chatProviderOptions(providerID, effectiveModelID)
+  const tools = {
+    ...createAITools(store),
+    ...createDeviceTools(createEmbeddedDesignSource(store))
+  }
+  const cacheProviderOptions = supportsAnthropicCaching(providerID, effectiveModelID)
+    ? ANTHROPIC_CACHE_CONTROL
+    : undefined
+  const providerOptions = mergeProviderOptions(
+    cacheProviderOptions,
+    buildReasoningProviderOptions(providerID, reasoningEffort)
+  )
+
   const agent = new ToolLoopAgent({
-    model: createLanguageModel({
-      providerID,
-      apiKey,
-      modelID,
-      customModelID,
-      customBaseURL,
-      customAPIType
-    }),
-    instructions: createUnifiedSystemPrompt(store),
+    model,
+    instructions: SYSTEM_PROMPT,
     tools,
     stopWhen: stepCountIs(MAX_AGENT_STEPS),
     maxOutputTokens,
-    timeout: CHAT_TIMEOUT,
     providerOptions,
-    prepareStep: ({ messages }) => prepareDesignStep(messages),
     prepareCall: (options) => {
       resetRunSteps(store)
       return {
         ...options,
-        instructions: createUnifiedSystemPrompt(store),
         maxOutputTokens,
         providerOptions
       }
     },
     onStepFinish: ({ usage }) => {
-      recordAgentUsage(usage, store)
+      recordStepUsage(
+        {
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+          cacheReadTokens: usage.inputTokenDetails.cacheReadTokens ?? 0,
+          cacheWriteTokens: usage.inputTokenDetails.cacheWriteTokens ?? 0,
+          timestamp: Date.now()
+        },
+        store
+      )
     }
   })
 
@@ -186,55 +132,20 @@ export function createToolLoopTransport({
 export function createChatSessionManager({
   isConfigured,
   isACPProvider,
+  isHarnessProvider,
   providerID,
-  apiKey,
-  modelID,
-  customModelID,
-  customBaseURL,
-  customAPIType,
-  maxOutputTokens,
+  credentialsReady,
   getActiveEditorStore
 }: ChatSessionOptions) {
+  const failure = ref<AIChatFailure | null>(null)
   let transportDirty = false
   let currentChatStore: EditorStore | null = null
-  const currentChatMessages = new WeakMap<EditorStore, UIMessage[]>()
-  const localDeviceResultKeys = new WeakMap<EditorStore, Set<string>>()
+  let currentChatMessages = new WeakMap<EditorStore, UIMessage[]>()
+  let localDeviceResultKeys = new WeakMap<EditorStore, Set<string>>()
   let chat: Chat<UIMessage> | null = null
   let acpTransportInstance: { destroy(): Promise<void> } | null = null
+  let harnessTransportInstance: { destroy(): Promise<void> } | null = null
   let overrideTransport: (() => ChatTransport<UIMessage>) | null = null
-
-  function markTransportDirty() {
-    if (currentChatStore && chat) {
-      currentChatMessages.set(currentChatStore, chat.messages)
-    }
-    transportDirty = true
-    currentChatStore = null
-  }
-
-  async function createActiveACPTransport(store: EditorStore) {
-    await acpTransportInstance?.destroy()
-    const transport = await createACPTransport(providerID.value, store)
-    acpTransportInstance = transport
-    return transport as ChatTransport<UIMessage>
-  }
-
-  function createTransport(store: EditorStore) {
-    if (overrideTransport) return overrideTransport()
-
-    void acpTransportInstance?.destroy()
-    acpTransportInstance = null
-
-    return createToolLoopTransport({
-      store,
-      providerID: providerID.value,
-      apiKey: apiKey.value,
-      modelID: modelID.value,
-      customModelID: customModelID.value,
-      customBaseURL: customBaseURL.value,
-      customAPIType: customAPIType.value,
-      maxOutputTokens: maxOutputTokens.value
-    })
-  }
 
   const localDeviceTransport: ChatTransport<UIMessage> = {
     async sendMessages() {
@@ -245,7 +156,101 @@ export function createChatSessionManager({
     }
   }
 
+  function handleChatFinish({
+    finishReason,
+    isAbort,
+    isError
+  }: {
+    finishReason?: FinishReason
+    isAbort: boolean
+    isError: boolean
+  }): void {
+    if (!isAbort && !isError) failure.value = classifyAIChatFinish(finishReason)
+  }
+
+  function clearFailure(): void {
+    failure.value = null
+  }
+
+  function markTransportDirty() {
+    transportDirty = true
+    currentChatStore = null
+    currentChatMessages = new WeakMap()
+  }
+
+  async function destroyAgentTransports(): Promise<void> {
+    const acp = acpTransportInstance
+    const harness = harnessTransportInstance
+    acpTransportInstance = null
+    harnessTransportInstance = null
+    const results = await Promise.allSettled([acp?.destroy(), harness?.destroy()])
+    const errors = results
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason)
+    if (errors.length) throw new AggregateError(errors, 'Agent transport teardown failed')
+  }
+
+  async function createActiveACPTransport() {
+    await destroyAgentTransports()
+    const transport = await createACPTransport(providerID.value)
+    acpTransportInstance = transport
+    return transport as ChatTransport<UIMessage>
+  }
+
+  async function createActiveHarnessTransport() {
+    await destroyAgentTransports()
+    const runtime = await createAIModelRuntime('design')
+    if (runtime?.kind !== 'harness') throw new Error('The Design agent is not configured for Pi')
+    const [{ HarnessChatTransport }, { buildPiMCPServers }, { getActiveTabId }] = await Promise.all(
+      [import('@/app/ai/harness/transport'), import('@/app/integrations/mcp'), import('@/app/tabs')]
+    )
+    const apiKey = await resolveModelConnectionAPIKey(runtime.role.connection.id)
+    if (!apiKey) throw new Error('Credential is unavailable for the Pi agent')
+    const model = runtime.role.profile.customModelID || runtime.role.profile.modelID
+    const transport = new HarnessChatTransport(
+      `tab-${getActiveTabId()}-${runtime.role.profile.id}`,
+      {
+        adapter: 'pi',
+        sandbox: 'just-bash',
+        model,
+        settings: {
+          thinkingLevel: runtime.role.profile.harnessThinkingLevel ?? 'medium',
+          permissionMode: runtime.role.profile.harnessPermissionMode ?? 'allow-edits'
+        },
+        instructions: SYSTEM_PROMPT,
+        mcpServers: await buildPiMCPServers()
+      },
+      { OPENPENCIL_HARNESS_API_KEY: apiKey }
+    )
+    harnessTransportInstance = transport
+    return transport as ChatTransport<UIMessage>
+  }
+
+  async function createTransport(store: EditorStore) {
+    if (overrideTransport) return overrideTransport()
+
+    await destroyAgentTransports()
+
+    const runtime = await createAIModelRuntime('design')
+    if (runtime?.kind !== 'direct') {
+      throw new Error('The Design model is not configured for direct API access')
+    }
+    return createToolLoopTransport({
+      store,
+      providerID: runtime.role.connection.providerID,
+      model: runtime.model,
+      effectiveModelID: resolveLanguageModelID({
+        providerID: runtime.role.connection.providerID,
+        modelID: runtime.role.profile.modelID,
+        customModelID: runtime.role.profile.customModelID
+      }),
+      maxOutputTokens: runtime.role.profile.maxOutputTokens,
+      reasoningEffort: runtime.role.profile.reasoningEffort ?? ''
+    })
+  }
+
   async function ensureChat(allowUnconfiguredLocal = false): Promise<Chat<UIMessage> | null> {
+    await credentialsReady
     const store = getActiveEditorStore()
     const hasCurrentLocalChat = !isConfigured.value && currentChatStore === store && !!chat
     if (!isConfigured.value && !allowUnconfiguredLocal && !hasCurrentLocalChat) return null
@@ -258,9 +263,17 @@ export function createChatSessionManager({
       const messages = currentChatMessages.get(store)
       let transport: ChatTransport<UIMessage>
       if (!isConfigured.value) transport = localDeviceTransport
-      else if (isACPProvider.value) transport = await createActiveACPTransport(store)
-      else transport = createTransport(store)
-      chat = new Chat<UIMessage>({ transport, messages })
+      else if (isACPProvider.value) transport = await createActiveACPTransport()
+      else if (isHarnessProvider.value) transport = await createActiveHarnessTransport()
+      else transport = await createTransport(store)
+      chat = new Chat<UIMessage>({
+        transport,
+        messages,
+        onError: (error) => {
+          failure.value = classifyAIChatError(error)
+        },
+        onFinish: handleChatFinish
+      })
       currentChatStore = store
       transportDirty = false
     }
@@ -385,18 +398,20 @@ export function createChatSessionManager({
       chat.messages = [...chat.messages, message]
       return
     }
-
     currentChatMessages.set(store, [...(currentChatMessages.get(store) ?? []), message])
   }
 
-  function resetChat() {
+  async function resetChat() {
     if (currentChatStore) {
       currentChatMessages.delete(currentChatStore)
       localDeviceResultKeys.delete(currentChatStore)
     }
+    await destroyAgentTransports()
+    failure.value = null
     chat = null
     currentChatStore = null
     transportDirty = false
+    localDeviceResultKeys = new WeakMap()
   }
 
   function setOverrideTransport(factory: (() => ChatTransport<UIMessage>) | null) {
@@ -411,6 +426,8 @@ export function createChatSessionManager({
     appendLocalDeviceResult,
     resetChat,
     markTransportDirty,
-    setOverrideTransport
+    setOverrideTransport,
+    failure,
+    clearFailure
   }
 }

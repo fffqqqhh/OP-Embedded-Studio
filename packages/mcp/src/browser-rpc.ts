@@ -2,23 +2,27 @@ import { randomUUID } from 'node:crypto'
 
 import type { WebSocket } from 'ws'
 
-import type { RpcJsonObject } from '#mcp/json'
+import { isAuthorized } from '#mcp/auth'
+import type { RPCJSONObject } from '#mcp/json'
 import type { PendingRequest } from '#mcp/rpc-types'
 
 const RPC_TIMEOUT = 20_000
+const APP_WAIT_TIMEOUT = 10_000
 
 const APP_NOT_CONNECTED_MESSAGE =
-  'OP Embedded Studio is not connected. STOP and tell the user: "OP Embedded Studio is not running, no document is open, or the desktop app is connected to a different MCP server. Please start OP Embedded Studio, open a document, and try again." Do NOT attempt to start the app yourself or retry automatically.'
+  'OpenPencil app is not connected. STOP and tell the user: "The OpenPencil desktop app is not running, no document is open, or the desktop app is connected to a different MCP server. Please start OpenPencil, open a document, and try again." Do NOT attempt to start the app yourself or retry automatically.'
 
-type BrowserRpcBridgeOptions = {
+type BrowserRPCBridgeOptions = {
   authToken: string | null
   onConnectionChange: () => void
 }
 
+type ConnectionListener = (connected: boolean) => void
+
 type BrowserMessage = {
   type: string
   id?: string
-  token?: string
+  token?: unknown
   result?: unknown
   error?: string
   ok?: boolean
@@ -29,14 +33,14 @@ function stripEnvelope(msg: BrowserMessage): Record<string, unknown> {
   return body
 }
 
-function responsePayload(result: unknown): Record<string, unknown> {
+function responsePayload(result: unknown): RPCJSONObject {
   if (result && typeof result === 'object' && !Array.isArray(result)) {
-    return result as RpcJsonObject
+    return result as RPCJSONObject
   }
   return { result }
 }
 
-function sendJson(ws: WebSocket, body: Record<string, unknown>) {
+function sendJSON(ws: WebSocket, body: Record<string, unknown>) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(body))
 }
 
@@ -57,65 +61,140 @@ function createSettler<T>(resolve: (value: T) => void, reject: (error: Error) =>
   }
 }
 
-export function createBrowserRpcBridge({ authToken, onConnectionChange }: BrowserRpcBridgeOptions) {
+export function createBrowserRPCBridge({ authToken, onConnectionChange }: BrowserRPCBridgeOptions) {
   const pending = new Map<string, PendingRequest>()
   const clients = new Set<WebSocket>()
+  const connectionWaiters = new Set<PendingRequest>()
+  // Track which WebSocket clients have authenticated via a valid
+  // register message. Unauthenticated clients can only send register;
+  // all other message types (request, response) are rejected.
+  const authenticatedClients = new Set<WebSocket>()
+  const connectionListeners = new Set<ConnectionListener>()
   let browserWs: WebSocket | null = null
-  let browserToken: string | null = null
   let browserRegistered = false
-
-  function currentRpcToken(): string | null {
-    return authToken ?? browserToken
-  }
+  let bridgeClosed = false
 
   function isConnected(): boolean {
     return Boolean(browserWs && browserRegistered)
   }
 
+  function notifyConnectionChange() {
+    onConnectionChange()
+    const connected = isConnected()
+    for (const listener of connectionListeners) listener(connected)
+  }
+
+  function subscribeConnectionChange(listener: ConnectionListener): () => void {
+    connectionListeners.add(listener)
+    listener(isConnected())
+    return () => connectionListeners.delete(listener)
+  }
+
+  function notifyConnectionWaiters() {
+    for (const waiter of connectionWaiters) {
+      clearTimeout(waiter.timer)
+      waiter.resolve(undefined)
+    }
+    connectionWaiters.clear()
+  }
+
+  function rejectConnectionWaiters(reason: string) {
+    for (const waiter of connectionWaiters) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error(reason))
+    }
+    connectionWaiters.clear()
+  }
+
+  function waitForConnection(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let waiter: PendingRequest | null = null
+
+      const timer = setTimeout(() => {
+        if (waiter) connectionWaiters.delete(waiter)
+        reject(new Error(APP_NOT_CONNECTED_MESSAGE))
+      }, APP_WAIT_TIMEOUT)
+
+      waiter = {
+        resolve: () => {
+          clearTimeout(timer)
+          resolve()
+        },
+        reject: (error: Error) => {
+          clearTimeout(timer)
+          reject(error)
+        },
+        timer
+      }
+      // Add the waiter BEFORE checking browser state to avoid a lost-wakeup
+      // race: if the browser registers between sendRPC's initial check and
+      // this point, notifyConnectionWaiters() will have already fired and
+      // cleared the set. Without this re-check, the waiter would stall for
+      // APP_WAIT_TIMEOUT even though the browser is connected.
+      connectionWaiters.add(waiter)
+      if (browserWs && browserWs.readyState === browserWs.OPEN && browserRegistered) {
+        waiter.resolve(undefined)
+        connectionWaiters.delete(waiter)
+      }
+    })
+  }
+
   function rejectAllPending(reason: string) {
-    for (const [id, req] of pending) {
+    for (const [, req] of pending) {
       clearTimeout(req.timer)
       req.reject(new Error(reason))
-      pending.delete(id)
     }
+    pending.clear()
   }
 
-  function sendRegisterToken(ws: WebSocket) {
-    const token = currentRpcToken()
-    if (token) sendJson(ws, { type: 'register', token })
+  function sendRegisterPrompt(ws: WebSocket) {
+    // Send a prompt inviting the client to register as the browser.
+    // IMPORTANT: Do NOT include the auth token here. On TCP, any local
+    // process can connect via WebSocket — sending the secret token would
+    // leak credentials to unauthenticated clients. The legitimate browser
+    // app already knows the token (from the discovery file or Vite env)
+    // and sends it proactively in its ws.onopen handler. The token field
+    // is set to null to signal that auth is required without revealing
+    // the secret. When auth is disabled (authToken === null), null is
+    // still correct — it means "no token needed."
+    sendJSON(ws, { type: 'register', token: null })
   }
 
-  function broadcastRegisterToken() {
-    for (const client of clients) sendRegisterToken(client)
+  function broadcastRegisterPrompt() {
+    for (const client of clients) sendRegisterPrompt(client)
   }
 
-  function handleConnection(ws: WebSocket) {
-    clients.add(ws)
-    sendRegisterToken(ws)
-  }
-
-  function sendRpc(body: Record<string, unknown>): Promise<unknown> {
+  function sendRPC(body: Record<string, unknown>): Promise<unknown> {
+    if (bridgeClosed) return Promise.reject(new Error('Server shutting down'))
     return new Promise((resolve, reject) => {
-      const ws = browserWs
-      if (!ws || ws.readyState !== ws.OPEN || !browserRegistered) {
-        reject(new Error(APP_NOT_CONNECTED_MESSAGE))
-        return
-      }
-      const id = randomUUID()
-      const settle = createSettler(resolve, reject)
-      const timer = setTimeout(() => {
-        pending.delete(id)
-        settle.reject(new Error(`RPC timeout (${Math.round(RPC_TIMEOUT / 1000)}s)`))
-      }, RPC_TIMEOUT)
-      pending.set(id, { resolve: settle.resolve, reject: settle.reject, timer })
-      try {
-        ws.send(JSON.stringify({ type: 'request', id, ...body }))
-      } catch (e) {
-        clearTimeout(timer)
-        pending.delete(id)
-        if (!settle.isSettled()) {
-          settle.reject(e instanceof Error ? e : new Error(String(e)))
+      const doSend = () => {
+        const ws = browserWs
+        if (!ws || ws.readyState !== ws.OPEN || !browserRegistered) {
+          reject(new Error(APP_NOT_CONNECTED_MESSAGE))
+          return
         }
+        const id = randomUUID()
+        const settle = createSettler(resolve, reject)
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          settle.reject(new Error(`RPC timeout (${Math.round(RPC_TIMEOUT / 1000)}s)`))
+        }, RPC_TIMEOUT)
+        pending.set(id, { resolve: settle.resolve, reject: settle.reject, timer })
+        try {
+          ws.send(JSON.stringify({ ...body, type: 'request', id }))
+        } catch (e) {
+          clearTimeout(timer)
+          pending.delete(id)
+          if (!settle.isSettled()) {
+            settle.reject(e instanceof Error ? e : new Error(String(e)))
+          }
+        }
+      }
+
+      if (browserWs && browserWs.readyState === browserWs.OPEN && browserRegistered) {
+        doSend()
+      } else {
+        void waitForConnection().then(doSend).catch(reject)
       }
     })
   }
@@ -123,10 +202,10 @@ export function createBrowserRpcBridge({ authToken, onConnectionChange }: Browse
   async function handleClientRequest(ws: WebSocket, msg: BrowserMessage) {
     if (!msg.id) return
     try {
-      const result = await sendRpc(stripEnvelope(msg))
-      sendJson(ws, { type: 'response', id: msg.id, ok: true, ...responsePayload(result) })
+      const result = await sendRPC(stripEnvelope(msg))
+      sendJSON(ws, { ...responsePayload(result), type: 'response', id: msg.id, ok: true })
     } catch (e) {
-      sendJson(ws, {
+      sendJSON(ws, {
         type: 'response',
         id: msg.id,
         ok: false,
@@ -135,21 +214,30 @@ export function createBrowserRpcBridge({ authToken, onConnectionChange }: Browse
     }
   }
 
-  function registerBrowser(ws: WebSocket, token: string) {
-    if (authToken && token !== authToken) {
+  function registerBrowser(ws: WebSocket, token: string | null) {
+    if (bridgeClosed) return
+    if (!isAuthorized(token, authToken)) {
       ws.close()
       return
     }
+    // Mark this client as authenticated — it can now send requests.
+    authenticatedClients.add(ws)
     const previousBrowserWs = browserWs
     browserWs = ws
-    browserToken = token
     browserRegistered = true
-    if (previousBrowserWs && previousBrowserWs !== ws && previousBrowserWs.readyState === ws.OPEN) {
-      previousBrowserWs.close()
+    if (previousBrowserWs && previousBrowserWs !== ws) {
+      // Reject in-flight requests to the old browser. Without this, pending
+      // requests sit in the pending map until RPC_TIMEOUT (20s), because
+      // handleClose for the old socket returns early (browserWs is already
+      // set to the new socket, so browserWs !== previousBrowserWs).
       rejectAllPending('Browser reconnected')
+      if (previousBrowserWs.readyState === ws.OPEN) {
+        previousBrowserWs.close()
+      }
     }
-    onConnectionChange()
-    broadcastRegisterToken()
+    notifyConnectionWaiters()
+    notifyConnectionChange()
+    broadcastRegisterPrompt()
   }
 
   function handleBrowserResponse(msg: BrowserMessage, ws: WebSocket) {
@@ -158,21 +246,60 @@ export function createBrowserRpcBridge({ authToken, onConnectionChange }: Browse
     if (!req) return
     pending.delete(msg.id)
     clearTimeout(req.timer)
-    if (msg.ok === false) req.reject(new Error(msg.error ?? 'RPC failed'))
-    else req.resolve(stripEnvelope(msg))
+    if (msg.ok === false) {
+      req.reject(new Error(msg.error ?? 'RPC failed'))
+    } else {
+      req.resolve(stripEnvelope(msg))
+    }
   }
 
   function handleMessage(data: string, ws: WebSocket) {
-    let msg: BrowserMessage
+    if (bridgeClosed) return
+    let parsed: unknown
     try {
-      msg = JSON.parse(data) as BrowserMessage
+      parsed = JSON.parse(data)
     } catch (e) {
       console.warn('Malformed automation message:', e)
       return
     }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      ws.close()
+      return
+    }
+    const msg = parsed as BrowserMessage
 
-    if (msg.type === 'register' && msg.token) {
-      registerBrowser(ws, msg.token)
+    if (msg.type === 'auth') {
+      // Authenticate a stdio bridge client without registering it as the
+      // browser app. This lets the client send request/response messages
+      // without becoming the RPC target. The token is validated the same
+      // way as registerBrowser — when auth is disabled (authToken === null),
+      // any token is accepted.
+      if (msg.token === null || typeof msg.token === 'string') {
+        if (!isAuthorized(msg.token, authToken)) {
+          ws.close()
+          return
+        }
+        authenticatedClients.add(ws)
+      } else if (msg.token !== undefined) {
+        ws.close()
+      }
+      return
+    }
+
+    if (msg.type === 'register') {
+      if (msg.token === null || typeof msg.token === 'string') {
+        registerBrowser(ws, msg.token)
+      } else if (msg.token !== undefined) {
+        ws.close()
+      }
+      return
+    }
+    // All non-register messages require authentication. Without this
+    // check, an unauthenticated WebSocket client (that hasn't sent a
+    // valid register message) could bypass the HTTP auth on /rpc by
+    // sending request messages over the WebSocket directly.
+    if (!authenticatedClients.has(ws)) {
+      ws.close()
       return
     }
     if (msg.type === 'request') {
@@ -184,26 +311,50 @@ export function createBrowserRpcBridge({ authToken, onConnectionChange }: Browse
 
   function handleClose(ws: WebSocket) {
     clients.delete(ws)
+    authenticatedClients.delete(ws)
     if (browserWs !== ws) return
     browserWs = null
-    browserToken = null
     browserRegistered = false
     rejectAllPending('Browser disconnected')
-    onConnectionChange()
+    // Intentionally NOT rejecting connectionWaiters here. If a request
+    // entered waitForConnection() before the close event (e.g. during a
+    // CLOSING→CLOSED transition), the waiter should keep waiting the full
+    // APP_WAIT_TIMEOUT for a reconnect. registerBrowser will resolve it
+    // via notifyConnectionWaiters if the browser reconnects in time.
+    notifyConnectionChange()
+  }
+
+  function handleConnection(ws: WebSocket) {
+    if (bridgeClosed) return
+    clients.add(ws)
+    // Transport security restricts WHO can connect: Unix socket with
+    // 0o600 permissions (same-user only) or TCP localhost (any local
+    // process). The authenticatedClients set gates WHAT connected clients
+    // can do: only those that sent a valid register message may forward
+    // requests. The register prompt does NOT include the auth token —
+    // the browser app sends the token proactively (from the discovery
+    // file or Vite env).
+    sendRegisterPrompt(ws)
   }
 
   function close() {
+    bridgeClosed = true
     rejectAllPending('Server shutting down')
+    rejectConnectionWaiters('Server shutting down')
+    browserWs = null
+    browserRegistered = false
     clients.clear()
+    authenticatedClients.clear()
+    connectionListeners.clear()
   }
 
   return {
     close,
-    currentRpcToken,
-    handleClose,
+    isConnected,
+    subscribeConnectionChange,
+    sendRPC,
     handleConnection,
     handleMessage,
-    isConnected,
-    sendRpc
+    handleClose
   }
 }

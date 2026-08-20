@@ -14,8 +14,6 @@ import { onScopeDispose, ref, watchEffect, type Ref } from 'vue'
 import type { Editor } from '@open-pencil/core/editor'
 
 import type { LayerDragInstruction } from '#vue/primitives/LayerTree/context'
-import { layerDropInsertIndex } from '#vue/primitives/LayerTree/order'
-import type { LayerTreeDisplayOrder } from '#vue/primitives/LayerTree/order'
 
 interface DragItem {
   id: string
@@ -29,8 +27,7 @@ type TreeInstruction = LayerDragInstruction
 export function useLayerDrag(
   editor: Editor,
   indentPerLevel = 16,
-  onMakeChildDrop?: (targetId: string) => void,
-  getDisplayOrder: () => LayerTreeDisplayOrder = () => 'document'
+  onMakeChildDrop?: (targetId: string) => void
 ) {
   const draggingId = ref<string | null>(null)
   const instruction = ref<TreeInstruction | null>(null)
@@ -117,26 +114,12 @@ export function useLayerDrag(
       const targetParentId = targetNode.parentId ?? editor.state.currentPageId
       const targetParent = editor.graph.getNode(targetParentId)
       if (!targetParent) return
+      const targetIndex = targetParent.childIds.indexOf(targetId)
+
       if (inst.type === 'reorder-above') {
-        const insertIndex = layerDropInsertIndex(
-          targetParent.childIds,
-          sourceId,
-          targetId,
-          'above',
-          getDisplayOrder()
-        )
-        if (insertIndex === null) return
-        editor.reorderChildWithUndo(sourceId, targetParentId, insertIndex)
+        editor.reorderChildWithUndo(sourceId, targetParentId, targetIndex)
       } else if (inst.type === 'reorder-below') {
-        const insertIndex = layerDropInsertIndex(
-          targetParent.childIds,
-          sourceId,
-          targetId,
-          'below',
-          getDisplayOrder()
-        )
-        if (insertIndex === null) return
-        editor.reorderChildWithUndo(sourceId, targetParentId, insertIndex)
+        editor.reorderChildWithUndo(sourceId, targetParentId, targetIndex + 1)
       } else {
         const container = editor.graph.getNode(targetId)
         if (!container || !editor.graph.isContainer(targetId)) return

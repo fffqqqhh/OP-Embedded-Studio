@@ -10,7 +10,8 @@ import { parseColor } from '#core/color'
 import type { RenderOptions } from '#core/design-jsx/types'
 import { fetchIcons } from '#core/icons'
 import { createIconFromPaths } from '#core/icons/render'
-import { parseSVGPath } from '#core/io/formats/svg/parse-path'
+import { extractPaths, extractPathsFromElements, scalePathInfos } from '#core/icons/svg'
+import type { IconData } from '#core/icons/types'
 import { computeAllLayouts } from '#core/layout'
 import { randomHex } from '#core/random'
 
@@ -43,9 +44,6 @@ const TYPE_MAP: Partial<Record<string, NodeType>> = {
   article: 'FRAME',
   aside: 'FRAME',
   span: 'TEXT',
-  svg: 'GROUP',
-  g: 'GROUP',
-  path: 'VECTOR',
   p: 'TEXT',
   h1: 'TEXT',
   h2: 'TEXT',
@@ -194,35 +192,112 @@ function applyBindings(graph: SceneGraph, nodeId: string, bindings: Record<strin
   }
 }
 
+function applyIconSize(
+  props: Record<string, unknown>,
+  overrides: Partial<SceneNode>,
+  parentLayout: SceneNode['layoutMode'],
+  size: number
+): void {
+  const { w, h } = applySizeOverrides(props, overrides, parentLayout)
+  if (typeof w !== 'number') overrides.width = size
+  if (typeof h !== 'number') overrides.height = size
+}
+
+function finishIconRender(
+  graph: SceneGraph,
+  icon: IconData,
+  props: Record<string, unknown>,
+  size: number,
+  color: Color,
+  parentId: string
+): SceneNode {
+  const parent = graph.getNode(parentId)
+  const parentLayout = parent?.layoutMode ?? 'NONE'
+  const overrides: Partial<SceneNode> = {}
+  if (props.label) overrides.name = props.label as string
+  applyIconSize(props, overrides, parentLayout, size)
+  return createIconFromPaths(graph, icon, icon.name, size, color, parentId, overrides)
+}
+
 async function renderIconNode(
   graph: SceneGraph,
   tree: TreeNode,
   parentId: string
 ): Promise<SceneNode> {
   const props = tree.props
-  const iconName = typeof props.name === 'string' ? props.name.trim() : undefined
+  const iconName = props.name as string | undefined
   if (!iconName) throw new Error('<Icon> requires a name prop (e.g. name="lucide:heart")')
-  const resolvedIconName = iconName.includes(':') ? iconName : `lucide:${iconName}`
 
   const size = (props.size as number | undefined) ?? 24
   const colorHex = (props.color as string | undefined) ?? '#000000'
   const parsedColor = parseColor(colorHex)
 
-  const icons = await fetchIcons([resolvedIconName], size)
-  const icon = icons.get(resolvedIconName)
+  const icons = await fetchIcons([iconName], size)
+  const icon = icons.get(iconName)
   if (!icon || icon.paths.length === 0) {
-    throw new Error(`Icon "${resolvedIconName}" not found`)
+    throw new Error(`Icon "${iconName}" not found`)
+  }
+  return finishIconRender(graph, icon, props, size, parsedColor, parentId)
+}
+
+/**
+ * Render an inline <svg> element into vector nodes. Reuses the same SVG-path
+ * pipeline as iconify icons: the body may be passed as string children or a
+ * `body`/`children` string prop, and is parsed with extractPaths + parseSVGPath.
+ */
+async function renderSVGNode(
+  graph: SceneGraph,
+  tree: TreeNode,
+  parentId: string
+): Promise<SceneNode> {
+  const props = tree.props
+  const explicitW = typeof props.w === 'number' ? props.w : 0
+  const explicitH = typeof props.h === 'number' ? props.h : 0
+  const size =
+    explicitW > 0 || explicitH > 0
+      ? Math.max(explicitW, explicitH)
+      : ((props.size as number | undefined) ?? 24)
+  const colorHex = (props.color as string | undefined) ?? '#000000'
+  const parsedColor = parseColor(colorHex)
+
+  const body =
+    (typeof props.body === 'string' && props.body) ||
+    tree.children.filter((c): c is string => typeof c === 'string').join('')
+
+  // Children may arrive as parsed SVG elements (mini-react lowercases tags)
+  // rather than raw markup. Route both representations through the shared SVG
+  // shape conversion so path and primitive children have identical behavior.
+  let pathInfos = body.trim() ? extractPaths(body) : []
+  if (pathInfos.length === 0) {
+    pathInfos = extractPathsFromElements(tree.children.filter(isTreeNode), props)
+  }
+  if (pathInfos.length === 0) {
+    throw new Error('<svg> requires SVG markup, a body prop, or supported SVG shape children')
   }
 
-  const parent = graph.getNode(parentId)
-  const parentLayout = parent?.layoutMode ?? 'NONE'
-  const overrides: Partial<SceneNode> = {}
-  if (props.label) overrides.name = props.label as string
-  const { w, h } = applySizeOverrides(props, overrides, parentLayout)
-  if (typeof w !== 'number') overrides.width = size
-  if (typeof h !== 'number') overrides.height = size
+  const vb = parseViewBox(props.viewBox as string | undefined)
+  const scaleX = vb.w > 0 ? size / vb.w : 1
+  const scaleY = vb.h > 0 ? size / vb.h : 1
 
-  return createIconFromPaths(graph, icon, resolvedIconName, size, parsedColor, parentId, overrides)
+  const icon: IconData = {
+    prefix: 'svg',
+    name: (props.name as string | undefined) ?? 'custom',
+    width: size,
+    height: size,
+    paths: scalePathInfos(pathInfos, scaleX, scaleY)
+  }
+  return finishIconRender(graph, icon, props, size, parsedColor, parentId)
+}
+
+function parseViewBox(viewBox: string | undefined): { w: number; h: number } {
+  if (!viewBox) return { w: 0, h: 0 }
+  const parts = viewBox
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number)
+  const w = parts[2] ?? 0
+  const h = parts[3] ?? 0
+  return { w, h }
 }
 
 function parseVariantValues(name: string): Record<string, string> {
@@ -330,69 +405,6 @@ function resolveComponent(
   return undefined
 }
 
-function applyVectorPath(
-  nodeType: NodeType,
-  props: Record<string, unknown>,
-  overrides: Partial<SceneNode>
-): void {
-  if (nodeType !== 'VECTOR') return
-  const source = props.d ?? props.path
-  if (typeof source !== 'string' || source.trim().length === 0) {
-    throw new Error('<Vector> requires non-empty SVG path data in prop `d` (or `path`).')
-  }
-  const path = normalizeVectorPathData(source)
-  const fillRule = props.fillRule === 'evenodd' ? 'EVENODD' : 'NONZERO'
-  const vectorNetwork = parseSVGPath(path, fillRule)
-  if (vectorNetwork.vertices.length === 0) {
-    throw new Error('<Vector> path data produced no drawable geometry.')
-  }
-  overrides.vectorNetwork = vectorNetwork
-}
-
-function normalizeVectorPathData(source: string): string {
-  const trimmed = source
-    .trim()
-    .replace(/^```(?:svg)?\s*/i, '')
-    .replace(/\s*```$/, '')
-  const markupPath = trimmed.match(/<path\b[^>]*\bd\s*=\s*(["'])([\s\S]*?)\1/i)?.[2]
-  if (markupPath) return markupPath
-
-  const cssPath = trimmed.match(/^path\(\s*(["'])([\s\S]*?)\1\s*\)$/i)?.[2]
-  if (cssPath) return cssPath
-
-  if (!/[a-z]/i.test(trimmed)) {
-    const values = trimmed
-      .split(/[\s,]+/)
-      .filter(Boolean)
-      .map(Number)
-    if (
-      values.length >= 4 &&
-      values.length % 2 === 0 &&
-      values.every((value) => Number.isFinite(value))
-    ) {
-      let path = `M${values[0]} ${values[1]}`
-      for (let index = 2; index < values.length; index += 2) {
-        path += ` L${values[index]} ${values[index + 1]}`
-      }
-      return `${path} Z`
-    }
-  }
-
-  return trimmed
-}
-
-function validateRegularShapeProps(nodeType: NodeType, props: Record<string, unknown>): void {
-  if (nodeType !== 'POLYGON' && nodeType !== 'STAR') return
-  const points = props.pointCount ?? props.points
-  if (points === undefined) return
-  if (typeof points === 'number' && Number.isFinite(points) && points >= 3) return
-  throw new Error(
-    nodeType === 'POLYGON'
-      ? '<Polygon> pointCount must be a number of sides. For coordinate paths, use <Vector d="..." />.'
-      : '<Star> points must be a number of points.'
-  )
-}
-
 async function renderInstanceNode(
   graph: SceneGraph,
   tree: TreeNode,
@@ -411,11 +423,54 @@ async function renderInstanceNode(
   const instance =
     graph.createInstance(component.id, parentId, overrides) ?? graph.createNode('FRAME', parentId)
   applyBindings(graph, instance.id, bindings)
+  applyInstanceOverrides(graph, instance, tree.props.overrides)
   return instance
+}
+
+/**
+ * Apply child overrides to a freshly created instance. Keys are
+ * `childName:prop` (e.g. 'label:text', 'icon:fills'); the child is resolved by
+ * name among the instance's descendants, and the value is applied to both the
+ * child node and the instance's overrides record so component sync keeps it.
+ */
+function applyInstanceOverrides(
+  graph: SceneGraph,
+  instance: SceneNode,
+  overridesProp: unknown
+): void {
+  if (!overridesProp || typeof overridesProp !== 'object') return
+  if (Array.isArray(overridesProp)) return
+  const entries = Object.entries(overridesProp)
+  if (entries.length === 0) return
+
+  const descendants: SceneNode[] = []
+  const walk = (id: string) => {
+    const node = graph.getNode(id)
+    if (!node) return
+    descendants.push(node)
+    for (const cid of node.childIds) walk(cid)
+  }
+  walk(instance.id)
+
+  const overrides: Record<string, unknown> = { ...instance.overrides }
+  for (const [key, value] of entries) {
+    const sep = key.indexOf(':')
+    if (sep === -1) continue
+    const childName = key.slice(0, sep)
+    const prop = key.slice(sep + 1)
+    const child = descendants.find((n) => n.name === childName)
+    if (!child || !(prop in child)) continue
+    graph.updateNode(child.id, { [prop]: value } as Partial<SceneNode>)
+    overrides[`${child.id}:${prop}`] = value
+  }
+  if (Object.keys(overrides).length > 0) {
+    graph.updateNode(instance.id, { overrides })
+  }
 }
 
 async function renderNode(graph: SceneGraph, tree: TreeNode, parentId: string): Promise<SceneNode> {
   if (tree.type === 'icon') return renderIconNode(graph, tree, parentId)
+  if (tree.type === 'svg') return renderSVGNode(graph, tree, parentId)
   if (tree.type === 'instance') return renderInstanceNode(graph, tree, parentId)
 
   const nodeType = TYPE_MAP[tree.type]
@@ -427,9 +482,6 @@ async function renderNode(graph: SceneGraph, tree: TreeNode, parentId: string): 
   const isText = nodeType === 'TEXT'
   const { props, bindings } = preparePropsForRender(graph, tree.props, isText)
   const overrides = propsToOverrides(props, isText, parentLayout)
-
-  validateRegularShapeProps(nodeType, props)
-  applyVectorPath(nodeType, props, overrides)
 
   if (isText) {
     const childText = tree.children.filter((c): c is string => typeof c === 'string').join('')

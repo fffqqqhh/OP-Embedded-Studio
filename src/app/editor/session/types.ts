@@ -1,10 +1,12 @@
 import { createDefaultEditorState, type EditorState } from '@open-pencil/core/editor'
 
 import type { NodeEditState } from '@/app/editor/vector-edit/types'
+import { appPreferences } from '@/app/settings/preferences/store'
 
 export function createInitialAppEditorState(pageId: string): AppEditorState {
   return {
     ...createDefaultEditorState(pageId),
+    snappingPreferences: { ...appPreferences.value.editing.snapping },
     showUI: true,
     showRulers: true,
     showRemoteCursors: true,
@@ -12,11 +14,13 @@ export function createInitialAppEditorState(pageId: string): AppEditorState {
     panelMode: 'design',
     actionToast: null,
     mobileDrawerSnap: 'closed',
-    clipboardHtml: '',
+    clipboardHTML: '',
     autosaveEnabled: false,
     cursorCanvasX: null,
     cursorCanvasY: null,
     nodeEditState: null,
+    renameSelectionOpen: false,
+    renameNodeId: null,
     numberFieldFocused: false
   }
 }
@@ -29,10 +33,12 @@ export type AppEditorState = EditorState & {
   panelMode: 'layers' | 'design'
   actionToast: string | null
   mobileDrawerSnap: 'closed' | 'half' | 'full'
-  clipboardHtml: string
+  clipboardHTML: string
   autosaveEnabled: boolean
   cursorCanvasX: number | null
   cursorCanvasY: number | null
   nodeEditState: NodeEditState | null
+  renameSelectionOpen: boolean
+  renameNodeId: string | null
   numberFieldFocused: boolean
 }

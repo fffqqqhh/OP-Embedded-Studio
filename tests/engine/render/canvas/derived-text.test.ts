@@ -1,13 +1,16 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 
-import { renderNodesToImage, SceneGraph, SkiaRenderer } from '@open-pencil/core'
+import { SceneGraph } from '@open-pencil/scene-graph'
 
 import { initCanvasKit } from '#cli/headless'
+import { SkiaRenderer } from '#core/canvas/renderer'
 import {
   derivedUnderlineRect,
-  shouldUseHardFigmaDerivedGlyphCoverage,
-  snapFigmaDerivedGlyphBaseline
-} from '#core/canvas/text-derived'
+  hasRotatedDerivedGlyphs,
+  shouldUseHardDerivedGlyphCoverage,
+  snapDerivedGlyphBaseline
+} from '#core/canvas/text/derived'
+import { renderNodesToImage } from '#core/io/formats/raster/render'
 
 import { expectDefined } from '#tests/helpers/assert'
 
@@ -16,6 +19,10 @@ let ck: Awaited<ReturnType<typeof initCanvasKit>>
 beforeAll(async () => {
   ck = await initCanvasKit()
 })
+
+function useDerivedGlyphFallback(renderer: SkiaRenderer): void {
+  renderer.nodeFontReadiness = () => 'exhausted'
+}
 
 function squareCommandsBlob(): Uint8Array {
   const blob = new Uint8Array(1 + 4 * 9 + 1)
@@ -39,15 +46,15 @@ function squareCommandsBlob(): Uint8Array {
 
 describe('derived text rendering', () => {
   test('snaps Figma glyph baselines to device pixels', () => {
-    expect(snapFigmaDerivedGlyphBaseline(47.45454406738281)).toBe(47)
-    expect(snapFigmaDerivedGlyphBaseline(15.090909004211426)).toBe(15)
-    expect(snapFigmaDerivedGlyphBaseline(17.81818199157715)).toBe(18)
+    expect(snapDerivedGlyphBaseline(47.45454406738281)).toBe(47)
+    expect(snapDerivedGlyphBaseline(15.090909004211426)).toBe(15)
+    expect(snapDerivedGlyphBaseline(17.81818199157715)).toBe(18)
   })
 
   test('uses hard source coverage only for regular 20px derived glyphs', () => {
-    expect(shouldUseHardFigmaDerivedGlyphCoverage({ fontSize: 20, fontWeight: 400 })).toBeTrue()
-    expect(shouldUseHardFigmaDerivedGlyphCoverage({ fontSize: 20, fontWeight: 600 })).toBeFalse()
-    expect(shouldUseHardFigmaDerivedGlyphCoverage({ fontSize: 14, fontWeight: 500 })).toBeFalse()
+    expect(shouldUseHardDerivedGlyphCoverage({ fontSize: 20, fontWeight: 400 })).toBeTrue()
+    expect(shouldUseHardDerivedGlyphCoverage({ fontSize: 20, fontWeight: 600 })).toBeFalse()
+    expect(shouldUseHardDerivedGlyphCoverage({ fontSize: 14, fontWeight: 500 })).toBeFalse()
   })
 
   test('places derived underlines at Figma-like subpixel coverage bounds', () => {
@@ -75,7 +82,7 @@ describe('derived text rendering', () => {
           visible: true
         }
       ],
-      figmaDerivedTextGlyphs: [
+      derivedTextGlyphs: [
         {
           commandsBlob: squareCommandsBlob(),
           x: 2,
@@ -87,6 +94,7 @@ describe('derived text rendering', () => {
 
     const surface = expectDefined(ck.MakeSurface(1, 1), 'surface')
     const renderer = new SkiaRenderer(ck, surface)
+    useDerivedGlyphFallback(renderer)
 
     try {
       const png = expectDefined(
@@ -132,7 +140,7 @@ describe('derived text rendering', () => {
           visible: true
         }
       ],
-      figmaDerivedTextGlyphs: [
+      derivedTextGlyphs: [
         {
           commandsBlob: squareCommandsBlob(),
           x: 2,
@@ -144,6 +152,7 @@ describe('derived text rendering', () => {
 
     const surface = expectDefined(ck.MakeSurface(1, 1), 'surface')
     const renderer = new SkiaRenderer(ck, surface)
+    useDerivedGlyphFallback(renderer)
 
     try {
       const png = expectDefined(
@@ -197,7 +206,7 @@ describe('derived text rendering', () => {
           visible: true
         }
       ],
-      figmaDerivedTextGlyphs: [
+      derivedTextGlyphs: [
         {
           commandsBlob: squareCommandsBlob(),
           x: 2,
@@ -209,6 +218,7 @@ describe('derived text rendering', () => {
 
     const surface = expectDefined(ck.MakeSurface(1, 1), 'surface')
     const renderer = new SkiaRenderer(ck, surface)
+    useDerivedGlyphFallback(renderer)
 
     try {
       const png = expectDefined(
@@ -291,7 +301,7 @@ describe('derived text rendering', () => {
           visible: true
         }
       ],
-      figmaDerivedTextGlyphs: [
+      derivedTextGlyphs: [
         {
           commandsBlob: squareCommandsBlob(),
           x: 2,
@@ -303,6 +313,7 @@ describe('derived text rendering', () => {
 
     const surface = expectDefined(ck.MakeSurface(1, 1), 'surface')
     const renderer = new SkiaRenderer(ck, surface)
+    useDerivedGlyphFallback(renderer)
 
     try {
       const png = expectDefined(
@@ -338,6 +349,89 @@ describe('derived text rendering', () => {
       expect(redPixels).toBeGreaterThan(0)
       expect(bluePixels).toBeGreaterThan(0)
       image.delete()
+    } finally {
+      surface.delete()
+    }
+  })
+})
+
+describe('rotated derived glyphs (text-on-path)', () => {
+  test('hasRotatedDerivedGlyphs detects non-zero rotation', () => {
+    expect(
+      hasRotatedDerivedGlyphs({
+        derivedTextGlyphs: [
+          { commandsBlob: squareCommandsBlob(), x: 0, y: 0, fontSize: 12, rotation: 0 }
+        ]
+      })
+    ).toBe(false)
+    expect(
+      hasRotatedDerivedGlyphs({
+        derivedTextGlyphs: [
+          { commandsBlob: squareCommandsBlob(), x: 0, y: 0, fontSize: 12, rotation: -1.5 }
+        ]
+      })
+    ).toBe(true)
+  })
+
+  test('draws rotated derived glyphs without throwing', async () => {
+    const graph = new SceneGraph()
+    const page = graph.getPages()[0]
+    const text = graph.createNode('TEXT', page.id, {
+      width: 200,
+      height: 200,
+      text: 'x',
+      fontFamily: '__MissingFont__',
+      fills: [
+        {
+          type: 'SOLID',
+          color: { r: 0, g: 0, b: 0, a: 1 },
+          opacity: 1,
+          visible: true
+        }
+      ],
+      derivedTextGlyphs: [
+        {
+          commandsBlob: squareCommandsBlob(),
+          x: 50,
+          y: 50,
+          fontSize: 20,
+          rotation: -Math.PI / 2
+        }
+      ]
+    })
+
+    const surface = expectDefined(ck.MakeSurface(1, 1), 'surface')
+    const renderer = new SkiaRenderer(ck, surface)
+    // The font is intentionally missing; baked glyphs only paint once font
+    // resolution is exhausted (see renderText's readiness gate).
+    useDerivedGlyphFallback(renderer)
+    try {
+      const png = expectDefined(
+        renderNodesToImage(ck, renderer, graph, page.id, [text.id], {
+          scale: 1,
+          format: 'PNG'
+        }),
+        'png'
+      )
+      // A blank canvas also yields a non-empty PNG, so decode and require the
+      // rotated glyph to actually paint pixels — not merely render without throwing.
+      const image = expectDefined(ck.MakeImageFromEncoded(png), 'image')
+      const pixels = expectDefined(
+        image.readPixels(0, 0, {
+          alphaType: ck.AlphaType.Unpremul,
+          colorType: ck.ColorType.RGBA_8888,
+          colorSpace: ck.ColorSpace.SRGB,
+          width: image.width(),
+          height: image.height()
+        }),
+        'pixels'
+      )
+      let paintedPixels = 0
+      for (let index = 3; index < pixels.length; index += 4) {
+        if ((pixels[index] ?? 0) > 0) paintedPixels++
+      }
+      image.delete()
+      expect(paintedPixels).toBeGreaterThan(0)
     } finally {
       surface.delete()
     }

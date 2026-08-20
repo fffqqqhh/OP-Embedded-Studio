@@ -6,13 +6,10 @@ import type {
   SceneNode,
   Stroke
 } from '@open-pencil/scene-graph'
-import type { Color, JsonObject } from '@open-pencil/scene-graph/primitives'
+import type { Color, JSONObject } from '@open-pencil/scene-graph/primitives'
 
 import { colorToFill, parseColor } from '#core/color'
 import { TRANSPARENT } from '#core/constants'
-import { designMetadata } from '#core/design-semantics'
-
-import { applyShadowOverride } from './shadow-overrides'
 
 const WEIGHT_MAP: Record<string, number> = {
   normal: 400,
@@ -95,7 +92,7 @@ function normalizeStyleProps(props: Record<string, unknown>): Record<string, unk
   const style = props.style
   if (style === null || typeof style !== 'object' || Array.isArray(style)) return props
 
-  const source = style as JsonObject
+  const source = style as JSONObject
   const normalized = { ...props }
   const copyIfUnset = (from: string, to: string, convert?: (value: unknown) => unknown): void => {
     if (normalized[to] !== undefined || source[from] === undefined) return
@@ -249,6 +246,14 @@ function applyVisualOverrides(props: Record<string, unknown>, o: Partial<SceneNo
     o.blendMode = (props.blendMode as string).toUpperCase() as SceneNode['blendMode']
   }
   if (props.overflow === 'hidden') o.clipsContent = true
+  if (props.mask) {
+    o.isMask = true
+    const maskTypeMap: Record<string, SceneNode['maskType']> = {
+      luminance: 'LUMINANCE',
+      vector: 'VECTOR'
+    }
+    o.maskType = maskTypeMap[props.mask as string] ?? 'ALPHA'
+  }
 }
 
 function applyTransformOverrides(props: Record<string, unknown>, o: Partial<SceneNode>): void {
@@ -550,7 +555,23 @@ function applyShapeAndEffectOverrides(props: Record<string, unknown>, o: Partial
   if (props.innerRadius !== undefined) o.starInnerRadius = props.innerRadius as number
   if (props.pointCount !== undefined) o.pointCount = props.pointCount as number
 
-  applyShadowOverride(props.shadow, o)
+  if (typeof props.shadow === 'string') {
+    const parts = props.shadow.split(/\s+/)
+    if (parts.length >= 4) {
+      const c = parseColor(parts.slice(3).join(' '))
+      o.effects = [
+        ...(o.effects ?? []),
+        {
+          type: 'DROP_SHADOW',
+          color: c,
+          offset: { x: Number.parseFloat(parts[0]), y: Number.parseFloat(parts[1]) },
+          radius: Number.parseFloat(parts[2]),
+          spread: 0,
+          visible: true
+        }
+      ]
+    }
+  }
 
   if (typeof props.blur === 'number') {
     o.effects = [
@@ -576,8 +597,6 @@ export function propsToOverrides(
   const o: Partial<SceneNode> = {}
 
   if (props.name) o.name = props.name as string
-  const metadata = designMetadata(props.designRole, props.allowOverlap)
-  if (metadata) o.pluginData = metadata
 
   const { w, h } = applySizeOverrides(props, o, parentLayout)
   applyVisualOverrides(props, o)

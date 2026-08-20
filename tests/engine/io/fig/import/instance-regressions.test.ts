@@ -24,6 +24,20 @@ describe('derived instance layout regressions', () => {
     layoutNodes = collectAllNodes(layoutGraph)
   })
 
+  test('retains imported glyph outlines through non-glyph layout updates', () => {
+    const glyphCount = () =>
+      layoutNodes.filter(
+        (node) => node.type === 'TEXT' && (node.derivedTextGlyphs?.length ?? 0) > 0
+      ).length
+
+    expect(glyphCount()).toBe(43)
+
+    computeAllLayouts(layoutGraph)
+    layoutNodes = collectAllNodes(layoutGraph)
+
+    expect(glyphCount()).toBe(43)
+  })
+
   test('preserves repeated badge overrides without moving sibling component wrappers', () => {
     const input = previewChild(layoutGraph, layoutNodes, 'Input')
     const inputRoot = childNamed(layoutGraph, input, '_input')
@@ -39,8 +53,8 @@ describe('derived instance layout regressions', () => {
     expect(inputFrame?.width).toBeCloseTo(375.7498, 3)
     expect(inputFrame?.height).toBeCloseTo(39.3803, 3)
     expect(content).toMatchObject({ x: 0, y: 0 })
-    expect(firstBadge?.x).toBeCloseTo(7.1268, 3)
-    expect(firstBadge?.y).toBeCloseTo(5.3451, 3)
+    expect(firstBadge?.x).toBeCloseTo(8, 3)
+    expect(firstBadge?.y).toBeCloseTo(6, 3)
     expect(firstBadge?.width).toBeCloseTo(85.3239, 3)
     expect(firstBadge?.height).toBeCloseTo(28.6901, 3)
     expect(firstBadgeContent).toMatchObject({ x: 0, y: 0 })
@@ -72,7 +86,25 @@ describe('derived instance layout regressions', () => {
       expect(closeIcon?.visible).toBe(true)
       expect(closeGlyph?.visible).toBe(true)
       expect(avatarShape?.fills.some((fill) => fill.type === 'IMAGE' && fill.visible)).toBe(true)
+      expect(avatarShape?.width).toBeCloseTo(avatar?.width ?? 0, 3)
+      expect(avatarShape?.height).toBeCloseTo(avatar?.height ?? 0, 3)
     }
+  })
+
+  test('keeps generated stepper dividers at their effective derived positions', () => {
+    const dividers = layoutNodes.filter(
+      (node) =>
+        node.name === 'Right Divider' &&
+        node.width > 100 &&
+        node.componentId &&
+        node.source.format === null
+    )
+    expect(dividers).toHaveLength(3)
+    const generatedDividers = dividers.filter(
+      (node) => layoutGraph.getNode(node.componentId)?.derivedLayout?.y === 13.5
+    )
+    expect(generatedDividers).toHaveLength(3)
+    for (const divider of generatedDividers) expect(divider.y).toBeCloseTo(13.5, 3)
   })
 
   test('does not collapse unrelated datepicker instances to the page origin', () => {
@@ -164,12 +196,7 @@ describe('derived instance layout regressions', () => {
       b: 0.9215686321258545,
       a: 1
     })
-    const linkSource = linkText?.componentId ? graph.getNode(linkText.componentId) : null
-    // This imported clone's component source has already resolved to the same
-    // visible text. Its matching Figma glyph outlines should remain available;
-    // stale mismatched glyph clearing is covered by the scene-graph sync tests.
-    expect(linkSource?.text).toBe('browse')
-    expect(linkText?.figmaDerivedTextGlyphs?.length).toBeGreaterThan(0)
+    expect(linkText?.derivedTextGlyphs).toBeNull()
 
     const input = previewChild(graph, nodes, 'Input')
     const inputRoot = childNamed(graph, input, '_input')

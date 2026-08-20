@@ -1,31 +1,36 @@
+/* eslint-disable max-lines -- SceneGraph exposes a stable facade over domain modules */
 export * from './images'
+export * from './copy'
+export { copyInstanceComponentProps } from './instances'
 export * from './snap'
 export * from './export-scale'
 export * from './coordinate'
+export * from './constants'
 export * from './geometry'
+export * from './guides'
+export * from './layout-guides'
+export * from './font-style'
+export * from './shared-styles'
 export { default as TransformMatrix } from './matrix'
 export type { Mat3 } from './matrix'
 export { UndoManager, type UndoEntry, type UndoManagerOptions } from './undo'
 
-import { omit } from 'es-toolkit/object'
 import { createNanoEvents } from 'nanoevents'
 
+import { removeStaleBindings } from './bindings'
 import { cloneNodeProps } from './copy'
 import { bindNodeEvents } from './events'
 import * as HitTest from './hit-test'
 import * as Instances from './instances'
 import { CONTAINER_TYPES, createDefaultNode } from './node-defaults'
 import { updateNodePreview } from './preview'
-import { clearEditedSourceMetadata } from './source-metadata'
-import {
-  FIGMA_DERIVED_TEXT_GLYPH_KEYS,
-  TEXT_PICTURE_KEYS,
-  clearInvalidatedTextRenderingData
-} from './text-picture'
+import { styleDetachmentChanges } from './shared-styles'
+import { markSourceFieldsEdited } from './source-metadata'
+import { GLYPH_AFFECTING_KEYS, invalidateTextCaches, TEXT_PICTURE_KEYS } from './text-picture'
 import * as Variables from './variables'
 import { normalizeVectorNetwork } from './vector-network'
 
-export type { GUID, Color, Vector, Matrix, Rect } from './primitives'
+export type { GUID, Color, Size, Vector } from './primitives'
 export * from './types'
 
 import type { Emitter } from 'nanoevents'
@@ -34,6 +39,7 @@ import { getAbsolutePosition } from './coordinate'
 import type { Color, Rect, Vector } from './primitives'
 import type {
   DocumentColorSpace,
+  EnabledLibraryBinding,
   NodeType,
   SceneGraphEventHandlers,
   SceneGraphEvents,
@@ -45,25 +51,15 @@ import type {
   VariableValue
 } from './types'
 
-export { cloneVectorNetwork, normalizeVectorNetwork, validateVectorNetwork } from './vector-network'
+export {
+  cloneVectorNetwork,
+  mergeVectorNetworks,
+  normalizeVectorNetwork,
+  transformVectorNetwork,
+  validateVectorNetwork,
+  vectorNetworksEqual
+} from './vector-network'
 
-function removeStaleBindings(
-  node: SceneNode,
-  field: 'fills' | 'strokes',
-  changes: Partial<SceneNode>
-): void {
-  const len = node[field].length
-  const stale = Object.keys(node.boundVariables).filter((k) => {
-    if (k === field) return true
-    if (!k.startsWith(`${field}/`)) return false
-    const i = Number.parseInt(k.split('/')[1] ?? '', 10)
-    return Number.isNaN(i) || i < 0 || i >= len
-  })
-  if (stale.length > 0) {
-    node.boundVariables = omit(node.boundVariables, stale)
-    changes.boundVariables = { ...node.boundVariables }
-  }
-}
 let nextLocalID = 1
 
 export function generateId(): string {
@@ -81,10 +77,12 @@ export class SceneGraph {
   /** Deflated kiwi schema bytes from the original .fig file, preserved for roundtrip fidelity. */
   figSchemaDeflated: Uint8Array | null = null
   documentColorSpace: DocumentColorSpace = 'display-p3'
+  enabledLibraries = new Map<string, EnabledLibraryBinding>()
   readonly emitter: Emitter<SceneGraphEvents> = createNanoEvents()
   private absPosCache = new Map<string, Vector>()
   private previewMutationDepth = 0
   private sourceMetadataPreservationDepth = 0
+  private layoutMutationDepth = 0
   positionPreviewVersion = 0
   instanceIndex = new Map<string, Set<string>>()
 
@@ -166,6 +164,10 @@ export class SceneGraph {
     return Variables.getActiveModeId(this, collectionId)
   }
 
+  getNodeVariableModeId(nodeId: string, collectionId: string): string {
+    return Variables.getNodeVariableModeId(this, nodeId, collectionId)
+  }
+
   setActiveMode(collectionId: string, modeId: string): void {
     Variables.setActiveMode(this, collectionId, modeId)
   }
@@ -200,6 +202,14 @@ export class SceneGraph {
 
   resolveNumberVariable(variableId: string): number | undefined {
     return Variables.resolveNumberVariable(this, variableId)
+  }
+
+  resolveColorVariableForNode(nodeId: string, variableId: string): Color | undefined {
+    return Variables.resolveColorVariableForNode(this, nodeId, variableId)
+  }
+
+  resolveNumberVariableForNode(nodeId: string, variableId: string): number | undefined {
+    return Variables.resolveNumberVariableForNode(this, nodeId, variableId)
   }
 
   getVariablesForCollection(collectionId: string): Variable[] {
@@ -304,7 +314,7 @@ export class SceneGraph {
   }
 
   static TEXT_PICTURE_KEYS: ReadonlySet<string> = TEXT_PICTURE_KEYS
-  static FIGMA_DERIVED_TEXT_GLYPH_KEYS: ReadonlySet<string> = FIGMA_DERIVED_TEXT_GLYPH_KEYS
+  static GLYPH_AFFECTING_KEYS: ReadonlySet<string> = GLYPH_AFFECTING_KEYS
 
   static LAYOUT_AFFECTING_KEYS: ReadonlySet<string> = new Set([
     'x',
@@ -361,6 +371,17 @@ export class SceneGraph {
       this.sourceMetadataPreservationDepth--
     }
   }
+  withLayoutMutations(fn: () => void): void {
+    this.layoutMutationDepth++
+    try {
+      fn()
+    } finally {
+      this.layoutMutationDepth--
+    }
+  }
+  get isApplyingLayout(): boolean {
+    return this.layoutMutationDepth > 0
+  }
   updateNodePositionPreview(id: string, x: number, y: number): void {
     this.updateNodePreview(id, { x, y })
   }
@@ -376,6 +397,15 @@ export class SceneGraph {
 
     const node = this.nodes.get(id)
     if (!node) return
+    let entries = Object.entries(changes) as Array<[string, unknown]>
+    changes = Object.fromEntries(
+      entries.filter(([, value]) => value !== undefined)
+    ) as Partial<SceneNode>
+    changes = styleDetachmentChanges(node, changes)
+    entries = Object.entries(changes) as Array<[string, unknown]>
+    changes = Object.fromEntries(
+      entries.filter(([, value]) => value !== undefined)
+    ) as Partial<SceneNode>
 
     // Only clear absPosCache when layout-affecting properties change.
     // Fills, strokes, effects, plugin data changes do NOT affect absolute position.
@@ -396,13 +426,9 @@ export class SceneGraph {
         set.add(id)
       }
     }
-    const entries = Object.entries(changes) as Array<[string, unknown]>
-    changes = Object.fromEntries(
-      entries.filter(([, value]) => value !== undefined)
-    ) as Partial<SceneNode>
-    clearInvalidatedTextRenderingData(node, changes)
+    if (node.type === 'TEXT') invalidateTextCaches(node, changes)
     if (this.sourceMetadataPreservationDepth === 0) {
-      clearEditedSourceMetadata(node, Object.keys(changes))
+      markSourceFieldsEdited(node, Object.keys(changes))
     }
     if (changes.vectorNetwork) {
       changes = { ...changes, vectorNetwork: normalizeVectorNetwork(changes.vectorNetwork) }
@@ -452,7 +478,7 @@ export class SceneGraph {
 
     const oldParent = node.parentId ? this.nodes.get(node.parentId) : undefined
     const newParent = this.nodes.get(parentId)
-    if (!newParent) return
+    if (!newParent || this.isDescendant(parentId, nodeId)) return
 
     // Remove from old parent
     if (oldParent) {
@@ -469,6 +495,7 @@ export class SceneGraph {
     }
 
     node.parentId = parentId
+    this.absPosCache.clear()
     idx = Math.min(idx, newParent.childIds.length)
     newParent.childIds.splice(idx, 0, nodeId)
 
@@ -498,7 +525,6 @@ export class SceneGraph {
       const parent = this.nodes.get(node.parentId)
       if (parent) {
         parent.childIds = parent.childIds.filter((cid) => cid !== id)
-        this.emitter.emit('node:updated', parent.id, { childIds: [...parent.childIds] })
       }
     }
 
@@ -560,8 +586,12 @@ export class SceneGraph {
     return Instances.createInstance(this, componentId, parentId, overrides)
   }
 
-  populateInstanceChildren(instanceId: string, componentId: string): void {
-    Instances.populateInstanceChildren(this, instanceId, componentId)
+  populateInstanceChildren(
+    instanceId: string,
+    componentId: string,
+    mode: Instances.NodeCloneMode = 'deep'
+  ): void {
+    Instances.populateInstanceChildren(this, instanceId, componentId, mode)
   }
 
   swapInstanceComponent(instanceId: string, componentId: string): void {

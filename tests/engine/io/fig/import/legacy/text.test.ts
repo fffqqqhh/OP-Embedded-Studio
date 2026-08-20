@@ -48,20 +48,23 @@ describe('fig-import: text properties', () => {
       [glyphBlob]
     )
     const n = graph.getChildren(graph.getPages()[0].id)[0]
-    expect(n.figmaDerivedTextGlyphs).toEqual([
+    expect(n.derivedTextGlyphs).toEqual([
       {
         commandsBlob: glyphBlob,
         x: 2,
         y: 8,
-        fontSize: 14
+        fontSize: 14,
+        // Path text needs per-glyph rotation preserved through import (#396);
+        // plain text imports it as 0 rather than dropping the field.
+        rotation: 0
       }
     ])
 
     graph.updateNode(n.id, { opacity: 0.5 })
-    expect(graph.getNode(n.id)?.figmaDerivedTextGlyphs).toHaveLength(1)
+    expect(graph.getNode(n.id)?.derivedTextGlyphs).toHaveLength(1)
 
     graph.updateNode(n.id, { text: 'B' })
-    expect(graph.getNode(n.id)?.figmaDerivedTextGlyphs).toBeNull()
+    expect(graph.getNode(n.id)?.derivedTextGlyphs).toBeNull()
   })
 
   test('uses derived line metrics for imported Figma text rendering', () => {
@@ -115,9 +118,12 @@ describe('fig-import: text properties', () => {
       .getChildren(graph.getPages()[0].id)
       .find((node) => node.text === 'Styled text')
     expect(styled?.fontSize).toBe(16)
+    expect(styled?.textStyleId).toBe('1:20')
     expect(styled?.fontWeight).toBe(400)
     expect(styled?.lineHeight).toBe(24)
     expect(styled?.textDecoration).toBe('NONE')
+    const style = [...graph.getAllNodes()].find((node) => node.source.id === '1:20')
+    expect(style).toMatchObject({ name: 'Body style', sharedStyleType: 'TEXT', internalOnly: true })
   })
 
   test('applies shared fill style refs', () => {
@@ -153,6 +159,7 @@ describe('fig-import: text properties', () => {
     const styled = graph
       .getChildren(graph.getPages()[0].id)
       .find((node) => node.name === 'ROUNDED_RECTANGLE_10')
+    expect(styled?.fillStyleId).toBe('1:30')
     expect(styled?.fills[0]?.color).toEqual({
       r: 0.05882352963089943,
       g: 0.09019608050584793,

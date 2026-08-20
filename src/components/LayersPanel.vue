@@ -1,16 +1,31 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { tv } from 'tailwind-variants'
 import { SplitterGroup, SplitterPanel, SplitterResizeHandle } from 'reka-ui'
 
 import { useI18n } from '@open-pencil/vue'
 
 import AppMenu from '@/components/Shell/AppMenu.vue'
-import AssetsPanel from './AssetsPanel.vue'
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
+import splitterTheme from '@/theme/splitter'
+import AssetsPanel from './assets-panel/AssetsPanel.vue'
 import LayerTree from './LayerTree/LayerTree.vue'
 import PagesPanel from './PagesPanel.vue'
 
 const { menu, panels } = useI18n()
 const activePanel = ref<'file' | 'assets'>('file')
+const panelModel = computed({
+  get: () => activePanel.value,
+  set: (value: string) => {
+    if (value === 'file' || value === 'assets') activePanel.value = value
+  }
+})
+const panelOptions = computed(() => [
+  { value: 'file', label: menu.value.file },
+  { value: 'assets', label: panels.value.assets }
+])
+const panelTabsUI = { root: 'w-full' }
+const splitterStyles = tv(splitterTheme)({ direction: 'vertical' })
 </script>
 
 <template>
@@ -20,25 +35,24 @@ const activePanel = ref<'file' | 'assets'>('file')
     style="contain: paint layout style"
   >
     <AppMenu />
-    <div class="flex shrink-0 gap-1 border-b border-border px-2 py-1.5">
-      <button
-        data-test-id="left-panel-layers-tab"
-        class="flex-1 rounded px-2 py-1 text-xs transition-colors"
-        :class="activePanel === 'file' ? 'bg-hover text-surface' : 'text-muted hover:text-surface'"
-        @click="activePanel = 'file'"
+    <div class="shrink-0 border-b border-border px-2 py-1.5">
+      <SegmentedControl
+        v-model="panelModel"
+        :options="panelOptions"
+        :label="panels.layers"
+        :ui="panelTabsUI"
       >
-        {{ menu.file }}
-      </button>
-      <button
-        data-test-id="left-panel-assets-tab"
-        class="flex-1 rounded px-2 py-1 text-xs transition-colors"
-        :class="
-          activePanel === 'assets' ? 'bg-hover text-surface' : 'text-muted hover:text-surface'
-        "
-        @click="activePanel = 'assets'"
-      >
-        {{ panels.assets }}
-      </button>
+        <template #option="{ option }">
+          <span
+            :data-test-id="
+              option.value === 'file' ? 'left-panel-layers-tab' : 'left-panel-assets-tab'
+            "
+            class="truncate"
+          >
+            {{ option.label }}
+          </span>
+        </template>
+      </SegmentedControl>
     </div>
     <AssetsPanel v-if="activePanel === 'assets'" />
     <SplitterGroup
@@ -55,15 +69,13 @@ const activePanel = ref<'file' | 'assets'>('file')
       >
         <PagesPanel />
       </SplitterPanel>
-      <SplitterResizeHandle class="group relative z-10 -my-1 h-2 cursor-row-resize">
-        <div
-          class="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border"
-        />
+      <SplitterResizeHandle :class="splitterStyles.handle()">
+        <div :class="splitterStyles.divider()" />
       </SplitterResizeHandle>
       <SplitterPanel :default-size="70" :min-size="20" class="flex flex-col overflow-hidden">
         <header
           data-test-id="layers-header"
-          class="shrink-0 px-3 py-2 text-[11px] tracking-wider text-muted uppercase"
+          class="shrink-0 px-3 py-2 text-[11px] font-semibold text-surface"
         >
           {{ panels.layers }}
         </header>

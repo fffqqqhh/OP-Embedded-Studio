@@ -3,18 +3,13 @@ import { describe, test, expect } from 'bun:test'
 import type { CanvasKit } from 'canvaskit-wasm'
 
 import { SceneGraph, TextEditor, UndoManager } from '@open-pencil/core'
-import type { StyleRun } from '@open-pencil/core'
+import type { DerivedTextGlyph, StyleRun } from '@open-pencil/core'
 import { createTextActions } from '@open-pencil/core/editor'
 import type { EditorContext, EditorState } from '@open-pencil/core/editor'
-import type { FontFallbackScript } from '@open-pencil/core/text'
-import { fontManager } from '@open-pencil/core/text'
+
+import { fontManager } from '#core/text/fonts'
 
 import { expectDefined, getNodeOrThrow } from '#tests/helpers/assert'
-import { repoPath } from '#tests/helpers/paths'
-
-type FallbackTestFontManager = typeof fontManager & {
-  cjkFallbackFamilies: Map<FontFallbackScript, string[]>
-}
 
 function setup() {
   const graph = new SceneGraph()
@@ -58,6 +53,46 @@ function setup() {
 
   const actions = createTextActions(ctx)
   return { graph, undo, textEditor, state, textNode, actions }
+}
+
+function straightTextPathNetwork() {
+  return {
+    vertices: [
+      { x: 0, y: 20 },
+      { x: 200, y: 20 }
+    ],
+    segments: [{ start: 0, end: 1, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } }],
+    regions: []
+  }
+}
+
+async function setupPathText() {
+  const font = await fontManager.fetchBundledFont('/Inter-Regular.ttf')
+  expect(font).toBeTruthy()
+  if (!font) return null
+  fontManager.markLoaded('Inter', 'Regular', font)
+
+  const setupResult = setup()
+  const glyphs: DerivedTextGlyph[] = [
+    { commandsBlob: new Uint8Array([0]), x: 20, y: 20, fontSize: 20, rotation: 0 },
+    { commandsBlob: new Uint8Array([0]), x: 40, y: 20, fontSize: 20, rotation: 0 }
+  ]
+  setupResult.graph.updateNode(setupResult.textNode.id, {
+    text: 'AB',
+    fontFamily: 'Inter',
+    fontSize: 20,
+    width: 200,
+    height: 40,
+    textPathData: {
+      network: straightTextPathNetwork(),
+      normalizedSize: { x: 200, y: 40 },
+      tValue: 0,
+      forward: true
+    },
+    textPathBox: { x: 0, y: 0, width: 200, height: 40 },
+    derivedTextGlyphs: glyphs
+  })
+  return setupResult
 }
 
 function paragraphWithHeight(height: number) {
@@ -110,34 +145,110 @@ describe('text edit undo', () => {
     expect(getNodeOrThrow(graph, textNode.id).text).toBe('Hello World')
   })
 
-  test('commitTextEdit requests script-specific CJK fallback packs', async () => {
-    const data = await Bun.file(repoPath('public/Inter-Regular.ttf')).arrayBuffer()
-    const manager = fontManager as FallbackTestFontManager
-    const originalFallbackFamilies = new Map(manager.cjkFallbackFamilies)
-    const originalEnsureFallbackPack = fontManager.ensureFallbackPack.bind(fontManager)
-    const requests: FontFallbackScript[][] = []
+  test('reflows live path-text edits and restores glyphs through undo and redo', async () => {
+    const setupResult = await setupPathText()
+    if (!setupResult) return
+    const { graph, undo, textEditor, textNode, actions } = setupResult
+    const originalGlyphs = structuredClone(
+      expectDefined(getNodeOrThrow(graph, textNode.id).derivedTextGlyphs)
+    )
 
-    try {
-      manager.cjkFallbackFamilies = new Map()
-      fontManager.markLoaded('Inter', 'Regular', data)
-      fontManager.ensureFallbackPack = async (scripts = ['cjk', 'arabic']) => {
-        requests.push([...scripts])
-        return { 'cjk-sc': ['Manual CJK Fallback'] }
-      }
+    actions.startTextEditing(textNode.id)
+    textEditor.insert('C', getNodeOrThrow(graph, textNode.id))
+    actions.updateTextEditNode(textNode.id, {
+      text: expectDefined(textEditor.state, 'text editor state').text
+    })
 
-      const { graph, textEditor, textNode, actions } = setup()
-      graph.updateNode(textNode.id, { text: '', fontFamily: 'Inter', fontWeight: 400 })
+    const liveGlyphs = expectDefined(getNodeOrThrow(graph, textNode.id).derivedTextGlyphs)
+    expect(liveGlyphs).toHaveLength(3)
+    expect(liveGlyphs).not.toEqual(originalGlyphs)
 
-      actions.startTextEditing(textNode.id)
-      textEditor.insert('你好世界', getNodeOrThrow(graph, textNode.id))
-      actions.commitTextEdit()
+    actions.commitTextEdit()
+    const committedGlyphs = structuredClone(
+      expectDefined(getNodeOrThrow(graph, textNode.id).derivedTextGlyphs)
+    )
+    undo.undo()
+    expect(getNodeOrThrow(graph, textNode.id).text).toBe('AB')
+    expect(getNodeOrThrow(graph, textNode.id).derivedTextGlyphs).toEqual(originalGlyphs)
 
-      await Promise.resolve()
-      expect(requests).toEqual([['cjk-sc']])
-    } finally {
-      fontManager.ensureFallbackPack = originalEnsureFallbackPack
-      manager.cjkFallbackFamilies = originalFallbackFamilies
-    }
+    undo.redo()
+    expect(getNodeOrThrow(graph, textNode.id).text).toBe('ABC')
+    expect(getNodeOrThrow(graph, textNode.id).derivedTextGlyphs).toEqual(committedGlyphs)
+  })
+
+  test('restores path identity when undoing an edit to empty text', async () => {
+    const setupResult = await setupPathText()
+    if (!setupResult) return
+    const { graph, undo, textEditor, textNode, actions } = setupResult
+    const originalPathData = structuredClone(
+      expectDefined(getNodeOrThrow(graph, textNode.id).textPathData)
+    )
+
+    actions.startTextEditing(textNode.id)
+    textEditor.selectAll()
+    textEditor.backspace(getNodeOrThrow(graph, textNode.id))
+    actions.updateTextEditNode(textNode.id, { text: '' })
+    actions.commitTextEdit()
+
+    expect(getNodeOrThrow(graph, textNode.id).textPathData).toBeNull()
+    undo.undo()
+    expect(getNodeOrThrow(graph, textNode.id).text).toBe('AB')
+    expect(getNodeOrThrow(graph, textNode.id).textPathData).toEqual(originalPathData)
+    undo.redo()
+    expect(getNodeOrThrow(graph, textNode.id).text).toBe('')
+    expect(getNodeOrThrow(graph, textNode.id).textPathData).toBeNull()
+  })
+
+  test('keeps an empty text override inside an instance through sync and undo', () => {
+    const { graph, undo, textEditor, actions } = setup()
+    const page = graph.getPages()[0]
+    const component = graph.createNode('COMPONENT', page.id, {
+      width: 100,
+      height: 20
+    })
+    graph.createNode('TEXT', component.id, {
+      text: 'Confidential',
+      width: 100,
+      height: 20
+    })
+    const instance = expectDefined(graph.createInstance(component.id, page.id), 'instance')
+    const instanceText = getNodeOrThrow(graph, instance.childIds[0])
+
+    actions.startTextEditing(instanceText.id)
+    textEditor.selectAll()
+    textEditor.backspace(instanceText)
+    actions.commitTextEdit()
+
+    expect(getNodeOrThrow(graph, instanceText.id).text).toBe('')
+    expect(getNodeOrThrow(graph, instance.id).overrides[`${instanceText.id}:text`]).toBe('')
+    graph.syncInstances(component.id)
+    expect(getNodeOrThrow(graph, instanceText.id).text).toBe('')
+
+    undo.undo()
+    expect(getNodeOrThrow(graph, instanceText.id).text).toBe('Confidential')
+    expect(`${instanceText.id}:text` in getNodeOrThrow(graph, instance.id).overrides).toBe(false)
+
+    undo.redo()
+    graph.syncInstances(component.id)
+    expect(getNodeOrThrow(graph, instanceText.id).text).toBe('')
+  })
+
+  test('does not create a text override for a style-only instance edit', () => {
+    const { graph, textEditor, actions } = setup()
+    const page = graph.getPages()[0]
+    const component = graph.createNode('COMPONENT', page.id, { width: 100, height: 20 })
+    graph.createNode('TEXT', component.id, { text: 'Label', width: 100, height: 20 })
+    const instance = expectDefined(graph.createInstance(component.id, page.id), 'instance')
+    const instanceText = getNodeOrThrow(graph, instance.childIds[0])
+
+    actions.startTextEditing(instanceText.id)
+    const state = expectDefined(textEditor.state, 'text editor state')
+    graph.updateNode(instanceText.id, {
+      styleRuns: [{ start: 0, length: state.text.length, style: { fontWeight: 700 } }]
+    })
+    actions.commitTextEdit()
+
+    expect(`${instanceText.id}:text` in getNodeOrThrow(graph, instance.id).overrides).toBe(false)
   })
 
   test('commitTextEdit preserves auto-height text bounds', () => {
@@ -180,15 +291,15 @@ describe('text edit undo', () => {
     expect(undo.canUndo).toBe(false)
   })
 
-  test('commitTextEdit preserves Figma derived glyphs when text unchanged', () => {
+  test('commitTextEdit preserves derived glyphs when text unchanged', () => {
     const { graph, actions, textNode } = setup()
     const glyphs = [{ commandsBlob: new Uint8Array([0]), x: 0, y: 10, fontSize: 14 }]
-    graph.updateNode(textNode.id, { figmaDerivedTextGlyphs: glyphs })
+    graph.updateNode(textNode.id, { derivedTextGlyphs: glyphs })
 
     actions.startTextEditing(textNode.id)
     actions.commitTextEdit()
 
-    expect(getNodeOrThrow(graph, textNode.id).figmaDerivedTextGlyphs).toBe(glyphs)
+    expect(getNodeOrThrow(graph, textNode.id).derivedTextGlyphs).toBe(glyphs)
   })
 
   test('undo restores original text even when graph was synced mid-edit', () => {

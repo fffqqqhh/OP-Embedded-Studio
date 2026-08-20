@@ -1,7 +1,6 @@
 import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
 import { copyFills } from '@open-pencil/scene-graph/copy'
-
-import { parseSVGPath } from '#core/io/formats/svg/parse-path'
+import { parseSVGPath } from '@open-pencil/scene-graph/parse-path'
 
 import { makeBooleanSourcePath, makeStrokeOutlinePath, nodePathTransform } from './boolean'
 import type { SkiaRenderer } from './renderer'
@@ -23,15 +22,14 @@ function nodesToVectorProps(
   nodes: SceneNode[],
   makeNodePath: NodePathFactory
 ): VectorFlattenProps | null {
-  const path = new renderer.ck.Path()
+  const path = new renderer.ck.PathBuilder()
   for (const node of nodes) {
     const nodePath = makeNodePath(renderer, graph, node)
     if (!nodePath) {
       path.delete()
       return null
     }
-    nodePath.transform(nodePathTransform(renderer, node))
-    path.addPath(nodePath)
+    path.addPath(nodePath, nodePathTransform(renderer, node))
     nodePath.delete()
   }
 
@@ -42,8 +40,9 @@ function nodesToVectorProps(
   }
 
   path.transform(renderer.ck.Matrix.translated(-bounds[0], -bounds[1]))
-  const vectorNetwork = parseSVGPath(path.toSVGString())
-  path.delete()
+  const immutablePath = path.detachAndDelete()
+  const vectorNetwork = parseSVGPath(immutablePath.toSVGString())
+  immutablePath.delete()
 
   return {
     name: 'Flatten',

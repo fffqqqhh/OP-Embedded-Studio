@@ -3,8 +3,67 @@ import type { Canvas, Paint } from 'canvaskit-wasm'
 import type { SceneNode, SceneGraph, Fill } from '@open-pencil/scene-graph'
 import type { Rect, Vector } from '@open-pencil/scene-graph/primitives'
 
+import { figmaBlendModeToSkia } from './blend'
 import type { SkiaRenderer } from './renderer'
 import { makeSmoothRRectPath, nodeHasSmoothCorners } from './shapes'
+
+interface PaintFillsOptions {
+  readonly bindToNodeFills?: boolean
+  readonly patternStack?: Set<string>
+}
+
+export function paintFills(
+  r: SkiaRenderer,
+  fills: readonly Fill[],
+  node: SceneNode,
+  graph: SceneGraph,
+  draw: (fill: Fill) => void,
+  options: PaintFillsOptions = {}
+): void {
+  for (let index = 0; index < fills.length; index++) {
+    const fill = fills[index]
+    if (!fill.visible) continue
+    const fillIndex = options.bindToNodeFills === false ? -1 : index
+    const applied = options.patternStack
+      ? applyFill(r, fill, node, graph, fillIndex, options.patternStack)
+      : r.applyFill(fill, node, graph, fillIndex)
+    if (!applied) continue
+    r.fillPaint.setAlphaf(fill.opacity)
+    r.fillPaint.setBlendMode(figmaBlendModeToSkia(r.ck, fill.blendMode))
+    draw(fill)
+    r.fillPaint.setShader(null)
+    r.fillPaint.setBlendMode(r.ck.BlendMode.SrcOver)
+  }
+}
+
+export function drawVectorMultiStyleFills(
+  r: SkiaRenderer,
+  canvas: Canvas,
+  node: SceneNode,
+  graph: SceneGraph,
+  patternStack?: Set<string>
+): boolean {
+  if (node.type !== 'VECTOR' || !node.fillGeometry.some((geometry) => geometry.fills?.length)) {
+    return false
+  }
+  const paths = r.getFillGeometry(node)
+  if (!paths) return false
+
+  for (let index = 0; index < node.fillGeometry.length; index++) {
+    const geometry = node.fillGeometry[index]
+    const path = paths[index]
+    const usesPathFills = Boolean(geometry.fills?.length)
+    paintFills(
+      r,
+      usesPathFills ? (geometry.fills ?? []) : node.fills,
+      node,
+      graph,
+      () => canvas.drawPath(path, r.fillPaint),
+      { bindToNodeFills: !usesPathFills, patternStack }
+    )
+  }
+  return true
+}
 
 export function drawNodeFill(
   r: SkiaRenderer,
@@ -156,10 +215,15 @@ function recordPatternSource(
     canvas.save()
     canvas.translate(position.x, position.y)
     canvas.scale(layout.scale, layout.scale)
-    for (const sourceFill of source.fills.filter((item) => item.visible)) {
-      if (sourceFill.type === 'PATTERN' && sourceFill.sourceNodeId === source.id) continue
-      if (!applyFill(r, sourceFill, source, graph, 0, patternStack)) continue
-      drawNodeFill(r, canvas, source, rect, hasRadius, sourceFill)
+    if (!drawVectorMultiStyleFills(r, canvas, source, graph, patternStack)) {
+      paintFills(
+        r,
+        source.fills,
+        source,
+        graph,
+        (sourceFill) => drawNodeFill(r, canvas, source, rect, hasRadius, sourceFill),
+        { patternStack }
+      )
     }
     canvas.restore()
   }
@@ -424,18 +488,19 @@ export function makeArcPath(r: SkiaRenderer, node: SceneNode) {
   const endDeg = arc.endingAngle * (180 / Math.PI)
   const sweepDeg = endDeg - startDeg
 
-  const path = new r.ck.Path()
+  const path = new r.ck.PathBuilder()
   const oval = r.ck.LTRBRect(0, 0, node.width, node.height)
 
   if (arc.innerRadius > 0) {
     path.addArc(oval, startDeg, sweepDeg)
     const innerOval = r.ck.LTRBRect(cx - innerRx, cy - innerRy, cx + innerRx, cy + innerRy)
-    const innerPath = new r.ck.Path()
+    const innerPath = new r.ck.PathBuilder()
     innerPath.addArc(innerOval, startDeg + sweepDeg, -sweepDeg)
-    path.addPath(innerPath)
+    const immutableInnerPath = innerPath.detachAndDelete()
+    path.addPath(immutableInnerPath)
+    immutableInnerPath.delete()
     path.close()
-    innerPath.delete()
-    return path
+    return path.detachAndDelete()
   }
 
   const isFullCircle = Math.abs(sweepDeg) >= 359.99
@@ -446,7 +511,7 @@ export function makeArcPath(r: SkiaRenderer, node: SceneNode) {
     path.addArc(oval, startDeg, sweepDeg)
     path.close()
   }
-  return path
+  return path.detachAndDelete()
 }
 
 export function drawArc(r: SkiaRenderer, canvas: Canvas, node: SceneNode, paint: Paint): void {

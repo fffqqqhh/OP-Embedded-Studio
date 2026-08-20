@@ -7,6 +7,7 @@
   "text": "Text",
   "new": "Neu",
   "open": "Öffnen…",
+  "openStorageWorkspace": "Speicher-Arbeitsbereich öffnen…",
   "save": "Speichern",
   "saveAs": "Speichern unter…",
   "exportSelection": "Auswahl exportieren…",
@@ -43,6 +44,7 @@
   "copyAsJSX": "Als JSX kopieren",
   "copyNodeId": "Knoten-ID kopieren",
   "copyXPath": "XPath kopieren",
+  "convertToVector": "In Vektor umwandeln",
   "checkUpdates": "Nach Updates suchen…",
   "booleanOperations": "Boolesche Operationen",
   "strikethrough": "Durchstreichen",
@@ -52,5 +54,16 @@
   "arrangeAlignRight": "Rechts ausrichten",
   "arrangeAlignTop": "Oben ausrichten",
   "arrangeAlignMiddle": "Mittig ausrichten",
-  "arrangeAlignBottom": "Unten ausrichten"
+  "arrangeAlignBottom": "Unten ausrichten",
+  "multiplayerCursors": "Multiplayer-Cursor",
+  "preferences": "Einstellungen",
+  "snapToGeometry": "An Geometrie ausrichten",
+  "snapToObjects": "An Objekten ausrichten",
+  "snapToPixelGrid": "Am Pixelraster ausrichten",
+  "renameSelection": "Auswahl umbenennen…",
+  "rulers": "Lineale",
+  "settings": "Einstellungen…",
+  "splitRight": "Nach rechts teilen",
+  "splitDown": "Nach unten teilen",
+  "closeView": "Ansicht schließen"
 }

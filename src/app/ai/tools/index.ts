@@ -3,7 +3,12 @@ import { tool } from 'ai'
 import * as v from 'valibot'
 
 import { computeAllLayouts } from '@open-pencil/core/layout'
-import { CORE_TOOLS, toolsToAI } from '@open-pencil/core/tools'
+import {
+  CORE_TOOLS,
+  EXTENDED_TOOLS,
+  registerComponentCatalog,
+  toolsToAI
+} from '@open-pencil/core/tools'
 import type { StepBudget, ToolLogEntry } from '@open-pencil/core/tools'
 import type { SceneNode } from '@open-pencil/scene-graph'
 
@@ -11,6 +16,7 @@ import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
 import { getActiveEditorStore } from '@/app/editor/active-store'
 import type { EditorStore } from '@/app/editor/active-store'
 import { ensureGraphFonts } from '@/app/editor/fonts'
+import { useLibraryService } from '@/app/libraries'
 
 export const MAX_AGENT_STEPS = 50
 
@@ -58,10 +64,6 @@ function getRunState(store?: EditorStore): RunState {
   return created
 }
 
-function hasResultError(result: unknown): boolean {
-  return !!result && typeof result === 'object' && 'error' in result
-}
-
 export function getToolLogEntries(store?: EditorStore): ToolLogEntry[] {
   return getRunState(store).toolLog
 }
@@ -86,64 +88,51 @@ export function clearToolLogEntries(store?: EditorStore): void {
   getRunState(store).clear()
 }
 
-export function createAITools(
-  store: EditorStore,
-  options: { onRenderSuccess?: (result: { id: string; name: string }) => void } = {}
-) {
+export function createAITools(store: EditorStore) {
+  let beforeSnapshot: Map<string, SceneNode> | null = null
   const runState = getRunState(store)
+  const libraryService = useLibraryService()
+  libraryService.bindEditor(store)
+  registerComponentCatalog(store.graph, libraryService)
 
   return toolsToAI(
-    CORE_TOOLS,
+    [
+      ...CORE_TOOLS,
+      ...EXTENDED_TOOLS.filter((def) =>
+        ['get_components', 'list_libraries', 'insert_library_component'].includes(def.name)
+      )
+    ],
     {
       getFigma: () => makeFigmaFromStore(store),
-      onBeforeExecute: (def) => (def.mutates ? store.snapshotPage() : undefined),
-      onAfterExecute: async (def, outcome, executionContext) => {
-        if (!def.mutates) return
-
-        const before = executionContext as Map<string, SceneNode> | undefined
-        if (outcome.error || hasResultError(outcome.result)) {
-          if (before) store.restorePageFromSnapshot(before)
-          store.requestRender()
-          return
+      onBeforeExecute: (def) => {
+        if (def.mutates) {
+          beforeSnapshot = store.snapshotPage()
         }
-
-        const pageId = store.state.currentPageId
-        const pageNode = store.graph.getNode(pageId)
-        try {
-          if (pageNode) await ensureGraphFonts(store.graph, pageNode.childIds)
+      },
+      onAfterExecute: async (def) => {
+        if (def.mutates) {
+          const pageId = store.state.currentPageId
+          const pageNode = store.graph.getNode(pageId)
+          if (pageNode) await ensureGraphFonts(store.graph, pageNode.childIds, store.renderer)
           computeAllLayouts(store.graph, pageId)
           store.requestRender()
-        } catch (error) {
-          if (before) store.restorePageFromSnapshot(before)
-          store.requestRender()
-          throw error
+          if (beforeSnapshot) {
+            const before = beforeSnapshot
+            const after = store.snapshotPage()
+            store.pushUndoEntry({
+              label: `AI: ${def.name}`,
+              forward: () => store.restorePageFromSnapshot(after),
+              inverse: () => store.restorePageFromSnapshot(before)
+            })
+            beforeSnapshot = null
+          }
         }
-
-        if (before) {
-          const after = store.snapshotPage()
-          store.pushUndoEntry({
-            label: `AI: ${def.name}`,
-            forward: () => store.restorePageFromSnapshot(after),
-            inverse: () => store.restorePageFromSnapshot(before)
-          })
-        }
-
-        if (def.name !== 'render') return
-        const id =
-          outcome.result &&
-          typeof outcome.result === 'object' &&
-          'id' in outcome.result &&
-          typeof outcome.result.id === 'string'
-            ? outcome.result.id
-            : undefined
-        const frame = id ? store.graph.getNode(id) : undefined
-        if (frame?.type !== 'FRAME') return
-        store.select([frame.id])
-        options.onRenderSuccess?.({ id: frame.id, name: frame.name })
       },
       onFlashNodes: (nodeIds) => {
         store.renderer?.aiClearActive()
-        if (nodeIds.length > 0) store.aiFlashDone(nodeIds)
+        if (nodeIds.length > 0) {
+          store.aiFlashDone(nodeIds)
+        }
       },
       onToolLog: (entry) => {
         runState.toolLog.push(entry)

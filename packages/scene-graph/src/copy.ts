@@ -12,14 +12,17 @@ import type {
   ArcData,
   ComponentPropertyDefinition,
   Effect,
-  FigmaDerivedTextGlyph,
+  DerivedTextGlyph,
   Fill,
   GeometryPath,
   GradientStop,
+  LayoutGrid,
   SceneNode,
   Stroke,
   StyleRun
 } from './'
+import { geometryCommandCoordCount } from './geometry'
+import { createDefaultSourceMetadata } from './node-defaults'
 import { cloneVectorNetwork } from './vector-network'
 
 // --- Individual copy functions ---
@@ -69,6 +72,20 @@ export function copyStyleRun(r: StyleRun): StyleRun {
 
 // --- Array copy functions ---
 
+const internalCopySources = new WeakMap<object, object>()
+
+/** Record immutable lineage for an internal deep copy without sharing mutable values. */
+export function markCopySource<T extends object>(source: T, copy: T): T {
+  internalCopySources.set(copy, internalCopySources.get(source) ?? source)
+  return copy
+}
+
+/** Compare internal deep copies in O(1) without traversing large paint or text payloads. */
+export function hasSameCopySource(left: object, right: object): boolean {
+  if (left === right) return true
+  return (internalCopySources.get(left) ?? left) === (internalCopySources.get(right) ?? right)
+}
+
 export function copyFills(fills: Fill[]): Fill[] {
   return fills.map(copyFill)
 }
@@ -81,15 +98,82 @@ export function copyEffects(effects: Effect[]): Effect[] {
   return effects.map(copyEffect)
 }
 
+export function copyLayoutGrids(grids: LayoutGrid[]): LayoutGrid[] {
+  return grids.map((grid) => ({ ...grid, color: grid.color ? { ...grid.color } : undefined }))
+}
+
 export function copyStyleRuns(runs: StyleRun[]): StyleRun[] {
   return runs.map(copyStyleRun)
 }
 
+/** Keep path-level fills across copy/scale/transform (resize snapshots). */
+function withPathPaintMeta(path: GeometryPath, commandsBlob: Uint8Array): GeometryPath {
+  return {
+    windingRule: path.windingRule,
+    commandsBlob,
+    ...(path.fills ? { fills: copyFills(path.fills) } : {})
+  }
+}
+
 export function copyGeometryPaths(paths: GeometryPath[]): GeometryPath[] {
-  return paths.map((p) => ({
-    windingRule: p.windingRule,
-    commandsBlob: p.commandsBlob.slice()
-  }))
+  return paths.map((p) => withPathPaintMeta(p, p.commandsBlob.slice()))
+}
+
+/**
+ * Affine-transform every coordinate pair in a path command blob (returns a
+ * copy): (x, y) → (m00·x + m01·y + tx, m10·x + m11·y + ty).
+ * Command layout: 1=move/2=line (1 pair), 3=quad (2 pairs), 4=cubic (3 pairs)
+ * — font-glyph blobs are quad-heavy, so skipping command 3 desyncs the walk.
+ */
+export function transformGeometryBlob(
+  blob: Uint8Array,
+  m00: number,
+  m01: number,
+  m10: number,
+  m11: number,
+  tx = 0,
+  ty = 0
+): Uint8Array {
+  const out = blob.slice()
+  const dv = new DataView(out.buffer, out.byteOffset, out.byteLength)
+  let offset = 0
+  while (offset < out.length) {
+    const command = out[offset++]
+    const coords = geometryCommandCoordCount(command)
+    if (coords == null) break
+    for (let i = 0; i < coords; i++) {
+      if (offset + 8 > out.length) break
+      const x = dv.getFloat32(offset, true)
+      const y = dv.getFloat32(offset + 4, true)
+      dv.setFloat32(offset, m00 * x + m01 * y + tx, true)
+      dv.setFloat32(offset + 4, m10 * x + m11 * y + ty, true)
+      offset += 8
+    }
+  }
+  return out
+}
+
+export function transformGeometryPaths(
+  paths: GeometryPath[],
+  m00: number,
+  m01: number,
+  m10: number,
+  m11: number,
+  tx = 0,
+  ty = 0
+): GeometryPath[] {
+  return paths.map((g) =>
+    withPathPaintMeta(g, transformGeometryBlob(g.commandsBlob, m00, m01, m10, m11, tx, ty))
+  )
+}
+
+/**
+ * Scale path command blob coordinates by (sx, sy).
+ * Identity scale returns a deep copy (same as copyGeometryPaths).
+ */
+export function scaleGeometryPaths(paths: GeometryPath[], sx: number, sy: number): GeometryPath[] {
+  if (sx === 1 && sy === 1) return copyGeometryPaths(paths)
+  return transformGeometryPaths(paths, sx, 0, 0, sy)
 }
 
 // --- Internal helpers ---
@@ -114,12 +198,14 @@ function copyPropertyDefs(
   return (
     defs?.map((d) => ({
       ...d,
-      variantOptions: d.variantOptions ? [...d.variantOptions] : undefined
+      variantOptions: d.variantOptions ? [...d.variantOptions] : undefined,
+      preferredValues: d.preferredValues ? [...d.preferredValues] : undefined
     })) ?? []
   )
 }
 
-function copyGlyphs(glyphs: FigmaDerivedTextGlyph[] | null): FigmaDerivedTextGlyph[] | null {
+/** Deep-copy path-text glyphs (fresh commandsBlob buffers). */
+export function copyDerivedGlyphs(glyphs: DerivedTextGlyph[] | null): DerivedTextGlyph[] | null {
   return glyphs ? glyphs.map((g) => ({ ...g, commandsBlob: new Uint8Array(g.commandsBlob) })) : null
 }
 
@@ -139,20 +225,41 @@ function copyArcData(a: ArcData): ArcData {
  * would otherwise share by reference. When adding a mutable SceneNode field,
  * add its copy behavior here or document why sharing is intentional.
  */
-export function cloneNodeProps(src: SceneNode, componentId: string | null): Partial<SceneNode> {
+export type NodeCloneMode = 'deep' | 'fig-import'
+
+export function cloneNodeProps(
+  src: SceneNode,
+  componentId: string | null,
+  mode: NodeCloneMode = 'deep'
+): Partial<SceneNode> {
   const { id: _, parentId: _p, childIds: _c, ...rest } = src
+  if (mode === 'fig-import') {
+    return {
+      ...rest,
+      ...(componentId !== null ? { componentId } : {}),
+      source: createDefaultSourceMetadata(),
+      boundVariables: { ...src.boundVariables },
+      variableModes: { ...src.variableModes },
+      overrides: Object.keys(src.overrides).length > 0 ? structuredClone(src.overrides) : {},
+      componentPropertyAssignments: { ...src.componentPropertyAssignments },
+      componentPropertyValues: { ...src.componentPropertyValues }
+    }
+  }
   return {
     ...rest,
     ...(componentId !== null ? { componentId } : {}),
     boundVariables: { ...src.boundVariables },
+    variableModes: { ...src.variableModes },
     overrides: Object.keys(src.overrides).length > 0 ? structuredClone(src.overrides) : {},
-    fills: copyOpt(src.fills, copyFills),
-    strokes: copyOpt(src.strokes, copyStrokes),
-    effects: copyOpt(src.effects, copyEffects),
-    styleRuns: copyOpt(src.styleRuns, copyStyleRuns),
-    // Source metadata preserves opaque raw Figma payloads; use structuredClone instead of
-    // hand-copying partial known shapes and accidentally sharing nested raw Figma data.
-    source: structuredClone(src.source),
+    fills: copyOpt(src.fills, (value) => markCopySource(value, copyFills(value))),
+    strokes: copyOpt(src.strokes, (value) => markCopySource(value, copyStrokes(value))),
+    effects: copyOpt(src.effects, (value) => markCopySource(value, copyEffects(value))),
+    layoutGrids: copyOpt(src.layoutGrids, copyLayoutGrids),
+    guides: copyOpt(src.guides, (guides) => guides.map((guide) => ({ ...guide }))),
+    styleRuns: copyOpt(src.styleRuns, (value) => markCopySource(value, copyStyleRuns(value))),
+    // Generated instance descendants have no independent Figma provenance. Retaining the source
+    // component's opaque raw payload here duplicates megabytes of metadata per instance.
+    source: componentId === null ? structuredClone(src.source) : createDefaultSourceMetadata(),
     dashPattern: copyOpt(src.dashPattern, (a) => [...a]),
     fontVariations: copyOpt(src.fontVariations, (a) => a.map((v) => ({ ...v }))),
     fontFeatures: copyOpt(src.fontFeatures, (a) => a.map((v) => ({ ...v }))),
@@ -162,17 +269,23 @@ export function cloneNodeProps(src: SceneNode, componentId: string | null): Part
     gridTemplateColumns: copySpread(src.gridTemplateColumns),
     gridTemplateRows: copySpread(src.gridTemplateRows),
     componentPropertyDefinitions: copyPropertyDefs(src.componentPropertyDefinitions),
+    componentPropertyReferences: copySpread(src.componentPropertyReferences),
+    componentPropertyAssignments: { ...src.componentPropertyAssignments },
     symbolLinks: copySpread(src.symbolLinks),
     variantPropSpecs: copySpread(src.variantPropSpecs),
     pluginData: copySpread(src.pluginData),
     pluginRelaunchData: copySpread(src.pluginRelaunchData),
     exportSettings: copySpread(src.exportSettings),
     componentPropertyValues: { ...src.componentPropertyValues },
-    figmaDerivedLayout: src.figmaDerivedLayout ? { ...src.figmaDerivedLayout } : null,
+    derivedLayout: src.derivedLayout ? { ...src.derivedLayout } : null,
     arcData: src.arcData ? copyArcData(src.arcData) : null,
     vectorNetwork: src.vectorNetwork ? cloneVectorNetwork(src.vectorNetwork) : null,
     textPicture: src.textPicture ? new Uint8Array(src.textPicture) : null,
-    figmaDerivedTextGlyphs: copyGlyphs(src.figmaDerivedTextGlyphs),
+    derivedTextGlyphs: src.derivedTextGlyphs
+      ? markCopySource(src.derivedTextGlyphs, copyDerivedGlyphs(src.derivedTextGlyphs) ?? [])
+      : null,
+    textPathData: src.textPathData ? structuredClone(src.textPathData) : null,
+    textPathBox: src.textPathBox ? { ...src.textPathBox } : null,
     gridPosition: src.gridPosition ? { ...src.gridPosition } : null
   }
 }

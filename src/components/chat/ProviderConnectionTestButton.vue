@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { tv } from 'tailwind-variants'
 import { useI18n } from '@open-pencil/vue'
+
+import statusTheme from '@/theme/status'
 
 import type { ProviderConnectionTestFailureReason } from '@/app/ai/chat/connection-test'
 
@@ -29,6 +32,8 @@ const resultMessage = computed(() => {
       return dialogs.value.connectionTestInvalidBaseURL
     case 'auth':
       return dialogs.value.connectionTestAuthFailed
+    case 'insufficient-credit':
+      return dialogs.value.connectionTestInsufficientCredit
     case 'model-not-found':
       return dialogs.value.connectionTestModelNotFound
     case 'api-type':
@@ -43,6 +48,8 @@ const resultMessage = computed(() => {
 })
 
 const isTesting = computed(() => status === 'testing')
+const resultTone = computed(() => (status === 'success' ? 'success' : 'error'))
+const statusStyles = computed(() => tv(statusTheme)({ tone: resultTone.value }))
 </script>
 
 <template>
@@ -63,8 +70,8 @@ const isTesting = computed(() => status === 'testing')
 
     <p
       v-if="resultMessage"
-      class="text-[10px] leading-snug"
-      :class="status === 'success' ? 'text-green-400' : 'text-red-400'"
+      :data-tone="resultTone"
+      :class="statusStyles.text()"
       data-test-id="provider-test-connection-result"
     >
       {{ resultMessage }}

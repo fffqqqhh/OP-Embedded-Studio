@@ -1,16 +1,17 @@
 import type { EditorStore } from '@/app/editor/active-store'
+import { notificationMessages } from '@/app/i18n/notifications'
 import { toast } from '@/app/shell/ui'
 import { readTauriClipboardText } from '@/app/tauri/clipboard'
 import { isTauri } from '@/app/tauri/env'
 
-function isDesignClipboardHtml(text: string) {
+function isDesignClipboardHTML(text: string) {
   return text.includes('<!--(openpencil)') || text.includes('(figma)')
 }
 
-async function readClipboardHtml() {
+async function readClipboardHTML() {
   if (isTauri()) {
     const text = await readTauriClipboardText()
-    return text && isDesignClipboardHtml(text) ? text : null
+    return text && isDesignClipboardHTML(text) ? text : null
   }
 
   if (typeof navigator.clipboard.read !== 'function') return null
@@ -24,14 +25,14 @@ async function readClipboardHtml() {
 
 export async function pasteClipboardToReplace(store: EditorStore) {
   try {
-    const html = await readClipboardHtml()
+    const html = await readClipboardHTML()
     if (!html) {
-      toast.error('Clipboard does not contain design data')
+      toast.error(notificationMessages.get().clipboardMissingDesignData)
       return
     }
     await store.pasteFromHTML(html, undefined, { replaceSelection: true })
   } catch (error) {
     console.warn('Paste to replace failed', error)
-    toast.error('Clipboard access is blocked in this browser context')
+    toast.error(notificationMessages.get().clipboardAccessBlocked)
   }
 }

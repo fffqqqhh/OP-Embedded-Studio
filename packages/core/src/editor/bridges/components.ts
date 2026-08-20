@@ -27,16 +27,30 @@ export function createComponentBridge(
       ),
     createInstanceFromComponent: components.createInstanceFromComponent,
     detachInstance: () => components.detachInstance(selection.getSelectedNode()),
+    focusComponent: (componentId: string) =>
+      components.focusComponent(componentId, pages.switchPage),
     goToMainComponent: () =>
       components.goToMainComponent(selection.getSelectedNode(), pages.switchPage),
     getComponentSetPropertyDefs: components.getComponentSetPropertyDefs,
     addPropertyDefinition: components.addPropertyDefinition,
     removePropertyDefinition: components.removePropertyDefinition,
     renamePropertyDefinition: components.renamePropertyDefinition,
+    reorderPropertyDefinitions: components.reorderPropertyDefinitions,
+    renameVariantValue: components.renameVariantValue,
+    reorderVariantValues: components.reorderVariantValues,
+    setVariantPropertyValue: components.setVariantPropertyValue,
     collectVariantOptions: components.collectVariantOptions,
     findVariantByValues: components.findVariantByValues,
     getDefaultVariantForComponentSet: components.getDefaultVariantForComponentSet,
     getComponentSetVariantConflicts: components.getComponentSetVariantConflicts,
-    switchInstanceVariant: components.switchInstanceVariant
+    validateComponentSet: components.validateComponentSet,
+    getVariantOptionAvailability: components.getVariantOptionAvailability,
+    switchInstanceVariant: components.switchInstanceVariant,
+    addVariant: components.addVariant,
+    duplicateVariant: components.duplicateVariant,
+    removeVariant: components.removeVariant,
+    getInstanceComponentPropertyDefinitions: components.getInstanceComponentPropertyDefinitions,
+    getInstanceComponentPropertyValue: components.getInstanceComponentPropertyValue,
+    setInstanceComponentProperty: components.setInstanceComponentProperty
   }
 }

@@ -282,6 +282,13 @@ export interface PluginRelaunchData {
   isDeleted: boolean
 }
 
+export interface AssetRef {
+  key: string
+  version?: string
+}
+
+export type StyleReference = { guid: GUID; assetRef?: never } | { guid?: never; assetRef: AssetRef }
+
 export interface NodeChange {
   [key: string]: unknown
   guid?: GUID
@@ -329,6 +336,8 @@ export interface NodeChange {
   stackChildPrimaryGrow?: number
   stackChildAlignSelf?: string
   stackCounterSpacing?: number
+  minSize?: { value?: Vector }
+  maxSize?: { value?: Vector }
   // Frame
   clipsContent?: boolean
   frameMaskDisabled?: boolean
@@ -336,7 +345,7 @@ export interface NodeChange {
   // Vector
   booleanOperation?: 'UNION' | 'SUBTRACT' | 'INTERSECT' | 'XOR'
   vectorData?: unknown
-  fillGeometry?: Array<{ windingRule?: string; commandsBlob?: number }>
+  fillGeometry?: Array<{ windingRule?: string; commandsBlob?: number; styleID?: number }>
   strokeGeometry?: Array<{ windingRule?: string; commandsBlob?: number }>
   // Text
   fontSize?: number
@@ -368,7 +377,8 @@ export interface NodeChange {
       fontSize: number
       firstCharacter: number
       advance: number
-      rotation: number
+      /** Radians along the text path; kiwi omits the field for axis-aligned text. */
+      rotation?: number
     }>
     fontMetaData?: Array<{
       key: { family: string; style: string; postscript?: string }
@@ -383,9 +393,11 @@ export interface NodeChange {
     truncatedHeight?: number
   }
   styleType?: string
-  styleIdForText?: { guid?: GUID }
-  styleIdForFill?: { guid?: GUID }
-  styleIdForStrokeFill?: { guid?: GUID }
+  styleIdForText?: StyleReference
+  styleIdForFill?: StyleReference
+  styleIdForStrokeFill?: StyleReference
+  styleIdForEffect?: StyleReference
+  styleIdForGrid?: StyleReference
   textUserLayoutVersion?: number
   textExplicitLayoutVersion?: number
   textBidiVersion?: number

@@ -83,7 +83,7 @@ export function resolveAutomationTarget(
     throw new Error(
       requestedDocumentId
         ? `Document "${requestedDocumentId}" not found`
-        : 'No active OP Embedded Studio document'
+        : 'No active OpenPencil document'
     )
   }
 

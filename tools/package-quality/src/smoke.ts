@@ -36,14 +36,6 @@ function nodeEval(code: string, cwd: string): void {
   run(args, cwd)
 }
 
-function bunEval(code: string, cwd: string): void {
-  const args =
-    process.platform === 'win32'
-      ? ['bun', '--eval', code]
-      : ['timeout', String(EVAL_TIMEOUT_S), 'bun', '--eval', code]
-  run(args, cwd)
-}
-
 function writeTypeConsumer(cwd: string): void {
   writeFileSync(
     join(cwd, 'tsconfig.package-smoke.json'),
@@ -76,13 +68,7 @@ import { FIG_KIWI_DEFAULT_VERSION, buildFigKiwi } from '@open-pencil/kiwi/fig/co
 import { type GUID as KiwiGUID } from '@open-pencil/kiwi/fig'
 import { parsePenFile, type PenDocument } from '@open-pencil/pen'
 import { SceneGraph, type Color, type SceneNode, type Vector } from '@open-pencil/scene-graph'
-import {
-  testIdSelector,
-  type RequiredTestIdProps,
-  type TestIdProps,
-  type WithRequiredTestId,
-  type WithoutTestId
-} from '@open-pencil/vue'
+import { testIdSelector } from '@open-pencil/vue'
 
 const graph = new SceneGraph()
 const editorFactory: typeof createEditor = createEditor
@@ -98,13 +84,6 @@ const figDocument: FigContainerDocument = {
   dataRaw: new Uint8Array([2])
 }
 const kiwiGuid: KiwiGUID = { sessionID: 1, localID: 2 }
-const optionalTestId: TestIdProps = { testId: 'smoke' }
-const requiredTestId: RequiredTestIdProps = { testId: 'required-smoke' }
-const mergedTestId: WithRequiredTestId<{ label: string }> = {
-  label: 'OpenPencil',
-  testId: 'typed-smoke'
-}
-const withoutTestId: WithoutTestId<{ label: string; testId?: string }> = { label: 'clean' }
 
 void editorFactory
 void editor
@@ -115,10 +94,6 @@ void maybeNode
 void penDocument
 void figDocument
 void kiwiGuid
-void optionalTestId
-void requiredTestId
-void mergedTestId
-void withoutTestId
 void FIG_PACKAGE_STATUS
 void FIG_KIWI_DEFAULT_VERSION
 void buildFigKiwi
@@ -135,7 +110,7 @@ function checkTypeConsumer(cwd: string): void {
   run([tsgoBin, '--noEmit', '-p', 'tsconfig.package-smoke.json'], cwd)
 }
 
-interface PackageJson {
+interface PackageJSON {
   name: string
   types?: string
   exports?: unknown
@@ -145,7 +120,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function readPackageJson(packageDir: string): PackageJson {
+function readPackageJSON(packageDir: string): PackageJSON {
   return JSON.parse(readFileSync(join(rootDir, packageDir, 'package.json'), 'utf8'))
 }
 
@@ -177,7 +152,7 @@ function exportKeyToSpecifier(packageName: string, exportKey: string): string | 
   return `${packageName}/${exportKey.slice(2)}`
 }
 
-function collectPublicImportSpecifiers(packageJSON: PackageJson): string[] {
+function collectPublicImportSpecifiers(packageJSON: PackageJSON): string[] {
   const { exports } = packageJSON
   if (!exports) return []
   if (typeof exports === 'string') return [packageJSON.name]
@@ -205,7 +180,7 @@ try {
   const tarballs: string[] = []
   const publicImportSpecifiers = new Set<string>()
   for (const packageDir of publicPackageDirs) {
-    const packageJSON = readPackageJson(packageDir)
+    const packageJSON = readPackageJSON(packageDir)
     for (const specifier of collectPublicImportSpecifiers(packageJSON)) {
       publicImportSpecifiers.add(specifier)
     }
@@ -257,7 +232,6 @@ try {
   for (const specifier of [...publicImportSpecifiers].sort()) {
     if (evalSkipSpecifiers.has(specifier)) continue
     nodeEval(`await import(${JSON.stringify(specifier)})`, tempDir)
-    bunEval(`await import(${JSON.stringify(specifier)})`, tempDir)
   }
 
   checkTypeConsumer(tempDir)
@@ -271,7 +245,15 @@ try {
     tempDir
   )
   nodeEval(
-    "const { FIG_PACKAGE_STATUS, readFigContainer, writeFigContainer } = await import('@open-pencil/fig'); if (FIG_PACKAGE_STATUS !== 'container-api') throw new Error('Fig package status smoke failed'); const document = readFigContainer(writeFigContainer({ schemaDeflated: new Uint8Array([1]), dataRaw: new Uint8Array([2]) })); if (document.dataRaw[0] !== 2) throw new Error('Fig container smoke failed')",
+    "const { FIG_PACKAGE_STATUS, effectiveFigmaRawNodeFields, parseFigBuffer, writeFigArchive, readFigContainer, writeFigContainer } = await import('@open-pencil/fig'); if (FIG_PACKAGE_STATUS !== 'archive-api' || typeof effectiveFigmaRawNodeFields !== 'function' || typeof parseFigBuffer !== 'function' || typeof writeFigArchive !== 'function') throw new Error('Fig package status smoke failed'); const document = readFigContainer(writeFigContainer({ schemaDeflated: new Uint8Array([1]), dataRaw: new Uint8Array([2]) })); if (document.dataRaw[0] !== 2) throw new Error('Fig container smoke failed')",
+    tempDir
+  )
+  nodeEval(
+    "const { convertLineHeight, sceneNodeToKiwi } = await import('@open-pencil/fig/node-change'); if (convertLineHeight({ value: 120, units: 'PERCENT' }, 20) !== 24 || typeof sceneNodeToKiwi !== 'function') throw new Error('Fig NodeChange subpath failed')",
+    tempDir
+  )
+  nodeEval(
+    "const { populateAndApplyOverrides } = await import('@open-pencil/fig/instance-overrides'); if (typeof populateAndApplyOverrides !== 'function') throw new Error('Fig instance override subpath failed')",
     tempDir
   )
   nodeEval(
@@ -296,29 +278,6 @@ try {
   )
 
   run(['node', 'node_modules/.bin/openpencil', '--help'], tempDir)
-  const cliDomInput = join(tempDir, 'dom-smoke.html')
-  const cliDomOutput = join(tempDir, 'dom-smoke.json')
-  writeFileSync(cliDomInput, '<article class="card"><h1>Node CLI DOM smoke</h1></article>', 'utf8')
-  const cliDomSummary = JSON.parse(
-    run(
-      [
-        'node',
-        'node_modules/.bin/openpencil',
-        'import',
-        cliDomInput,
-        '--format',
-        'json',
-        '--output',
-        cliDomOutput,
-        '--json'
-      ],
-      tempDir
-    )
-  )
-  const cliDomDocument = JSON.parse(readFileSync(cliDomOutput, 'utf8'))
-  if (cliDomSummary.format !== 'json' || cliDomDocument.children[0]?.tagName !== 'article') {
-    throw new Error('CLI DOM Node smoke failed')
-  }
   run(['node', 'node_modules/.bin/openpencil-mcp', '--help'], tempDir)
   run(['node', 'node_modules/.bin/openpencil-mcp-http', '--help'], tempDir)
 

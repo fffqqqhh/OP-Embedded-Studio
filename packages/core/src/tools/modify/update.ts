@@ -1,10 +1,6 @@
 import type { SceneNode } from '@open-pencil/scene-graph'
 
-import {
-  ALLOW_OVERLAP_PLUGIN_KEY,
-  DESIGN_ROLE_PLUGIN_KEY,
-  DESIGN_ROLES
-} from '#core/design-semantics'
+import { assertNodeEditable } from '#core/editor/capabilities'
 import { defineTool, nodeNotFound } from '#core/tools/schema'
 
 export const updateNode = defineTool({
@@ -34,20 +30,12 @@ export const updateNode = defineTool({
     },
     font_size: { type: 'number', description: 'Font size', min: 1 },
     font_weight: { type: 'number', description: 'Font weight (100-900)' },
-    name: { type: 'string', description: 'Layer name' },
-    design_role: {
-      type: 'string',
-      description: 'Validation role for this layer',
-      enum: [...DESIGN_ROLES]
-    },
-    allow_overlap: {
-      type: 'boolean',
-      description: 'Allow intentional overlap for a non-text decorative layer'
-    }
+    name: { type: 'string', description: 'Layer name' }
   },
   execute: (figma, args) => {
     const node = figma.getNodeById(args.id)
     if (!node) return nodeNotFound(args.id)
+    assertNodeEditable(figma.graph, args.id)
     const updated: string[] = []
     if (args.x !== undefined) {
       node.x = args.x
@@ -100,14 +88,6 @@ export const updateNode = defineTool({
     if (args.font_weight !== undefined) {
       figma.graph.updateNode(node.id, { fontWeight: args.font_weight })
       updated.push('fontWeight')
-    }
-    if (args.design_role !== undefined) {
-      node.setPluginData(DESIGN_ROLE_PLUGIN_KEY, args.design_role)
-      updated.push('designRole')
-    }
-    if (args.allow_overlap !== undefined) {
-      node.setPluginData(ALLOW_OVERLAP_PLUGIN_KEY, String(args.allow_overlap))
-      updated.push('allowOverlap')
     }
     return { id: args.id, updated }
   }

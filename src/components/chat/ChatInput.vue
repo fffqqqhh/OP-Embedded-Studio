@@ -1,76 +1,86 @@
 <script setup lang="ts">
 import { useFileDialog } from '@vueuse/core'
 import { TooltipProvider } from 'reka-ui'
-import { computed, nextTick, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 
-import type { FileUIPart } from 'ai'
-import { ACP_AGENTS } from '@open-pencil/core/constants'
+import ChatProfileSelect from '@/components/chat/ChatProfileSelect.vue'
+import ProviderModelSelect from '@/components/chat/ProviderModelSelect.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import InputGroup from '@/components/ui/InputGroup.vue'
+import { useAIChat } from '@/app/ai/chat/use'
+import { designModelProfile, designModelProfiles } from '@/app/ai/models'
+import {
+  createImagePreviewURL,
+  revokeImagePreviewURL,
+  validateImageAttachmentFile
+} from '@/app/ai/attachment/image/prepare'
+import { MAX_IMAGE_ATTACHMENTS, type ImageAttachmentDraft } from '@/app/ai/attachment/image/types'
+import { openSettingsDialog } from '@/app/settings/dialog'
 import { useI18n } from '@open-pencil/vue'
 
-import {
-  CHAT_IMAGE_ACCEPT,
-  CHAT_IMAGE_MAX_COUNT,
-  prepareChatImage
-} from '@/app/ai/chat/attachments'
-import { modelSupportsImageInput } from '@/app/ai/chat/model'
-import { useAIChat } from '@/app/ai/chat/use'
-import { toast } from '@/app/shell/ui'
-import ProviderModelSelect from '@/components/chat/ProviderModelSelect.vue'
-import ProviderSettings from '@/components/chat/ProviderSettings/ProviderSettings.vue'
-import ChatScreenSelect from '@/components/chat/ChatScreenSelect.vue'
-import Tip from '@/components/ui/Tip.vue'
-import { useButtonUI } from '@/components/ui/button'
+import { ACP_AGENTS } from '@open-pencil/core/constants'
 
 const { providerID, providerDef, modelID, customModelID } = useAIChat()
 const { dialogs } = useI18n()
 
-const { status } = defineProps<{
+const { status, disabled = false } = defineProps<{
   status: 'ready' | 'submitted' | 'streaming' | 'error'
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
-  submit: [text: string, files: FileUIPart[]]
+  submit: [text: string, images: ImageAttachmentDraft[]]
   stop: []
+  error: [message: string]
 }>()
 
 const input = ref('')
-const textarea = ref<HTMLTextAreaElement>()
-const attachments = ref<FileUIPart[]>([])
-const isPreparing = ref(false)
-const isDragging = ref(false)
-
+const images = ref<ImageAttachmentDraft[]>([])
 const {
-  open: openFiles,
-  reset: resetFiles,
-  onChange
+  open: openImageDialog,
+  reset: resetImageDialog,
+  onChange: onImageChange
 } = useFileDialog({
-  accept: CHAT_IMAGE_ACCEPT,
+  accept: 'image/png,image/jpeg,image/webp',
   multiple: true,
   reset: true
 })
 
-const isStreaming = computed(() => status === 'streaming' || status === 'submitted')
-const supportsImages = computed(() =>
-  modelSupportsImageInput({
-    providerID: providerID.value,
-    modelID: modelID.value,
-    customModelID: customModelID.value
-  })
+function addImageFiles(files: File[]) {
+  const available = MAX_IMAGE_ATTACHMENTS - images.value.length
+  if (available <= 0) {
+    emit('error', `You can attach up to ${MAX_IMAGE_ATTACHMENTS} images.`)
+    resetImageDialog()
+    return
+  }
+
+  for (const file of files.slice(0, available)) {
+    const validationError = validateImageAttachmentFile(file)
+    if (validationError) {
+      emit('error', validationError)
+      continue
+    }
+    images.value.push({ file, previewURL: createImagePreviewURL(file) })
+  }
+  if (files.length > available) {
+    emit('error', `You can attach up to ${MAX_IMAGE_ATTACHMENTS} images.`)
+  }
+  resetImageDialog()
+}
+
+function removeImage(index: number) {
+  const image = images.value[index]
+  if (image) revokeImagePreviewURL(image.previewURL)
+  images.value.splice(index, 1)
+  resetImageDialog()
+}
+
+const isStreaming = computed(() => disabled || status === 'streaming' || status === 'submitted')
+const isAgentProvider = computed(
+  () => providerID.value.startsWith('acp:') || providerID.value === 'harness:pi'
 )
-const inputPlaceholder = computed(() => dialogs.value.describeCreateOrChange)
-const attachmentLabel = computed(() =>
-  supportsImages.value
-    ? dialogs.value.attachReferenceImage
-    : dialogs.value.selectedModelNoImageSupport
-)
-const canSubmit = computed(
-  () =>
-    !isStreaming.value &&
-    !isPreparing.value &&
-    (!!input.value.trim() || attachments.value.length > 0)
-)
-const isACPProvider = computed(() => providerID.value.startsWith('acp:'))
-const acpAgentName = computed(() => {
+const agentName = computed(() => {
+  if (providerID.value === 'harness:pi') return 'Pi'
   const agentId = providerID.value.replace('acp:', '')
   return ACP_AGENTS.find((a) => a.id === agentId)?.name ?? agentId
 })
@@ -81,212 +91,179 @@ const customModelName = computed(() => customModelID.value.trim())
 const usesCustomModel = computed(
   () => !!providerDef.value.supportsCustomModel && !!customModelName.value
 )
+
 const selectedModelName = computed(() => {
   if (usesCustomModel.value) return customModelName.value
   if (isCustomProvider.value) return 'No model'
-  return providerDef.value.models.find((model) => model.id === modelID.value)?.name ?? modelID.value
+  return providerDef.value.models.find((m) => m.id === modelID.value)?.name ?? modelID.value
 })
 
-function resizeTextarea() {
-  nextTick(() => {
-    if (!textarea.value) return
-    textarea.value.style.height = 'auto'
-    textarea.value.style.height = `${Math.min(textarea.value.scrollHeight, 144)}px`
-  })
+// Switching between saved profiles only makes sense once more than one can drive the design agent.
+const switchableProfiles = computed(designModelProfiles)
+const canSwitchProfile = computed(() => switchableProfiles.value.length > 1)
+const selectedProfileName = computed(
+  () => designModelProfile.value?.name ?? selectedModelName.value
+)
+
+function clearImages() {
+  for (const image of images.value) revokeImagePreviewURL(image.previewURL)
+  images.value = []
+  resetImageDialog()
 }
 
-async function addFiles(files: File[]) {
-  if (!supportsImages.value) {
-    toast.error(attachmentLabel.value)
-    return
-  }
-  const remaining = CHAT_IMAGE_MAX_COUNT - attachments.value.length
-  if (remaining <= 0) {
-    toast.error(dialogs.value.referenceImageLimit)
-    return
-  }
-  if (files.length > remaining) toast.error(dialogs.value.referenceImageLimit)
-
-  isPreparing.value = true
-  try {
-    for (const file of files.slice(0, remaining)) {
-      try {
-        attachments.value.push(await prepareChatImage(file))
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error))
-      }
-    }
-  } finally {
-    isPreparing.value = false
-    resetFiles()
-  }
-}
-
-onChange((files) => {
-  if (files) void addFiles(Array.from(files))
+onImageChange((selectedFiles) => {
+  if (selectedFiles) addImageFiles([...selectedFiles])
 })
 
 function handlePaste(event: ClipboardEvent) {
-  const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
-    file.type.startsWith('image/')
-  )
-  if (files.length === 0) return
+  const files = event.clipboardData?.files
+  const images = files ? [...files].filter((file) => file.type.startsWith('image/')) : []
+  if (images.length === 0) return
   event.preventDefault()
-  void addFiles(files)
+  addImageFiles(images)
 }
 
-function handleDrop(event: DragEvent) {
-  isDragging.value = false
-  const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
-    file.type.startsWith('image/')
-  )
-  if (files.length > 0) void addFiles(files)
+onBeforeUnmount(clearImages)
+
+function handleInputKeydown(event: KeyboardEvent) {
+  if (event.code !== 'Enter' || event.shiftKey || event.isComposing) return
+  event.preventDefault()
+  const target = event.currentTarget
+  if (target instanceof HTMLElement) target.closest('form')?.requestSubmit()
 }
 
-function removeAttachment(index: number) {
-  attachments.value.splice(index, 1)
-}
-
-function handleSubmit() {
-  if (!canSubmit.value) return
-  emit('submit', input.value.trim(), [...attachments.value])
+function handleSubmit(e: Event) {
+  e.preventDefault()
+  const text = input.value.trim()
+  if (!text) return
+  const submittedImages = images.value
+  images.value = []
+  resetImageDialog()
+  emit('submit', text, submittedImages)
   input.value = ''
-  attachments.value = []
-  resizeTextarea()
-}
-
-function handleKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
-  event.preventDefault()
-  handleSubmit()
 }
 </script>
 
 <template>
   <TooltipProvider>
-    <div class="shrink-0 border-t border-border p-3">
-      <form
-        class="overflow-hidden rounded-lg border bg-input transition-colors"
-        :class="
-          isDragging
-            ? 'border-accent ring-1 ring-accent'
-            : 'border-border focus-within:border-muted'
-        "
-        @submit.prevent="handleSubmit"
-        @dragenter.prevent="isDragging = true"
-        @dragover.prevent="isDragging = true"
-        @dragleave.prevent="isDragging = false"
-        @drop.prevent="handleDrop"
-      >
-        <div v-if="attachments.length" class="flex gap-2 overflow-x-auto px-2.5 pt-2.5">
-          <div
-            v-for="(attachment, index) in attachments"
-            :key="`${attachment.filename}-${index}`"
-            data-test-id="chat-attachment-preview"
-            class="group relative size-14 shrink-0 overflow-hidden rounded-md border border-border bg-canvas"
-          >
-            <img :src="attachment.url" :alt="attachment.filename" class="size-full object-cover" />
-            <Tip :label="dialogs.removeReferenceImage">
-              <button
-                type="button"
-                class="absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded bg-black/70 text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
-                :aria-label="dialogs.removeReferenceImage"
-                @click="removeAttachment(index)"
+    <div class="shrink-0 border-t border-border p-2.5">
+      <form @submit="handleSubmit" @paste.stop="handlePaste">
+        <InputGroup :disabled="isStreaming">
+          <template v-if="images.length" #attachment>
+            <div class="flex flex-wrap gap-1.5">
+              <div
+                v-for="(image, index) in images"
+                :key="image.previewURL"
+                class="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-border bg-canvas p-1.5 shadow-xs"
               >
-                <icon-lucide-x class="size-3" />
-              </button>
-            </Tip>
-          </div>
-        </div>
-
-        <textarea
-          ref="textarea"
-          v-model="input"
-          data-test-id="chat-input"
-          :placeholder="inputPlaceholder"
-          :disabled="isStreaming"
-          rows="1"
-          class="block max-h-36 min-h-12 w-full resize-none bg-transparent px-3 py-3 text-sm leading-5 text-surface outline-none placeholder:text-muted disabled:opacity-50"
-          @input="resizeTextarea"
-          @keydown="handleKeydown"
-          @paste.stop="handlePaste"
-          @copy.stop
-          @cut.stop
-        />
-
-        <div class="flex h-9 min-w-0 items-center gap-1 border-t border-border/70 px-1.5">
-          <Tip :label="attachmentLabel">
-            <button
-              type="button"
-              data-test-id="chat-attach-button"
-              class="flex size-7 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-hover hover:text-surface disabled:opacity-40"
-              :aria-label="dialogs.attachReferenceImage"
-              :disabled="isStreaming || isPreparing || !supportsImages"
-              @click="openFiles()"
-            >
-              <icon-lucide-paperclip class="size-4" />
-            </button>
-          </Tip>
-
-          <ChatScreenSelect :disabled="isStreaming" />
-
-          <template v-if="isACPProvider">
-            <div class="flex min-w-0 flex-1 items-center gap-1 px-1 text-[11px] text-muted">
-              <icon-lucide-bot class="size-3 shrink-0" />
-              <span class="truncate">{{ acpAgentName }}</span>
+                <img
+                  :src="image.previewURL"
+                  :alt="image.file.name"
+                  width="40"
+                  height="40"
+                  class="size-10 shrink-0 rounded-md border border-border object-cover"
+                />
+                <span class="min-w-0 flex-1 truncate text-[10px] text-surface">
+                  {{ image.file.name }}
+                </span>
+                <IconButton
+                  :label="`Remove image ${image.file.name}`"
+                  size="xs"
+                  @click="removeImage(index)"
+                >
+                  <icon-lucide-x class="size-3" />
+                </IconButton>
+              </div>
             </div>
           </template>
-          <template v-else-if="isCustomProvider || usesCustomModel">
-            <div
-              data-test-id="chat-custom-model-label"
-              class="flex min-w-0 flex-1 items-center gap-1 px-1 text-[11px] text-muted"
+
+          <textarea
+            v-model="input"
+            data-test-id="chat-input"
+            :placeholder="dialogs.describeChange"
+            :disabled="isStreaming"
+            rows="2"
+            aria-label="Describe a change"
+            class="block min-h-12 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-xs leading-relaxed text-surface outline-none placeholder:text-muted disabled:cursor-not-allowed disabled:opacity-60"
+            @keydown="handleInputKeydown"
+            @copy.stop
+            @cut.stop
+          />
+
+          <template #leading>
+            <IconButton
+              label="Attach images"
+              size="sm"
+              :disabled="isStreaming || images.length >= MAX_IMAGE_ATTACHMENTS"
+              @click="openImageDialog()"
             >
-              <icon-lucide-bot class="size-3 shrink-0" />
-              <span class="truncate">{{ selectedModelName }}</span>
+              <icon-lucide-image-plus class="size-4" />
+            </IconButton>
+          </template>
+
+          <template #model>
+            <div class="flex min-w-0 items-center">
+              <template v-if="isAgentProvider">
+                <div class="flex min-w-0 items-center gap-1 px-1.5 text-[10px] text-muted">
+                  <icon-lucide-bot class="size-3 shrink-0" />
+                  <span class="truncate">{{ agentName }}</span>
+                </div>
+              </template>
+              <ChatProfileSelect
+                v-else-if="canSwitchProfile && (isCustomProvider || usesCustomModel)"
+              >
+                <template #value>
+                  <span class="min-w-0 truncate">{{ selectedProfileName }}</span>
+                </template>
+              </ChatProfileSelect>
+              <div
+                v-else-if="isCustomProvider || usesCustomModel"
+                class="flex min-w-0 items-center gap-1 px-1.5 text-[10px] text-muted"
+                data-test-id="chat-custom-model-label"
+              >
+                <icon-lucide-bot class="size-3 shrink-0" />
+                <span class="truncate">{{ selectedModelName }}</span>
+              </div>
+              <ProviderModelSelect v-else>
+                <template #value>
+                  <span class="min-w-0 truncate">{{ selectedModelName }}</span>
+                </template>
+              </ProviderModelSelect>
             </div>
           </template>
-          <ProviderModelSelect v-else>
-            <template #value>{{ selectedModelName }}</template>
-          </ProviderModelSelect>
 
-          <div class="ml-auto flex items-center gap-1">
-            <ProviderSettings />
-            <Tip v-if="isStreaming" :label="dialogs.stopGenerating">
-              <button
-                type="button"
-                data-test-id="chat-stop-button"
-                :class="
-                  useButtonUI({
-                    tone: 'ghost',
-                    shape: 'square',
-                    size: 'sm',
-                    ui: { base: 'size-7 border border-border p-0' }
-                  }).base
-                "
-                @click="emit('stop')"
-              >
-                <icon-lucide-square class="size-3" />
-              </button>
-            </Tip>
-            <Tip v-else :label="dialogs.sendMessage">
-              <button
-                type="submit"
-                data-test-id="chat-send-button"
-                :class="
-                  useButtonUI({
-                    tone: 'accent',
-                    shape: 'square',
-                    size: 'sm',
-                    ui: { base: 'size-7 p-0' }
-                  }).base
-                "
-                :disabled="!canSubmit"
-              >
-                <icon-lucide-arrow-up class="size-4" />
-              </button>
-            </Tip>
-          </div>
-        </div>
+          <template #actions>
+            <IconButton
+              :label="dialogs.providerSettings"
+              size="sm"
+              data-test-id="provider-settings-trigger"
+              @click="openSettingsDialog('ai')"
+            >
+              <icon-lucide-settings class="size-3.5" />
+            </IconButton>
+            <IconButton
+              v-if="isStreaming"
+              :label="dialogs.stopGenerating"
+              size="sm"
+              data-test-id="chat-stop-button"
+              class="border border-border"
+              @click="emit('stop')"
+            >
+              <icon-lucide-square class="size-3" />
+            </IconButton>
+            <IconButton
+              v-else
+              :label="dialogs.sendMessage"
+              size="sm"
+              type="submit"
+              data-test-id="chat-send-button"
+              class="bg-accent text-white hover:bg-accent/90 hover:text-white"
+              :disabled="!input.trim()"
+            >
+              <icon-lucide-send class="size-3.5" />
+            </IconButton>
+          </template>
+        </InputGroup>
       </form>
     </div>
   </TooltipProvider>

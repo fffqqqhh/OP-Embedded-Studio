@@ -10,6 +10,7 @@ export const menuMessageDefaults = {
 
   new: 'New',
   open: 'Open…',
+  openStorageWorkspace: 'Open storage workspace…',
   save: 'Save',
   saveAs: 'Save as…',
   exportSelection: 'Export selection…',
@@ -25,6 +26,13 @@ export const menuMessageDefaults = {
   themeAuto: 'Auto',
   profiler: 'Performance profiler',
   language: 'Language',
+  settings: 'Settings…',
+  rulers: 'Rulers',
+  multiplayerCursors: 'Multiplayer cursors',
+  preferences: 'Preferences',
+  snapToGeometry: 'Snap to geometry',
+  snapToObjects: 'Snap to objects',
+  snapToPixelGrid: 'Snap to pixel grid',
   checkUpdates: 'Check for updates…',
 
   moveToPage: 'Move to page',
@@ -45,7 +53,7 @@ export const menuMessageDefaults = {
 
   pasteHere: 'Paste here',
   pasteToReplace: 'Paste to replace',
-  layersTopFirst: 'Show top layers first (Figma)',
+  renameSelection: 'Rename selection…',
   copyPasteAs: 'Copy/Paste as',
   copyAsText: 'Copy as text',
   copyAsSVG: 'Copy as SVG',
@@ -53,6 +61,7 @@ export const menuMessageDefaults = {
   copyAsJSX: 'Copy as JSX',
   copyNodeId: 'Copy node ID',
   copyXPath: 'Copy XPath',
+  convertToVector: 'Convert to vector',
   booleanOperations: 'Boolean operations',
   arrangeAlignLeft: 'Align left',
   arrangeAlignCenter: 'Align center',
@@ -61,7 +70,10 @@ export const menuMessageDefaults = {
   arrangeAlignMiddle: 'Align middle',
   arrangeAlignBottom: 'Align bottom',
   zoomIn: 'Zoom in',
-  zoomOut: 'Zoom out'
+  zoomOut: 'Zoom out',
+  splitRight: 'Split right',
+  splitDown: 'Split down',
+  closeView: 'Close view'
 } as const
 
 export const menuMessages = i18n('menu', menuMessageDefaults)

@@ -1,46 +1,54 @@
 <script setup lang="ts">
 import { ScrollAreaRoot, ScrollAreaScrollbar, ScrollAreaThumb, ScrollAreaViewport } from 'reka-ui'
-import { refAutoReset, useResizeObserver } from '@vueuse/core'
-import { isReasoningUIPart, isTextUIPart, isToolUIPart } from 'ai'
+import { refAutoReset, useClipboard } from '@vueuse/core'
 import { computed, markRaw, nextTick, ref, watch } from 'vue'
 
-import { getAcpDebugText, clearAcpDebugLog, hasAcpDebugEntries } from '@/app/ai/acp/transport'
-import { describeAIError } from '@/app/ai/chat/errors'
+import { getACPDebugText, clearACPDebugLog, hasACPDebugEntries } from '@/app/ai/acp/transport'
 import { copyChatLog } from '@/app/ai/debug'
+import {
+  analyzeAttachedImages,
+  designMessageWithImageFindings
+} from '@/app/ai/attachment/image/analyze'
+import {
+  createImagePreviewURL,
+  isImageAttachmentMediaType,
+  prepareImageAttachment,
+  revokeImagePreviewURL
+} from '@/app/ai/attachment/image/prepare'
+import {
+  clearImageAttachmentPresentations,
+  setImageAttachmentPresentations
+} from '@/app/ai/attachment/image/presentation'
+import type { ImageAttachmentDraft } from '@/app/ai/attachment/image/types'
 import { clearToolLogEntries, didHitStepLimit } from '@/app/ai/tools'
 import { activeTab } from '@/app/tabs'
-import AcpPermissionDialog from '@/components/chat/AcpPermissionDialog.vue'
+import { getActiveEditorStore } from '@/app/editor/active-store'
+import ACPPermissionDialog from '@/components/chat/ACPPermissionDialog.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ChatMessage from '@/components/chat/ChatMessage.vue'
-import DeviceQuickActions from '@/components/chat/DeviceQuickActions.vue'
+import AppPlaceholder from '@/components/ui/AppPlaceholder.vue'
 import AppTextButton from '@/components/ui/AppTextButton.vue'
 import ProviderSetup from '@/components/chat/ProviderSetup.vue'
 import { useAIChat } from '@/app/ai/chat/use'
 import { toast } from '@/app/shell/ui'
 import { useI18n } from '@open-pencil/vue'
-import {
-  getDevicePrototypeFrameCandidates,
-  getSelectedDevicePrototypeFrameCandidates
-} from '@/app/editor/device-prototype'
-import { useEditorStore } from '@/app/editor/active-store'
+
+import { useNotificationMessages } from '@/app/i18n/notifications'
 
 import type { Chat } from '@ai-sdk/vue'
-import type { FileUIPart, UIMessage } from 'ai'
+import type { UIMessage } from 'ai'
+import type { JSONObject } from '@open-pencil/scene-graph/primitives'
 
 const IS_DEV = import.meta.env.DEV
 
-const {
-  isConfigured,
-  ensureChat,
-  submitLocalDeviceAction,
-  submitLocalDevicePrototypeAction,
-  activeTab: activePropertiesTab,
-  resetChat
-} = useAIChat()
+const { isConfigured, ensureChat, resetChat, chatFailure, clearChatFailure } = useAIChat()
+const { copy } = useClipboard()
 const { dialogs } = useI18n()
-const editorStore = useEditorStore()
+const notifications = useNotificationMessages()
 
 const chat = ref<Chat<UIMessage> | null>(null)
+const isPreparingImages = ref(false)
+let attachmentOperationVersion = 0
 
 void ensureChat()
   .then((c) => {
@@ -48,51 +56,50 @@ void ensureChat()
     return undefined
   })
   .catch((error: unknown) => {
-    toast.error(error instanceof Error ? error.message : 'Failed to initialize chat')
+    toast.error(
+      notifications.value.chatInitializationFailed({
+        error: error instanceof Error ? error.message : String(error)
+      })
+    )
   })
 const messagesEnd = ref<HTMLDivElement>()
-const messagesContainer = ref<HTMLDivElement>()
-const followsLatestMessage = ref(true)
-const localActionPending = ref(false)
 const debugCopied = refAutoReset(false, 1500)
 const acpLogCopied = refAutoReset(false, 1500)
 
 const messages = computed(() => chat.value?.messages ?? [])
-const selectedPrototypeCandidates = computed(() => {
-  void editorStore.state.sceneVersion
-  return getSelectedDevicePrototypeFrameCandidates(editorStore)
+const failureMessage = computed(() => {
+  switch (chatFailure.value?.reason) {
+    case 'insufficient-credit':
+      return dialogs.value.chatInsufficientCredit
+    case 'output-limit':
+      return dialogs.value.chatOutputLimit
+    case 'request-failed':
+      return dialogs.value.chatRequestFailed
+    default:
+      return null
+  }
 })
-const prototypeCandidates = computed(() => {
-  return selectedPrototypeCandidates.value.length >= 2
-    ? selectedPrototypeCandidates.value
-    : getDevicePrototypeFrameCandidates(editorStore)
-})
-const canCreatePrototype = computed(
-  () => prototypeCandidates.value.length >= 2 && prototypeCandidates.value.length <= 10
-)
-const status = computed(() =>
-  localActionPending.value ? 'submitted' : (chat.value?.status ?? 'ready')
-)
-const chatError = computed(() => {
-  const error = chat.value?.error
-  return error ? describeAIError(error) : null
-})
-const activeAssistantId = computed(() => {
-  if (status.value !== 'submitted' && status.value !== 'streaming') return undefined
-  return [...messages.value].reverse().find((message) => message.role === 'assistant')?.id
-})
-const isThinking = computed(() => {
-  if (status.value === 'submitted') return true
-  if (status.value !== 'streaming') return false
-  const activeId = activeAssistantId.value
-  const assistant = activeId ? messages.value.find((message) => message.id === activeId) : undefined
-  if (!assistant) return true
-  return !assistant.parts.some(
-    (part) =>
-      (isTextUIPart(part) && part.text.trim().length > 0) ||
-      (isReasoningUIPart(part) && part.text.trim().length > 0) ||
-      isToolUIPart(part)
+const status = computed(() => chat.value?.status ?? 'ready')
+function isStreamingMessage(message: UIMessage, index: number): boolean {
+  return (
+    message.role === 'assistant' &&
+    index === messages.value.length - 1 &&
+    (status.value === 'submitted' || status.value === 'streaming')
   )
+}
+const isThinking = computed(() => {
+  const s = status.value
+  if (s !== 'submitted' && s !== 'streaming') return false
+  if (messages.value.length === 0) return true
+  const last = messages.value[messages.value.length - 1]
+  if (last.role !== 'assistant') return true
+  const parts = last.parts
+  if (parts.length === 0) return true
+  const lastPart = parts[parts.length - 1] as JSONObject
+  if (lastPart.type === 'step-start') return true
+  if ('toolCallId' in lastPart && lastPart.state === 'output-available') return true
+  if ('toolCallId' in lastPart && lastPart.state === 'output-error') return true
+  return s === 'submitted'
 })
 
 const showContinue = computed(() => {
@@ -102,127 +109,114 @@ const showContinue = computed(() => {
   return last.role === 'assistant' && didHitStepLimit()
 })
 
-function scrollToBottom(force = false) {
-  if (!force && !followsLatestMessage.value) return
+function scrollToBottom() {
   nextTick(() => {
-    messagesEnd.value?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    messagesEnd.value?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   })
 }
 
-function handleViewportScroll(event: Event) {
-  const viewport = event.currentTarget as HTMLElement
-  const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
-  followsLatestMessage.value = distanceFromBottom <= 48
-}
-
-watch(messages, () => scrollToBottom(), { deep: true })
-useResizeObserver(messagesContainer, () => scrollToBottom())
-watch(status, (nextStatus, previousStatus) => {
-  if (previousStatus !== nextStatus && (nextStatus === 'ready' || nextStatus === 'error')) {
-    scrollToBottom()
+watch(messages, scrollToBottom, { deep: true })
+watch(
+  () => chatFailure.value?.reason,
+  (reason) => {
+    if (!reason) return
+    toast.error(failureMessage.value ?? dialogs.value.chatRequestFailed)
   }
-})
+)
 watch(
   () => activeTab.value?.id,
   async () => {
+    attachmentOperationVersion += 1
+    isPreparingImages.value = false
+    clearImageAttachmentPresentations()
     const nextChat = await ensureChat()
     chat.value = nextChat ? markRaw(nextChat) : null
-    followsLatestMessage.value = true
-    scrollToBottom(true)
   }
 )
 
-async function handleSubmit(text: string, files: FileUIPart[] = []) {
-  if (status.value === 'streaming' || status.value === 'submitted') return
-  followsLatestMessage.value = true
-  try {
-    if (!isConfigured.value) {
-      toast.error('AI 服务尚未配置；设备烧录快捷操作仍可直接使用。')
-      return
-    }
-    const c = await ensureChat()
-    if (c) chat.value = markRaw(c)
-  } catch (e) {
-    console.error('Failed to initialize chat:', e)
-    toast.error(e instanceof Error ? e.message : String(e))
+async function handleSubmit(text: string, images: ImageAttachmentDraft[] = []) {
+  if (status.value === 'streaming' || status.value === 'submitted' || isPreparingImages.value) {
+    for (const image of images) revokeImagePreviewURL(image.previewURL)
+    if (images.length > 0) toast.error(dialogs.value.chatRequestFailed)
     return
   }
-  const activeChat = chat.value
-  if (!activeChat) return
-  const sendPromise = activeChat.sendMessage({ text, files })
-  scrollToBottom(true)
-  queueMicrotask(() => scrollToBottom(true))
 
-  void sendPromise.catch((e: unknown) => {
-    console.error('Chat error:', e)
-    if (!chat.value?.error) toast.error(e instanceof Error ? e.message : String(e))
-  })
-}
-
-async function handleFrameQuickAction(): Promise<void> {
-  if (localActionPending.value) return
-  localActionPending.value = true
-  followsLatestMessage.value = true
+  const operationVersion = ++attachmentOperationVersion
+  if (images.length > 0) isPreparingImages.value = true
+  clearChatFailure()
   try {
-    const localChat = await submitLocalDeviceAction('帮我烧录选中的画面')
-    if (localChat) {
-      chat.value = markRaw(localChat)
-      scrollToBottom(true)
+    const currentChat = chat.value ?? (await ensureChat())
+    if (currentChat) chat.value = markRaw(currentChat)
+    if (!currentChat || operationVersion !== attachmentOperationVersion) {
+      for (const image of images) revokeImagePreviewURL(image.previewURL)
+      if (images.length > 0) toast.error(dialogs.value.chatRequestFailed)
+      return
     }
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
-  } finally {
-    localActionPending.value = false
-  }
-}
 
-async function handlePrototypeQuickAction(mode: 'manual' | 'slideshow'): Promise<void> {
-  if (!canCreatePrototype.value || localActionPending.value) return
-  const candidates = prototypeCandidates.value
-  const text =
-    mode === 'slideshow'
-      ? `创建 ${candidates.length} 个画面的幻灯片，每 3 秒自动播放并烧录`
-      : `创建 ${candidates.length} 个画面的手动浏览交互并烧录`
-  localActionPending.value = true
-  followsLatestMessage.value = true
-  try {
-    const localChat = await submitLocalDevicePrototypeAction(text, {
-      intent: text,
-      name:
-        mode === 'slideshow'
-          ? `自动播放 · ${candidates.length} 个画面`
-          : `手动浏览 · ${candidates.length} 个画面`,
-      mode,
-      frameIds: candidates.map((candidate) => candidate.id),
-      initialFrameId: candidates[0]?.id ?? '',
-      transitions: [],
-      manual:
-        mode === 'manual'
-          ? { nextEvent: 'screen_click', previousEvent: 'screen_long_press', loop: true }
-          : undefined,
-      slideshow: mode === 'slideshow' ? { intervalMs: 3000 } : undefined
+    if (images.length === 0) {
+      await currentChat.sendMessage({ text })
+      return
+    }
+
+    const messageId = crypto.randomUUID()
+    currentChat.messages = [
+      ...currentChat.messages,
+      { id: messageId, role: 'user', parts: [{ type: 'text', text }] }
+    ]
+    setImageAttachmentPresentations(
+      messageId,
+      images.map((image) => ({
+        id: crypto.randomUUID(),
+        messageId,
+        name: image.file.name,
+        mediaType: isImageAttachmentMediaType(image.file.type) ? image.file.type : 'image/png',
+        originalWidth: 0,
+        originalHeight: 0,
+        previewWidth: 0,
+        previewHeight: 0,
+        previewURL: image.previewURL,
+        displayText: text
+      }))
+    )
+
+    const preparedImages = await Promise.all(
+      images.map((image) => prepareImageAttachment(image.file))
+    )
+    const findings = await analyzeAttachedImages(getActiveEditorStore(), text, preparedImages)
+    if (operationVersion !== attachmentOperationVersion || chat.value !== currentChat) return
+
+    setImageAttachmentPresentations(
+      messageId,
+      preparedImages.map((prepared, index) => {
+        const image = images[index]
+        const previewURL = createImagePreviewURL(prepared.blob)
+        return {
+          id: crypto.randomUUID(),
+          messageId,
+          name: image?.file.name ?? `Image ${index + 1}`,
+          mediaType: prepared.mediaType,
+          originalWidth: prepared.originalWidth,
+          originalHeight: prepared.originalHeight,
+          previewWidth: prepared.width,
+          previewHeight: prepared.height,
+          previewURL,
+          displayText: text
+        }
+      })
+    )
+    await currentChat.sendMessage({
+      messageId,
+      text: designMessageWithImageFindings(
+        text,
+        images.map((image) => image.file.name),
+        findings
+      )
     })
-    if (localChat) {
-      chat.value = markRaw(localChat)
-      scrollToBottom(true)
-    }
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+  } catch (e) {
+    console.error('Chat error:', e)
+    toast.error(dialogs.value.chatRequestFailed)
   } finally {
-    localActionPending.value = false
-  }
-}
-
-async function handleRetry() {
-  if (!chat.value || status.value === 'streaming' || status.value === 'submitted') return
-  followsLatestMessage.value = true
-  chat.value.clearError()
-  scrollToBottom(true)
-  try {
-    await chat.value.regenerate()
-  } catch (error) {
-    console.error('Chat retry failed:', error)
-    if (!chat.value.error) toast.error(error instanceof Error ? error.message : String(error))
+    if (operationVersion === attachmentOperationVersion) isPreparingImages.value = false
   }
 }
 
@@ -231,184 +225,141 @@ function handleStop() {
 }
 
 async function handleCopyDebug() {
-  await copyChatLog(messages.value)
+  await copyChatLog(messages.value, chatFailure.value)
   debugCopied.value = true
 }
 
-async function handleCopyAcpLog() {
-  const text = getAcpDebugText()
+async function handleCopyACPLog() {
+  const text = getACPDebugText()
   if (!text) return
-  await navigator.clipboard.writeText(text)
+  await copy(text)
   acpLogCopied.value = true
 }
 
 function handleClearChat() {
+  attachmentOperationVersion += 1
+  isPreparingImages.value = false
+  clearChatFailure()
+  clearImageAttachmentPresentations()
   chat.value = null
-  resetChat()
+  void resetChat().catch((error: unknown) => {
+    console.error('Chat reset error:', error)
+  })
   clearToolLogEntries()
-  clearAcpDebugLog()
+  clearACPDebugLog()
 }
 </script>
 
 <template>
   <div data-test-id="chat-panel" class="flex min-w-0 flex-1 flex-col overflow-hidden select-text">
-    <ProviderSetup v-if="!isConfigured && messages.length === 0" />
+    <ProviderSetup v-if="!isConfigured" />
 
-    <ScrollAreaRoot v-if="isConfigured || messages.length > 0" class="min-h-0 flex-1">
-      <ScrollAreaViewport
-        data-test-id="chat-scroll-viewport"
-        class="h-full px-3 py-3 [&>div]:h-full"
-        @scroll.passive="handleViewportScroll"
-      >
-        <!-- Empty state -->
-        <div
-          v-if="messages.length === 0"
-          data-test-id="chat-empty-state"
-          class="flex h-full flex-col items-center justify-center gap-3 text-muted"
-        >
-          <icon-lucide-message-circle class="size-8 opacity-50" />
-          <p class="text-center text-xs">
-            {{ dialogs.describeCreateOrChange }}
-          </p>
-        </div>
-
-        <!-- Messages -->
-        <div
-          v-else
-          ref="messagesContainer"
-          data-test-id="chat-messages"
-          class="flex flex-col gap-3"
-        >
-          <ChatMessage
-            v-for="msg in messages"
-            :key="msg.id"
-            :message="msg"
-            :active="msg.id === activeAssistantId"
-          />
-
-          <!-- Thinking indicator: shown when AI is working but no visible activity -->
-          <div v-if="isThinking" data-test-id="chat-typing-indicator" class="flex gap-2">
-            <div
-              class="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted/20 text-[10px] font-bold text-muted"
-            >
-              AI
-            </div>
-            <div class="flex items-center gap-1 py-2">
-              <span
-                class="size-1.5 animate-bounce rounded-full bg-muted"
-                style="animation-delay: 0ms"
-              />
-              <span
-                class="size-1.5 animate-bounce rounded-full bg-muted"
-                style="animation-delay: 150ms"
-              />
-              <span
-                class="size-1.5 animate-bounce rounded-full bg-muted"
-                style="animation-delay: 300ms"
-              />
-            </div>
-          </div>
-
-          <!-- Continue button when step limit reached -->
-          <div v-if="showContinue" class="flex justify-center py-2">
-            <button
-              class="flex items-center gap-1.5 rounded-full bg-accent/10 px-4 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
-              @click="handleSubmit('Continue where you left off')"
-            >
-              <icon-lucide-play class="size-3" />
-              Continue
-            </button>
-          </div>
-
-          <div
-            v-if="chatError"
-            data-test-id="chat-error"
-            class="border-l-2 border-red-500 bg-red-500/5 px-3 py-2.5"
+    <template v-else>
+      <ScrollAreaRoot class="min-h-0 flex-1">
+        <ScrollAreaViewport class="h-full px-3 py-3 [&>div]:h-full">
+          <AppPlaceholder
+            v-if="messages.length === 0"
+            data-test-id="chat-empty-state"
+            :label="dialogs.describeCreateOrChange"
+            :ui="{ root: 'h-full' }"
           >
-            <div class="flex min-w-0 items-start gap-2">
-              <icon-lucide-circle-alert class="mt-0.5 size-4 shrink-0 text-red-400" />
-              <div class="min-w-0 flex-1">
-                <p class="text-sm leading-5 font-medium text-surface">{{ chatError.title }}</p>
-                <p class="mt-0.5 text-xs leading-4 text-muted">{{ chatError.message }}</p>
-              </div>
-              <button
-                v-if="chatError.retryable"
-                data-test-id="chat-error-retry"
-                type="button"
-                class="flex h-7 shrink-0 items-center gap-1 border border-border px-2 text-xs text-surface transition-colors hover:bg-hover"
-                title="Retry the last response"
-                @click="handleRetry"
+            <template #icon>
+              <icon-lucide-message-circle class="size-5" />
+            </template>
+          </AppPlaceholder>
+
+          <!-- Messages -->
+          <div v-else data-test-id="chat-messages" class="flex flex-col gap-3">
+            <ChatMessage
+              v-for="(msg, index) in messages"
+              :key="msg.id"
+              :message="msg"
+              :streaming="isStreamingMessage(msg, index)"
+            />
+
+            <!-- Thinking indicator: shown when AI is working but no visible activity -->
+            <div v-if="isThinking" data-test-id="chat-typing-indicator" class="flex gap-2">
+              <div
+                class="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted/20 text-[10px] font-bold text-muted"
               >
-                <icon-lucide-rotate-cw class="size-3.5" />
-                Retry
+                AI
+              </div>
+              <div class="flex items-center gap-1 py-2">
+                <span
+                  class="size-1.5 animate-bounce rounded-full bg-muted"
+                  style="animation-delay: 0ms"
+                />
+                <span
+                  class="size-1.5 animate-bounce rounded-full bg-muted"
+                  style="animation-delay: 150ms"
+                />
+                <span
+                  class="size-1.5 animate-bounce rounded-full bg-muted"
+                  style="animation-delay: 300ms"
+                />
+              </div>
+            </div>
+
+            <!-- Continue button when step limit reached -->
+            <div v-if="showContinue" class="flex justify-center py-2">
+              <button
+                class="flex items-center gap-1.5 rounded-full bg-accent/10 px-4 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
+                @click="handleSubmit('Continue where you left off')"
+              >
+                <icon-lucide-play class="size-3" />
+                Continue
               </button>
             </div>
-            <details v-if="chatError.detail !== chatError.message" class="mt-2 pl-6">
-              <summary class="cursor-pointer text-[11px] text-muted">Technical details</summary>
-              <p class="mt-1 break-words text-[11px] leading-4 text-red-300/80">
-                {{ chatError.detail }}
-              </p>
-            </details>
+
+            <div ref="messagesEnd" />
           </div>
+        </ScrollAreaViewport>
+        <ScrollAreaScrollbar orientation="vertical" class="flex w-1.5 touch-none p-px select-none">
+          <ScrollAreaThumb class="relative flex-1 rounded-full bg-muted/30" />
+        </ScrollAreaScrollbar>
+      </ScrollAreaRoot>
 
-          <div ref="messagesEnd" />
-        </div>
-      </ScrollAreaViewport>
-      <ScrollAreaScrollbar orientation="vertical" class="flex w-1.5 touch-none p-px select-none">
-        <ScrollAreaThumb class="relative flex-1 rounded-full bg-muted/30" />
-      </ScrollAreaScrollbar>
-    </ScrollAreaRoot>
-
-    <!-- Chat toolbar -->
-    <div
-      v-if="messages.length > 0"
-      class="flex shrink-0 items-center gap-1 border-t border-border px-3 py-1"
-    >
-      <AppTextButton
-        v-if="IS_DEV"
-        :aria-label="debugCopied ? 'Chat log copied' : 'Copy chat log'"
-        :title="debugCopied ? 'Chat log copied' : 'Copy chat log'"
-        :ui="{ base: 'flex size-6 items-center justify-center rounded hover:bg-hover' }"
-        @click="handleCopyDebug"
+      <!-- Chat toolbar -->
+      <div
+        v-if="messages.length > 0"
+        class="flex shrink-0 items-center gap-1 border-t border-border px-3 py-1"
       >
-        <icon-lucide-clipboard-copy v-if="!debugCopied" class="size-3" />
-        <icon-lucide-check v-else class="size-3 text-green-400" />
-        <span class="sr-only">{{ debugCopied ? 'Copied' : 'Copy chat log' }}</span>
-      </AppTextButton>
-      <AppTextButton
-        v-if="IS_DEV && hasAcpDebugEntries()"
-        :aria-label="acpLogCopied ? 'ACP log copied' : 'Copy ACP log'"
-        :title="acpLogCopied ? 'ACP log copied' : 'Copy ACP log'"
-        :ui="{ base: 'flex size-6 items-center justify-center rounded hover:bg-hover' }"
-        @click="handleCopyAcpLog"
-      >
-        <icon-lucide-bug v-if="!acpLogCopied" class="size-3" />
-        <icon-lucide-check v-else class="size-3 text-green-400" />
-        <span class="sr-only">{{ acpLogCopied ? 'Copied' : 'Copy ACP log' }}</span>
-      </AppTextButton>
-      <AppTextButton
-        aria-label="Clear chat"
-        title="Clear chat"
-        :ui="{ base: 'flex size-6 items-center justify-center rounded hover:bg-hover' }"
-        @click="handleClearChat"
-      >
-        <icon-lucide-trash-2 class="size-3" />
-        <span class="sr-only">Clear chat</span>
-      </AppTextButton>
-    </div>
+        <AppTextButton
+          v-if="IS_DEV"
+          :ui="{ base: 'flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-hover' }"
+          @click="handleCopyDebug"
+        >
+          <icon-lucide-clipboard-copy v-if="!debugCopied" class="size-3" />
+          <icon-lucide-check v-else class="size-3 text-green-400" />
+          {{ debugCopied ? 'Copied' : 'Copy log' }}
+        </AppTextButton>
+        <AppTextButton
+          v-if="IS_DEV && hasACPDebugEntries()"
+          :ui="{ base: 'flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-hover' }"
+          @click="handleCopyACPLog"
+        >
+          <icon-lucide-bug v-if="!acpLogCopied" class="size-3" />
+          <icon-lucide-check v-else class="size-3 text-green-400" />
+          {{ acpLogCopied ? 'Copied' : 'ACP log' }}
+        </AppTextButton>
+        <AppTextButton
+          :ui="{ base: 'flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-hover' }"
+          @click="handleClearChat"
+        >
+          <icon-lucide-trash-2 class="size-3" />
+          Clear
+        </AppTextButton>
+      </div>
 
-    <DeviceQuickActions
-      :status="status"
-      :selected-count="selectedPrototypeCandidates.length"
-      :candidate-count="prototypeCandidates.length"
-      :can-create-prototype="canCreatePrototype"
-      @frame="handleFrameQuickAction"
-      @prototype="handlePrototypeQuickAction"
-      @open-interaction="activePropertiesTab = 'prototype'"
-    />
+      <ChatInput
+        :status="status"
+        :disabled="isPreparingImages"
+        @submit="handleSubmit"
+        @stop="handleStop"
+        @error="toast.error"
+      />
 
-    <ChatInput :status="status" @submit="handleSubmit" @stop="handleStop" />
-
-    <AcpPermissionDialog />
+      <ACPPermissionDialog />
+    </template>
   </div>
 </template>

@@ -4,6 +4,7 @@ import {
   hitTestEditVertex,
   isEndpoint
 } from '#vue/shared/input/node-edit/hit-test'
+import { applyNodeEditSnap } from '#vue/shared/input/node-edit/snap'
 import type { DragEditHandle, DragEditNode, DragState } from '#vue/shared/input/types'
 
 export {
@@ -21,6 +22,7 @@ type NodeEditEditor = Partial<{
   nodeEditRemoveVertex: (vertexIndex: number) => void
   penResumeFromEndpoint: (nodeId: string, endpointVertexIndex: number) => void
   nodeEditAddVertex: (cx: number, cy: number) => void
+  nodeEditPushHistory: () => void
   nodeEditSetHandle: (
     segmentIndex: number,
     tangentField: 'tangentStart' | 'tangentEnd',
@@ -56,6 +58,7 @@ export function handleNodeEditDown(
       es.selectedVertexIndices = new Set()
       es.selectedHandles = new Set([key])
     }
+    nodeEditEditor.nodeEditPushHistory?.()
     setDrag({
       type: 'edit-handle',
       segmentIndex: handleHit.segmentIndex,
@@ -79,6 +82,7 @@ export function handleNodeEditDown(
 
     if (e.metaKey || e.ctrlKey) {
       nodeEditEditor.nodeEditSelectVertex?.(vi, false)
+      nodeEditEditor.nodeEditPushHistory?.()
       setDrag({
         type: 'bend-handle',
         vertexIndex: vi,
@@ -104,6 +108,7 @@ export function handleNodeEditDown(
       origPositions.set(vi, { x: es.vertices[vi].x, y: es.vertices[vi].y })
     }
 
+    nodeEditEditor.nodeEditPushHistory?.()
     setDrag({
       type: 'edit-node',
       startX: cx,
@@ -145,20 +150,24 @@ export function handleNodeEditMove(
   editor: Editor,
   breakMirroring?: boolean,
   continuous?: boolean,
-  lockDirection?: boolean
+  lockDirection?: boolean,
+  disableSnapping?: boolean
 ) {
   const nodeEditEditor = editor as Editor & NodeEditEditor
   if (d.type === 'edit-node') {
-    const dx = cx - d.startX
-    const dy = cy - d.startY
+    const unsnappedDx = cx - d.startX
+    const unsnappedDy = cy - d.startY
     const es = getNodeEditState(editor)
     if (!es) return
+    let snapped = { x: unsnappedDx, y: unsnappedDy }
+    if (disableSnapping) editor.setSnapGuides([])
+    else snapped = applyNodeEditSnap(d, unsnappedDx, unsnappedDy, editor, es)
 
     for (const [idx, orig] of d.origPositions) {
       es.vertices[idx] = {
         ...es.vertices[idx],
-        x: orig.x + dx,
-        y: orig.y + dy
+        x: orig.x + snapped.x,
+        y: orig.y + snapped.y
       }
     }
     editor.requestRepaint()

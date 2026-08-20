@@ -1,4 +1,4 @@
-import { clearInvalidatedTextRenderingData } from './text-picture'
+import { invalidateTextCaches } from './text-picture'
 import type { SceneNode } from './types'
 import { normalizeVectorNetwork } from './vector-network'
 
@@ -14,6 +14,8 @@ const LAYOUT_AFFECTING_KEYS = new Set<string>([
   'width',
   'height',
   'rotation',
+  'flipX',
+  'flipY',
   'parentId',
   'childIds',
   'layoutMode',
@@ -50,15 +52,18 @@ export function updateNodePreview(
 ): Partial<SceneNode> | null {
   const node = graph.nodes.get(id)
   if (!node) return null
+  changes = Object.fromEntries(
+    (Object.entries(changes) as Array<[string, unknown]>).filter(([, value]) => value !== undefined)
+  ) as Partial<SceneNode>
   if ((Object.keys(changes) as (keyof SceneNode)[]).every((key) => node[key] === changes[key])) {
     return null
   }
   const affectsLayout = Object.keys(changes).some((key) => LAYOUT_AFFECTING_KEYS.has(key))
   if (affectsLayout) graph.clearAbsPosCache()
+  if (node.type === 'TEXT') invalidateTextCaches(node, changes)
   const normalizedChanges = changes.vectorNetwork
     ? { ...changes, vectorNetwork: normalizeVectorNetwork(changes.vectorNetwork) }
     : changes
-  clearInvalidatedTextRenderingData(node, normalizedChanges)
   graph.positionPreviewVersion++
   Object.assign(node, normalizedChanges)
   return normalizedChanges

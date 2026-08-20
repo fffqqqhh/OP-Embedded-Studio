@@ -19,6 +19,7 @@ export interface TextEditorState {
   cursor: number
   selectionAnchor: number | null
   paragraph: Paragraph | null
+  paragraphFontGeneration: number
   textDirection: 'LTR' | 'RTL'
 }
 
@@ -34,10 +35,10 @@ export class TextEditor {
   }
 
   private paragraphVerticalOffset(): number {
-    const state = this._state
+    const s = this._state
     const node = this.paragraphNode
-    if (!state?.paragraph || !node) return 0
-    const available = Math.max(0, node.height - state.paragraph.getHeight())
+    if (!s?.paragraph || !node) return 0
+    const available = Math.max(0, node.height - s.paragraph.getHeight())
     if (node.textAlignVertical === 'CENTER') return available / 2
     if (node.textAlignVertical === 'BOTTOM') return available
     return 0
@@ -81,7 +82,16 @@ export class TextEditor {
   }
 
   get state(): TextEditorState | null {
-    return this._state
+    const state = this._state
+    if (
+      state &&
+      this.renderer &&
+      this.paragraphNode &&
+      state.paragraphFontGeneration !== this.renderer.fontGeneration
+    ) {
+      this.rebuildParagraph(this.paragraphNode)
+    }
+    return state
   }
 
   get isActive(): boolean {
@@ -103,6 +113,7 @@ export class TextEditor {
       cursor: node.text.length,
       selectionAnchor: null,
       paragraph: null,
+      paragraphFontGeneration: -1,
       textDirection: resolveNodeTextDirection(node)
     }
     this.rebuildParagraph(node)
@@ -123,12 +134,18 @@ export class TextEditor {
     s.paragraph?.delete()
     this.paragraphNode = node
     s.textDirection = resolveNodeTextDirection(node)
-    s.paragraph = this.renderer.buildParagraph(node)
+    s.paragraph = this.renderer.buildParagraph({ ...node, text: s.text })
+    s.paragraphFontGeneration = this.renderer.fontGeneration
   }
 
   hasSelection(): boolean {
     const s = this._state
     return s !== null && s.selectionAnchor !== null && s.selectionAnchor !== s.cursor
+  }
+
+  /** Character index of the caret, or null when not editing. */
+  get caretIndex(): number | null {
+    return this._state?.cursor ?? null
   }
 
   getSelectionRange(): [number, number] | null {
@@ -253,7 +270,7 @@ export class TextEditor {
     if (!caret) return
     const fontSize = s.paragraph.getLineMetrics()[0]?.height ?? 14
     const y = edge === 'up' ? caret.y0 - fontSize / 2 : caret.y1 + fontSize / 2
-    s.cursor = s.paragraph.getGlyphPositionAtCoordinate(caret.x, y).pos
+    s.cursor = s.paragraph.getGlyphPositionAtCoordinate(caret.x, this.paragraphY(y)).pos
   }
 
   moveUp(extend = false): void {
@@ -270,9 +287,9 @@ export class TextEditor {
     this.prepareMove(extend)
     const metrics = this.currentLineMetrics()
     if (!metrics) return
-    const isRtlStart = s.textDirection === 'RTL' && edge === 'start'
-    const isLtrEnd = s.textDirection !== 'RTL' && edge === 'end'
-    s.cursor = isRtlStart || isLtrEnd ? metrics.endExcludingWhitespaces : metrics.startIndex
+    const isRTLStart = s.textDirection === 'RTL' && edge === 'start'
+    const isLTREnd = s.textDirection !== 'RTL' && edge === 'end'
+    s.cursor = isRTLStart || isLTREnd ? metrics.endExcludingWhitespaces : metrics.startIndex
   }
 
   moveToLineStart(extend = false): void {

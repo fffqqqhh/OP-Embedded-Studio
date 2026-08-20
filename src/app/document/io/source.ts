@@ -9,6 +9,9 @@ import {
 } from '@/app/document/io/names'
 import { createSaveActions } from '@/app/document/io/save'
 import { createDocumentSourceState } from '@/app/document/io/source-state'
+import type { DocumentSourceAccess } from '@/app/document/io/types'
+import { createDocumentRecovery } from '@/app/document/recovery'
+import type { StorageDocumentBinding } from '@/app/integrations/storage/types'
 
 type DocumentSourceState = EditorState & {
   documentName: string
@@ -17,20 +20,11 @@ type DocumentSourceState = EditorState & {
 
 export { createDocumentSourceState }
 
-type DocumentSourceOptions = {
+type DocumentSourceOptions = DocumentSourceAccess & {
   editor: Editor
   state: DocumentSourceState
   stopWatchingFile: () => void
   startWatchingFile: () => Promise<void>
-  getFileHandle: () => FileSystemFileHandle | null
-  setFileHandle: (handle: FileSystemFileHandle | null) => void
-  getFilePath: () => string | null
-  setFilePath: (path: string | null) => void
-  getDownloadName: () => string | null
-  setDownloadName: (name: string | null) => void
-  getSavedVersion: () => number
-  setSavedVersion: (version: number) => void
-  setLastWriteTime: (time: number) => void
   getRenderer: () => Editor['renderer']
 }
 
@@ -45,6 +39,9 @@ export function createDocumentSourceActions({
   setFilePath,
   getDownloadName,
   setDownloadName,
+  getStorageBinding,
+  setStorageBinding,
+  setSourceIdentity,
   getSavedVersion,
   setSavedVersion,
   setLastWriteTime,
@@ -53,6 +50,16 @@ export function createDocumentSourceActions({
   function buildFigFile() {
     return exportFigFile(editor.graph, undefined, getRenderer() ?? undefined, state.currentPageId)
   }
+
+  function buildRecoveryFigFile() {
+    return exportFigFile(editor.graph, undefined, undefined, state.currentPageId)
+  }
+
+  const recovery = createDocumentRecovery({
+    state,
+    buildFigFile: buildRecoveryFigFile,
+    hasWritableSource: () => !!getFileHandle() || !!getFilePath() || !!getStorageBinding()
+  })
 
   const { saveFigFile, saveFigFileAs, writeFile } = createSaveActions({
     state,
@@ -63,18 +70,26 @@ export function createDocumentSourceActions({
     setFileHandle,
     getDownloadName,
     setDownloadName,
+    getStorageBinding,
+    setStorageBinding,
+    setSourceIdentity,
     setSavedVersion,
     setLastWriteTime,
     startWatchingFile: () => {
       void startWatchingFile()
-    }
+    },
+    onWriteSuccess: (version) => recovery.markProtectedVersion(version),
+    onDownloadSuccess: (version) => recovery.markProtectedVersion(version)
   })
 
-  const { disposeAutosave } = createAutosave({
+  const autosave = createAutosave({
     state,
     getSavedVersion,
-    hasWritableSource: () => !!getFileHandle() || !!getFilePath(),
-    saveCurrentDocument: async () => writeFile(await buildFigFile())
+    hasWritableSource: () => !!getFileHandle() || !!getFilePath() || !!getStorageBinding(),
+    saveCurrentDocument: async (version) => {
+      const data = await buildFigFile()
+      await writeFile(data, version)
+    }
   })
 
   function setDocumentSource(
@@ -84,18 +99,35 @@ export function createDocumentSourceActions({
     path?: string
   ) {
     stopWatchingFile()
+    setStorageBinding(null)
     const isFig = sourceFormat === 'fig'
     setFileHandle(isFig ? (handle ?? null) : null)
     setFilePath(isFig ? (path ?? null) : null)
     setDownloadName(figDownloadName(fileName, sourceFormat))
+    setSourceIdentity({ handle: handle ?? null, path: path ?? null })
     setSavedVersion(state.sceneVersion)
+    void recovery.markProtectedVersion(state.sceneVersion)
     if (isFig && (handle || path)) {
       void startWatchingFile()
     }
   }
 
+  function setStorageDocumentSource(binding: StorageDocumentBinding, documentName: string) {
+    stopWatchingFile()
+    setFileHandle(null)
+    setFilePath(null)
+    setDownloadName(`${documentName}.fig`)
+    setSourceIdentity({ handle: null, path: null })
+    setStorageBinding(binding)
+    state.documentName = documentName
+    state.autosaveEnabled = true
+    setSavedVersion(state.sceneVersion)
+    void recovery.markProtectedVersion(state.sceneVersion)
+  }
+
   function setPlannedFilePath(path: string) {
     stopWatchingFile()
+    setStorageBinding(null)
     setFileHandle(null)
     setFilePath(path)
     const downloadName = downloadNameFromPath(path)
@@ -109,15 +141,23 @@ export function createDocumentSourceActions({
 
   function disposeDocumentIO() {
     stopWatchingFile()
-    disposeAutosave()
+    autosave.disposeAutosave()
+    recovery.disposeRecovery()
   }
 
   return {
     setDocumentSource,
+    setStorageDocumentSource,
     setPlannedFilePath,
     startWatchingCurrentFile,
     disposeDocumentIO,
     saveFigFile,
-    saveFigFileAs
+    saveFigFileAs,
+    getStorageBinding,
+    getRecoveryId: () => recovery.getRecoveryId(),
+    adoptRecoverySnapshot: (id: string, version: number) =>
+      recovery.adoptRecoverySnapshot(id, version),
+    persistRecoveryNow: () => recovery.persistNow(),
+    discardRecovery: () => recovery.discardRecovery()
   }
 }

@@ -1,7 +1,9 @@
 use serde::Deserialize;
-use tauri::menu::{MenuBuilder, MenuItemBuilder, Submenu, SubmenuBuilder};
+use tauri::menu::{
+    CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, MenuItemKind, Submenu, SubmenuBuilder,
+};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::menu::PredefinedMenuItem;
 
 #[derive(Deserialize)]
@@ -17,6 +19,8 @@ struct MenuEntry {
     id: Option<String>,
     label: Option<String>,
     accelerator: Option<String>,
+    #[serde(default)]
+    checkbox: bool,
     #[serde(default)]
     sub: Vec<MenuEntry>,
 }
@@ -41,12 +45,50 @@ fn build_submenu<R: tauri::Runtime>(
             continue;
         }
 
+        // Ordinary menu accelerators emit a frontend command without preserving the
+        // WebView's focused editing control. Native edit items let WebKit/WebView2
+        // route copy, cut, and paste to inputs or dispatch canvas clipboard events.
+        // Keep Linux on the frontend path: muda's native edit items require optional
+        // X11 automation and are explicitly unsupported on Wayland.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(id) = entry.id.as_deref() {
+            let native_edit_item = match id {
+                "copy" => Some(PredefinedMenuItem::copy(app, Some(label))?),
+                "cut" => Some(PredefinedMenuItem::cut(app, Some(label))?),
+                "paste" => Some(PredefinedMenuItem::paste(app, Some(label))?),
+                _ => None,
+            };
+            if let Some(item) = native_edit_item {
+                builder = builder.item(&item);
+                continue;
+            }
+        }
+
+        if entry.checkbox {
+            let mut item = CheckMenuItemBuilder::new(label).checked(true);
+            if let Some(id) = &entry.id {
+                item = item.id(id);
+            }
+            if let Some(accelerator) = &entry.accelerator {
+                item = item.accelerator(accelerator);
+            }
+            builder = builder.item(&item.build(app)?);
+            continue;
+        }
+
         let mut item = MenuItemBuilder::new(label);
         if let Some(id) = &entry.id {
             item = item.id(id);
         }
-        if let Some(accelerator) = &entry.accelerator {
-            item = item.accelerator(accelerator);
+        // On Linux, muda's predefined edit commands depend on optional X11
+        // automation and do not work on Wayland. Leave these accelerators to the
+        // WebView instead, which preserves native input and canvas paste events.
+        let webview_handles_accelerator = cfg!(target_os = "linux")
+            && matches!(entry.id.as_deref(), Some("copy" | "cut" | "paste"));
+        if !webview_handles_accelerator {
+            if let Some(accelerator) = &entry.accelerator {
+                item = item.accelerator(accelerator);
+            }
         }
         builder = builder.item(&item.build(app)?);
     }
@@ -64,14 +106,72 @@ fn build_schema_menus<R: tauri::Runtime>(
         .collect()
 }
 
+fn find_menu_item<R: tauri::Runtime>(
+    items: Vec<MenuItemKind<R>>,
+    id: &str,
+) -> Option<MenuItemKind<R>> {
+    for item in items {
+        if item.id().0 == id {
+            return Some(item);
+        }
+        if let MenuItemKind::Submenu(submenu) = &item {
+            if let Ok(children) = submenu.items() {
+                if let Some(found) = find_menu_item(children, id) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+pub fn native_menu_checked<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    id: String,
+) -> Result<bool, String> {
+    let menu = app
+        .menu()
+        .ok_or_else(|| "Application menu is unavailable".to_string())?;
+    let item = find_menu_item(menu.items().map_err(|error| error.to_string())?, &id)
+        .ok_or_else(|| format!("Menu item not found: {id}"))?;
+    match item {
+        MenuItemKind::Check(item) => item.is_checked().map_err(|error| error.to_string()),
+        _ => Err(format!("Menu item is not checkable: {id}")),
+    }
+}
+
+#[tauri::command]
+pub fn set_native_menu_checked<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    id: String,
+    checked: bool,
+) -> Result<(), String> {
+    let menu = app
+        .menu()
+        .ok_or_else(|| "Application menu is unavailable".to_string())?;
+    let item = find_menu_item(menu.items().map_err(|error| error.to_string())?, &id)
+        .ok_or_else(|| format!("Menu item not found: {id}"))?;
+    match item {
+        MenuItemKind::Check(item) => item.set_checked(checked).map_err(|error| error.to_string()),
+        _ => Err(format!("Menu item is not checkable: {id}")),
+    }
+}
+
 pub fn install_app_menu<R: tauri::Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
-    let app_menu = SubmenuBuilder::new(app, "OP Embedded Studio")
+    let app_menu = SubmenuBuilder::new(app, "OpenPencil")
         .item(&PredefinedMenuItem::about(
             app,
-            Some("About OP Embedded Studio"),
+            Some("About OpenPencil"),
             None,
         )?)
+        .item(
+            &MenuItemBuilder::new("Check for Updates…")
+                .id("check-updates")
+                .build(app)?,
+        )
+        .separator()
         .item(&PredefinedMenuItem::services(app, None)?)
         .separator()
         .item(&PredefinedMenuItem::hide(app, None)?)
