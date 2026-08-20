@@ -17,7 +17,6 @@ import { canMakeBooleanSourceNode } from '#core/canvas/boolean'
 import { flattenNodesToVectorProps } from '#core/canvas/flatten'
 import { IS_BROWSER } from '#core/constants'
 import type { RasterExportFormat } from '#core/io/formats/raster'
-import { documentFontStatus, type DocumentFontStatus } from '#core/text/font/status'
 
 import { combineComponentsAsVariants } from './components'
 import type {

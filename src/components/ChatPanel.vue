@@ -12,6 +12,7 @@ import { activeTab } from '@/app/tabs'
 import AcpPermissionDialog from '@/components/chat/AcpPermissionDialog.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ChatMessage from '@/components/chat/ChatMessage.vue'
+import DeviceQuickActions from '@/components/chat/DeviceQuickActions.vue'
 import AppTextButton from '@/components/ui/AppTextButton.vue'
 import ProviderSetup from '@/components/chat/ProviderSetup.vue'
 import { useAIChat } from '@/app/ai/chat/use'
@@ -396,51 +397,15 @@ function handleClearChat() {
       </AppTextButton>
     </div>
 
-    <div
-      v-if="status !== 'streaming' && status !== 'submitted'"
-      data-test-id="device-quick-actions"
-      class="scrollbar-thin flex shrink-0 gap-1.5 overflow-x-auto px-3 pt-1.5 pb-1"
-    >
-      <button
-        v-if="selectedPrototypeCandidates.length < 2"
-        data-test-id="device-quick-deploy-frame"
-        type="button"
-        class="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-panel-field px-2.5 text-[11px] text-surface shadow-sm hover:bg-panel-field-hover"
-        @click="handleFrameQuickAction"
-      >
-        <icon-lucide-monitor-up class="size-3.5 text-accent" />
-        烧录选中的画面
-      </button>
-      <button
-        v-if="canCreatePrototype"
-        data-test-id="device-quick-deploy-prototype"
-        type="button"
-        class="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-panel-field px-2.5 text-[11px] text-surface shadow-sm hover:bg-panel-field-hover"
-        @click="handlePrototypeQuickAction('manual')"
-      >
-        <icon-lucide-git-branch class="size-3.5 text-accent" />
-        手动浏览 {{ prototypeCandidates.length }} 个画面
-      </button>
-      <button
-        v-if="canCreatePrototype"
-        data-test-id="device-quick-deploy-slideshow"
-        type="button"
-        class="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-panel-field px-2.5 text-[11px] text-surface shadow-sm hover:bg-panel-field-hover"
-        @click="handlePrototypeQuickAction('slideshow')"
-      >
-        <icon-lucide-play class="size-3.5 text-accent" />
-        自动播放 {{ prototypeCandidates.length }} 个画面
-      </button>
-      <button
-        v-if="canCreatePrototype"
-        type="button"
-        class="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-panel-field px-2.5 text-[11px] text-surface shadow-sm hover:bg-panel-field-hover"
-        @click="activePropertiesTab = 'prototype'"
-      >
-        <icon-lucide-sliders-horizontal class="size-3.5 text-accent" />
-        自定义交互
-      </button>
-    </div>
+    <DeviceQuickActions
+      :status="status"
+      :selected-count="selectedPrototypeCandidates.length"
+      :candidate-count="prototypeCandidates.length"
+      :can-create-prototype="canCreatePrototype"
+      @frame="handleFrameQuickAction"
+      @prototype="handlePrototypeQuickAction"
+      @open-interaction="activePropertiesTab = 'prototype'"
+    />
 
     <ChatInput :status="status" @submit="handleSubmit" @stop="handleStop" />
 
