@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Enable the desktop automation bridge to discover and reuse its existing MCP connection.
 - Open multiple selected design files in separate tabs, continuing later selections when one file fails.
 - Align Frame and interaction screen previews to the same device viewport sizing, and use short numbered names for newly created preset Frames.
 - Pan the canvas horizontally with Shift+wheel while preserving native horizontal trackpad movement and existing Ctrl/Meta zoom gestures.
