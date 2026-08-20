@@ -35,6 +35,7 @@
 
 ### Fixes
 
+- Complete vector drags even when an overlay captures the mouse release.
 - Let USB deployment accept selected image nodes as well as Frames, expose direct multi-screen interaction burning for dragged images or multiple Frames, and apply centered crop/padding fallback when source dimensions differ from the target device. Deployment errors now show the cause and the correct recovery action, newer plans retire older pending cards, and successful or superseded cards collapse into compact history rows.
 - Let the Design model distinguish conversation from canvas changes while treating concise contextual directions as continuous edits, without a local keyword gate that can disable rendering.
 - Restore the native Design chat stream lifecycle, allow one text-only summary step after the single JSX render, hide false thinking and zero-operation states once visible output exists, and accept common model-generated SVG path wrappers.

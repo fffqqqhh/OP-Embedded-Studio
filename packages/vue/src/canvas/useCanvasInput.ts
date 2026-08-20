@@ -291,9 +291,14 @@ export function useCanvasInput(
       editor.setHoveredNode(null)
     }
   })
-  useEventListener(window, 'mouseup', () => {
-    if (drag.value) onMouseUp()
-  })
+  useEventListener(
+    window,
+    'mouseup',
+    () => {
+      if (drag.value) onMouseUp()
+    },
+    { capture: true }
+  )
 
   setupPanZoom(canvasRef, editor, drag, onMouseDown, onMouseMove, onMouseUp)
   return {
