@@ -76,7 +76,7 @@ export function useAppMenu() {
     }))
   )
 
-  function exportSelection(format: 'png' | 'svg' | 'fig') {
+  function exportSelection(format: 'png' | 'svg' | 'pptx' | 'fig') {
     if (store.state.selectedIds.size > 0) void store.exportSelection(1, format)
   }
 
@@ -93,6 +93,7 @@ export function useAppMenu() {
     paste: () => void executeClipboardCommand(store, 'paste'),
     'export-png': () => exportSelection('png'),
     'export-svg': () => exportSelection('svg'),
+    'export-pptx': () => exportSelection('pptx'),
     'export-fig': () => exportSelection('fig'),
     ...createSharedEditorMenuActions(setTheme)
   }
