@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Open multiple selected design files in separate tabs, continuing later selections when one file fails.
 - Align Frame and interaction screen previews to the same device viewport sizing, and use short numbered names for newly created preset Frames.
 - Pan the canvas horizontally with Shift+wheel while preserving native horizontal trackpad movement and existing Ctrl/Meta zoom gestures.
 - Add an isolated PNG animation interaction firmware. Each state owns an ordered PNG sequence, its playback speed and loop behavior, while screen and BOOT events can interrupt playback and enter another state. It is installed only from the Interaction panel and uses a separate 32MB firmware/content layout, leaving ordinary Frame, PNG sequence, and Burn-panel workflows unchanged.

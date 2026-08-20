@@ -22,6 +22,7 @@ declare global {
   }
 
   interface FilePickerOptions {
+    multiple?: boolean
     types?: FilePickerAcceptType[]
     suggestedName?: string
   }
