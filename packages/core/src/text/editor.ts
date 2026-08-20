@@ -26,10 +26,25 @@ export class TextEditor {
   private ck: CanvasKit
   private renderer: SkiaRenderer | null = null
   private _state: TextEditorState | null = null
+  private paragraphNode: SceneNode | null = null
   caretVisible = true
 
   constructor(ck: CanvasKit) {
     this.ck = ck
+  }
+
+  private paragraphVerticalOffset(): number {
+    const state = this._state
+    const node = this.paragraphNode
+    if (!state?.paragraph || !node) return 0
+    const available = Math.max(0, node.height - state.paragraph.getHeight())
+    if (node.textAlignVertical === 'CENTER') return available / 2
+    if (node.textAlignVertical === 'BOTTOM') return available
+    return 0
+  }
+
+  private paragraphY(y: number): number {
+    return y - this.paragraphVerticalOffset()
   }
 
   private prepareMove(extend: boolean): TextEditorState | null {
@@ -98,6 +113,7 @@ export class TextEditor {
     const result = { nodeId: this._state.nodeId, text: this._state.text }
     this._state.paragraph?.delete()
     this._state = null
+    this.paragraphNode = null
     return result
   }
 
@@ -105,6 +121,7 @@ export class TextEditor {
     const s = this._state
     if (!s || !this.renderer) return
     s.paragraph?.delete()
+    this.paragraphNode = node
     s.textDirection = resolveNodeTextDirection(node)
     s.paragraph = this.renderer.buildParagraph(node)
   }
@@ -150,7 +167,7 @@ export class TextEditor {
   setCursorAt(x: number, y: number, extend = false): void {
     const s = this._state
     if (!s?.paragraph) return
-    const pos = s.paragraph.getGlyphPositionAtCoordinate(x, y).pos
+    const pos = s.paragraph.getGlyphPositionAtCoordinate(x, this.paragraphY(y)).pos
     if (extend) {
       if (s.selectionAnchor === null) s.selectionAnchor = s.cursor
     } else {
@@ -173,14 +190,14 @@ export class TextEditor {
   selectWordAt(x: number, y: number): void {
     const s = this._state
     if (!s?.paragraph) return
-    const pos = s.paragraph.getGlyphPositionAtCoordinate(x, y).pos
+    const pos = s.paragraph.getGlyphPositionAtCoordinate(x, this.paragraphY(y)).pos
     this.selectWord(pos)
   }
 
   selectLineAt(x: number, y: number): void {
     const s = this._state
     if (!s?.paragraph) return
-    const pos = s.paragraph.getGlyphPositionAtCoordinate(x, y).pos
+    const pos = s.paragraph.getGlyphPositionAtCoordinate(x, this.paragraphY(y)).pos
     this.selectLine(pos)
   }
 
@@ -318,7 +335,8 @@ export class TextEditor {
       const metrics = s.paragraph.getLineMetrics()
       if (metrics.length === 0) return null
       const line = metrics[0]
-      return { x: line.left, y0: 0, y1: line.height }
+      const offsetY = this.paragraphVerticalOffset()
+      return { x: line.left, y0: offsetY, y1: offsetY + line.height }
     }
 
     let lo: number
@@ -346,10 +364,11 @@ export class TextEditor {
     )
     if (rects.length === 0) return null
     const [left, top, right, bottom] = rects[0].rect
+    const offsetY = this.paragraphVerticalOffset()
     return {
       x: useRight ? right : left,
-      y0: top,
-      y1: bottom
+      y0: top + offsetY,
+      y1: bottom + offsetY
     }
   }
 
@@ -365,9 +384,10 @@ export class TextEditor {
       this.ck.RectHeightStyle.Max,
       this.ck.RectWidthStyle.Tight
     )
+    const offsetY = this.paragraphVerticalOffset()
     return rects.map((r) => {
       const [left, top, right, bottom] = r.rect
-      return { x: left, y: top, width: right - left, height: bottom - top }
+      return { x: left, y: top + offsetY, width: right - left, height: bottom - top }
     })
   }
 }
