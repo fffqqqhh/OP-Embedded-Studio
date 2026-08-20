@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Speed up hit testing for untransformed layer hierarchies while preserving rotated and flipped geometry.
 - Enable the desktop automation bridge to discover and reuse its existing MCP connection.
 - Open multiple selected design files in separate tabs, continuing later selections when one file fails.
 - Align Frame and interaction screen previews to the same device viewport sizing, and use short numbered names for newly created preset Frames.
