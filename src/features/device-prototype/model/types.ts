@@ -13,6 +13,7 @@ export const DEVICE_PROTOTYPE_MAX_STATES = 10
 
 export type DevicePrototypeEventId = (typeof DEVICE_PROTOTYPE_EVENTS)[number]['id']
 export type DevicePrototypeMode = 'manual' | 'slideshow' | 'custom'
+export type DevicePrototypePortDirection = 'top' | 'right' | 'bottom' | 'left'
 
 const STOPWATCH_EVENT_IDS = new Set<DevicePrototypeEventId>([
   'stopwatch_button_a_click',
@@ -62,6 +63,8 @@ export interface DevicePrototypeTransition {
   fromStateId: string
   event: DevicePrototypeEventId
   toStateId: string
+  fromPort?: DevicePrototypePortDirection
+  toPort?: DevicePrototypePortDirection
 }
 
 export interface DevicePrototypeDefinition {

@@ -10,6 +10,9 @@ function ignoreMarkdownOutsideSource(path: string): boolean {
 
 export const WATCH_IGNORED = [
   '**/desktop/**',
+  // Firmware builds contain tens of thousands of generated ESP-IDF files.
+  // Watching them makes Vite consume gigabytes of memory before serving the app.
+  '**/tools/embedded-display/**',
   '**/packages/cli/**',
   '**/packages/mcp/**',
   '**/packages/docs/**',

@@ -12,7 +12,7 @@ preloadFonts()
 const head = createHead()
 createApp(App).use(router).use(head).mount('#app')
 
-if (!IS_TAURI) {
+if (import.meta.env.PROD && !IS_TAURI) {
   void import('virtual:pwa-register').then(({ registerSW }) => {
     registerSW({ immediate: true })
     return undefined

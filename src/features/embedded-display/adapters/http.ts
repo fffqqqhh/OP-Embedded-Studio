@@ -59,7 +59,14 @@ export function createEmbeddedDisplayHttpAdapter(): EmbeddedDisplayAdapter {
     },
     async getManifest(profileId: string, buildMode: EmbeddedBuildMode) {
       const bundledUrl = bundledFirmwareManifestUrl(profileId, buildMode)
-      if (bundledUrl) return fetchFirmwareManifest(bundledUrl)
+      if (bundledUrl) {
+        try {
+          return await fetchFirmwareManifest(bundledUrl)
+        } catch {
+          // Dev servers may not expose packaged firmware assets; use the local
+          // device service as a fallback instead of disabling the flash action.
+        }
+      }
       const modeQuery = buildMode === 'usb-frame' ? '' : `?mode=${encodeURIComponent(buildMode)}`
       return requestJson<EmbeddedFlashManifest>(
         `/api/artifacts/${encodeURIComponent(profileId)}/manifest.json${modeQuery}`
@@ -82,10 +89,13 @@ export async function prepareWifiFirmwareCredentials(
 }
 
 export function embeddedManifestUrl(profileId: string, buildMode: EmbeddedBuildMode): string {
-  return (
-    bundledFirmwareManifestUrl(profileId, buildMode) ||
-    embeddedArtifactUrl(profileId, 'manifest.json', buildMode)
-  )
+  // Vite's dev server does not serve the packaged firmware directory. Keep
+  // development and runtime manifest URLs aligned with the service fallback.
+  if (!import.meta.env.DEV) {
+    const bundledUrl = bundledFirmwareManifestUrl(profileId, buildMode)
+    if (bundledUrl) return bundledUrl
+  }
+  return embeddedArtifactUrl(profileId, 'manifest.json', buildMode)
 }
 
 export function embeddedArtifactUrl(

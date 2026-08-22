@@ -20,6 +20,7 @@ import type {
 const {
   open,
   inline = false,
+  fitHeight = false,
   interaction,
   renderFrame,
   renderRevision,
@@ -29,6 +30,7 @@ const {
 } = defineProps<{
   open: boolean
   inline?: boolean
+  fitHeight?: boolean
   interaction: DevicePrototypeInteraction | null
   renderFrame?: DevicePrototypeFrameRender
   renderRevision?: number
@@ -309,7 +311,9 @@ onUnmounted(() => {
       v-if="previewVisible"
       :class="
         inline
-          ? 'w-full overflow-hidden rounded-panel border border-border bg-panel-field'
+          ? fitHeight
+            ? 'h-full w-full overflow-hidden rounded-panel border border-border bg-panel-field'
+            : 'w-full overflow-hidden rounded-panel border border-border bg-panel-field'
           : 'fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-6'
       "
       :data-test-id="inline ? 'embedded-content-stage-prototype' : undefined"
@@ -381,27 +385,35 @@ onUnmounted(() => {
         <div
           :class="
             inline
-              ? 'flex min-h-0 flex-col overflow-hidden bg-panel-field'
+              ? fitHeight
+                ? 'flex min-h-0 flex-1 flex-col overflow-hidden bg-panel-field'
+                : 'flex min-h-0 flex-col overflow-hidden bg-panel-field'
               : 'flex min-h-0 flex-1 items-center justify-center gap-6 overflow-auto bg-canvas p-6'
           "
         >
           <div
             :class="
               inline
-                ? 'flex h-52 w-full min-w-0 shrink-0 items-center justify-center p-2'
+                ? fitHeight
+                  ? 'flex min-h-0 min-w-0 flex-1 items-stretch gap-3 p-3'
+                  : 'flex h-52 w-full min-w-0 shrink-0 items-center justify-center p-2'
                 : 'flex min-w-0 flex-col items-center gap-3'
             "
           >
             <div
               :class="
                 inline
-                  ? 'relative max-w-full select-none overflow-hidden bg-black'
+                  ? fitHeight
+                    ? 'relative min-h-0 min-w-0 shrink-0 self-center select-none overflow-hidden bg-black'
+                    : 'relative max-w-full select-none overflow-hidden bg-black'
                   : 'relative max-h-[68vh] max-w-full select-none overflow-hidden rounded-lg bg-black shadow-lg'
               "
               :style="{
-                aspectRatio: `${profile.resolution.width} / ${profile.resolution.height}`,
-                width: inline ? 'min(76%, 192px)' : 'min(68vh, 420px)',
-                maxHeight: inline ? '192px' : undefined,
+                aspectRatio: `${Math.max(1, profile.resolution.width)} / ${Math.max(1, profile.resolution.height)}`,
+                width: inline ? (fitHeight ? 'auto' : 'min(76%, 192px)') : 'min(68vh, 420px)',
+                height: inline && fitHeight ? 'min(100%, 176px)' : undefined,
+                maxWidth: inline && fitHeight ? 'min(100%, 176px)' : undefined,
+                maxHeight: inline ? (fitHeight ? 'calc(100% - 8px)' : '192px') : undefined,
                 backgroundColor:
                   previewUrl && profile.visibleArea?.shape === 'round'
                     ? 'transparent'
@@ -440,6 +452,76 @@ onUnmounted(() => {
                 {{ previewError || '请选择包含状态的交互' }}
               </span>
             </div>
+            <div
+              v-if="inline && fitHeight"
+              class="flex min-w-0 flex-1 flex-col justify-center gap-2 border-l border-border pl-3"
+            >
+              <div class="min-w-0">
+                <p class="truncate text-[11px] font-medium text-surface">
+                  {{ interaction?.name || '未选择交互' }}
+                </p>
+                <p class="mt-1 truncate text-[9px] text-muted">
+                  {{ currentState?.name || '没有可预览的状态' }} · {{ lastEventLabel }}
+                </p>
+              </div>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button
+                  v-if="interaction?.mode === 'slideshow'"
+                  type="button"
+                  class="flex h-7 items-center gap-1 rounded-panel border border-border bg-canvas px-2 text-[9px] text-surface hover:bg-hover"
+                  @click="toggleSlideshow"
+                >
+                  <icon-lucide-play v-if="slideshowPaused" class="size-3" />
+                  <icon-lucide-pause v-else class="size-3" />
+                  {{ slideshowPaused ? '播放' : '暂停' }}
+                </button>
+                <button
+                  type="button"
+                  class="flex size-7 items-center justify-center rounded-panel border border-border bg-canvas text-muted hover:bg-hover hover:text-surface disabled:opacity-50"
+                  :disabled="!interaction"
+                  title="重新开始"
+                  @click="resetPreview"
+                >
+                  <icon-lucide-rotate-ccw class="size-3.5" />
+                </button>
+                <button
+                  v-if="interaction?.mode !== 'slideshow' && isStopwatch"
+                  type="button"
+                  title="触发 StopWatch A 键"
+                  class="flex size-7 select-none items-center justify-center rounded-panel border border-border bg-canvas text-[9px] font-semibold text-surface hover:bg-hover active:scale-95"
+                  @click="dispatch('stopwatch_button_a_click')"
+                >
+                  A
+                </button>
+                <button
+                  v-if="interaction?.mode !== 'slideshow' && isStopwatch"
+                  type="button"
+                  title="触发 StopWatch B 键"
+                  class="flex size-7 select-none items-center justify-center rounded-panel border border-border bg-canvas text-[9px] font-semibold text-surface hover:bg-hover active:scale-95"
+                  @click="dispatch('stopwatch_button_b_click')"
+                >
+                  B
+                </button>
+                <button
+                  v-if="interaction?.mode !== 'slideshow'"
+                  type="button"
+                  class="flex h-7 select-none items-center justify-center rounded-panel border border-border bg-canvas px-2 text-[9px] font-semibold text-surface hover:bg-hover active:scale-95"
+                  @pointerdown="handleBootPointerDown"
+                  @pointerup="handleBootPointerUp"
+                  @pointerleave="handlePointerCancel"
+                  @pointercancel="handlePointerCancel"
+                >
+                  BOOT
+                </button>
+              </div>
+              <p class="text-[9px] text-muted">
+                {{
+                  interaction
+                    ? `${interaction.states.length} 个画面 · ${profile.resolution.width} × ${profile.resolution.height}`
+                    : '添加状态后可直接操作预览'
+                }}
+              </p>
+            </div>
             <p v-if="!inline" class="text-center text-[11px] text-muted">
               {{ profile.name }} · {{ profile.resolution.width }} ×
               {{ profile.resolution.height }} ·
@@ -454,7 +536,7 @@ onUnmounted(() => {
             </p>
           </div>
           <div
-            v-if="inline"
+            v-if="inline && !fitHeight"
             class="grid h-24 w-full min-w-0 shrink-0 grid-rows-3 border-t border-border px-3"
           >
             <p class="flex min-w-0 items-center truncate text-[11px] font-medium text-surface">
@@ -523,7 +605,7 @@ onUnmounted(() => {
             </div>
           </div>
           <div
-            v-else-if="interaction?.mode !== 'slideshow'"
+            v-if="!inline && interaction?.mode !== 'slideshow'"
             class="flex shrink-0 flex-col items-center gap-2"
           >
             <div v-if="isStopwatch" class="flex items-center gap-3">

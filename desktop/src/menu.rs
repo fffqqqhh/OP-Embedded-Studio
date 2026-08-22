@@ -160,10 +160,10 @@ pub fn set_native_menu_checked<R: tauri::Runtime>(
 
 pub fn install_app_menu<R: tauri::Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
-    let app_menu = SubmenuBuilder::new(app, "OpenPencil")
+    let app_menu = SubmenuBuilder::new(app, "OP Embedded Studio")
         .item(&PredefinedMenuItem::about(
             app,
-            Some("About OpenPencil"),
+            Some("About OP Embedded Studio"),
             None,
         )?)
         .item(

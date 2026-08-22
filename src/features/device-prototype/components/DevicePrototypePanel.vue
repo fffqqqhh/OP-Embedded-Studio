@@ -1,28 +1,32 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { SplitterGroup, SplitterPanel, SplitterResizeHandle } from 'reka-ui'
 
-import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { PanelHeader, PanelSection } from '@/components/ui/panel'
 import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 import {
   getActiveEmbeddedDisplayProfile,
-  getActiveEmbeddedImageSettings,
+  getActiveEmbeddedImageSettings
 } from '@/features/embedded-display'
 
+import DevicePrototypeGraph from './DevicePrototypeGraph.vue'
 import DevicePrototypePreview from './DevicePrototypePreview.vue'
+import DevicePrototypeTransitionBar from './DevicePrototypeTransitionBar.vue'
 import { useDevicePrototype } from '../composables/useDevicePrototype'
+import { resolveDevicePrototypeTransitions } from '../model/rules'
 import type {
   DevicePrototypeEventId,
   DevicePrototypeFrameCandidate,
   DevicePrototypeFrameRender,
-  DevicePrototypeMode
+  DevicePrototypeMode,
+  DevicePrototypePortDirection,
+  DevicePrototypeTransition
 } from '../model/types'
 import { DEVICE_PROTOTYPE_MAX_STATES, devicePrototypeEventsForProfile } from '../model/types'
 
 const {
-  active = true,
   scopeKey,
   selectedFrame,
   selectedFrames = [],
@@ -37,37 +41,72 @@ const {
   renderRevision?: number
 }>()
 
-const previewOpen = ref(false)
 const animationFileInput = ref<HTMLInputElement>()
 const animationImportError = ref('')
+const selectedTransitionKey = ref('')
+
 const {
   interactions,
   selectedInteractionId,
   selectedInteraction,
   states,
-  initialStateId,
-  selectedStateId,
   selectedState,
   addInteraction,
-  removeInteraction,
   selectInteraction,
   renameInteraction,
   addFrame,
   addAnimationState,
   addFrames,
-  removeState,
-  moveState,
-  setInitialState,
   setMode,
   setManualEvent,
   setManualLoop,
   setSlideshowInterval,
   setAnimationSettings,
   selectState,
-  transitionTarget,
   setTransition
 } = useDevicePrototype(scopeKey)
 
+const displayProfile = computed(() => getActiveEmbeddedDisplayProfile())
+const imageSettings = computed(() => getActiveEmbeddedImageSettings())
+const imagePlacement = computed(() => imageSettings.value.placement)
+const backgroundColor = computed(() => imageSettings.value.backgroundColor)
+const interactionSelectOptions = computed(() =>
+  interactions.value.map((interaction) => ({ value: interaction.id, label: interaction.name }))
+)
+const modeOptions = [
+  { value: 'manual', label: '手动' },
+  { value: 'slideshow', label: '幻灯片' },
+  { value: 'custom', label: '自定义' }
+]
+const mode = computed({
+  get: () => selectedInteraction.value?.mode ?? 'manual',
+  set: (value: string) => setMode(value as DevicePrototypeMode)
+})
+const displayEvents = computed(() => devicePrototypeEventsForProfile(displayProfile.value.id))
+const eventOptions = computed(() =>
+  displayEvents.value.map((event) => ({ value: event.id, label: event.label }))
+)
+const resolvedTransitions = computed(() =>
+  selectedInteraction.value ? resolveDevicePrototypeTransitions(selectedInteraction.value) : []
+)
+const graphTransitions = computed(() => {
+  if (selectedInteraction.value?.mode !== 'slideshow' || states.value.length < 2) {
+    return resolvedTransitions.value
+  }
+  return states.value.map((state, index) => ({
+    fromStateId: state.id,
+    event: 'screen_click' as DevicePrototypeEventId,
+    toStateId: states.value[(index + 1) % states.value.length].id,
+    label: '自动',
+    selectable: false
+  }))
+})
+const selectedTransition = computed(
+  () =>
+    resolvedTransitions.value.find(
+      (transition) => transitionKey(transition) === selectedTransitionKey.value
+    ) ?? null
+)
 const canAddFrame = computed(
   () =>
     Boolean(selectedFrame?.available) &&
@@ -83,55 +122,36 @@ const addableSelectedFrames = computed(() =>
 const canAddSelection = computed(
   () => addableSelectedFrames.value.length > 0 && states.value.length < DEVICE_PROTOTYPE_MAX_STATES
 )
-const canPreview = computed(() =>
-  Boolean(renderFrame && selectedInteraction.value?.initialStateId && states.value.length)
-)
-const displayProfile = computed(() => getActiveEmbeddedDisplayProfile())
-const imageSettings = computed(() => getActiveEmbeddedImageSettings())
-watch(
-  () => active,
-  (isActive) => {
-    if (!isActive) previewOpen.value = false
-  }
-)
-const interactionOptions = computed(() =>
-  interactions.value.map((interaction) => ({ value: interaction.id, label: interaction.name }))
-)
-const NO_TRANSITION_VALUE = '__device-prototype-no-transition__'
-const transitionOptions = computed(() => [
-  { value: NO_TRANSITION_VALUE, label: '不跳转' },
-  ...states.value.map((state) => ({ value: state.id, label: state.name }))
-])
-const availableEvents = computed(() => devicePrototypeEventsForProfile(displayProfile.value.id))
-const eventOptions = computed(() =>
-  availableEvents.value.map((event) => ({ value: event.id, label: event.label }))
-)
-const modeOptions = [
-  { value: 'manual', label: '手动' },
-  { value: 'slideshow', label: '幻灯片' },
-  { value: 'custom', label: '自定义' }
-]
-const mode = computed({
-  get: () => selectedInteraction.value?.mode ?? 'manual',
-  set: (value: string) => setMode(value as DevicePrototypeMode)
-})
-
-const nextEvent = computed({
-  get: () => selectedInteraction.value?.manual.nextEvent ?? 'screen_click',
-  set: (value: DevicePrototypeEventId) => setManualEvent('next', value)
-})
-const previousEvent = computed({
-  get: () => selectedInteraction.value?.manual.previousEvent ?? 'screen_long_press',
-  set: (value: DevicePrototypeEventId) => setManualEvent('previous', value)
-})
-const slideshowSeconds = computed({
-  get: () => (selectedInteraction.value?.slideshow.intervalMs ?? 3000) / 1000,
-  set: (value: string | number) => setSlideshowInterval(Number(value) * 1000)
-})
 const selectedSourceLabel = computed(() => {
   if (selectedFrames.length > 1) return `已选中 ${selectedFrames.length} 个画面`
   return selectedFrame?.name || '未选中画面'
 })
+const nextEvent = computed(() => selectedInteraction.value?.manual.nextEvent ?? 'screen_click')
+const previousEvent = computed(
+  () => selectedInteraction.value?.manual.previousEvent ?? 'screen_long_press'
+)
+const slideshowSeconds = computed(
+  () => (selectedInteraction.value?.slideshow.intervalMs ?? 3000) / 1000
+)
+const selectedAnimationDelay = computed(() => selectedState.value?.animation?.frameDelayMs ?? 50)
+
+function transitionKey(transition: DevicePrototypeTransition): string {
+  return `${transition.fromStateId}:${transition.event}:${transition.toStateId}`
+}
+
+watch(
+  () => [selectedInteractionId.value, resolvedTransitions.value.map(transitionKey).join('|')],
+  () => {
+    if (
+      !resolvedTransitions.value.some(
+        (transition) => transitionKey(transition) === selectedTransitionKey.value
+      )
+    ) {
+      selectedTransitionKey.value = ''
+    }
+  },
+  { immediate: true }
+)
 
 function addSelectedSources() {
   if (addableSelectedFrames.value.length > 0) addFrames(addableSelectedFrames.value)
@@ -164,37 +184,85 @@ async function importAnimationState(event: Event) {
   }
 }
 
-function handleManualLoopChange(event: Event) {
-  setManualLoop((event.target as HTMLInputElement).checked)
-}
-
 function handleInteractionNameChange(event: Event) {
   renameInteraction((event.target as HTMLInputElement).value)
 }
 
-function transitionSelectValue(stateId: string, eventId: DevicePrototypeEventId): string {
-  return transitionTarget(stateId, eventId) || NO_TRANSITION_VALUE
+function handleSelectTransition(transition: DevicePrototypeTransition) {
+  selectedTransitionKey.value = transitionKey(transition)
+  selectState(transition.fromStateId)
 }
 
-function updateTransition(eventId: DevicePrototypeEventId, targetId: string) {
-  if (!selectedState.value) return
-  setTransition(selectedState.value.id, eventId, targetId === NO_TRANSITION_VALUE ? '' : targetId)
+function handleConnect(
+  fromStateId: string,
+  toStateId: string,
+  fromPort: DevicePrototypePortDirection,
+  toPort: DevicePrototypePortDirection
+) {
+  if (selectedInteraction.value?.mode !== 'custom') return
+  const usedEvents = new Set(
+    resolvedTransitions.value
+      .filter((transition) => transition.fromStateId === fromStateId)
+      .map((transition) => transition.event)
+  )
+  const event = eventOptions.value.find((option) => !usedEvents.has(option.value))?.value
+  if (!event) return
+  setTransition(fromStateId, event, toStateId, { fromPort, toPort })
+  selectedTransitionKey.value = transitionKey({ fromStateId, event, toStateId })
+  selectState(fromStateId)
 }
 
-const selectedAnimationDelay = computed({
-  get: () => selectedState.value?.animation?.frameDelayMs ?? 50,
-  set: (value: string | number) => {
-    if (selectedState.value?.animation) {
-      setAnimationSettings(selectedState.value.id, { frameDelayMs: Number(value) })
-    }
+function updateTransitionEvent(event: DevicePrototypeEventId) {
+  if (!selectedTransition.value) return
+  const { fromStateId, toStateId, fromPort, toPort } = selectedTransition.value
+  setTransition(fromStateId, event, toStateId, { fromPort, toPort })
+  selectedTransitionKey.value = transitionKey({ fromStateId, event, toStateId })
+}
+
+function updateTransitionTarget(toStateId: string) {
+  if (!selectedTransition.value) return
+  const { fromStateId, event, fromPort, toPort } = selectedTransition.value
+  setTransition(fromStateId, event, toStateId, { fromPort, toPort })
+  selectedTransitionKey.value = toStateId ? transitionKey({ fromStateId, event, toStateId }) : ''
+}
+
+function removeSelectedTransition() {
+  if (!selectedTransition.value) return
+  setTransition(selectedTransition.value.fromStateId, selectedTransition.value.event, '')
+  selectedTransitionKey.value = ''
+}
+
+function removeGraphTransition(transition: DevicePrototypeTransition) {
+  setTransition(transition.fromStateId, transition.event, '')
+  if (selectedTransitionKey.value === transitionKey(transition)) selectedTransitionKey.value = ''
+}
+
+function updateManual(
+  settings: Partial<{
+    nextEvent: DevicePrototypeEventId
+    previousEvent: DevicePrototypeEventId
+    loop: boolean
+  }>
+) {
+  if (settings.nextEvent) setManualEvent('next', settings.nextEvent)
+  if (settings.previousEvent) setManualEvent('previous', settings.previousEvent)
+  if (settings.loop !== undefined) setManualLoop(settings.loop)
+}
+
+function updateSlideshowSeconds(seconds: number) {
+  setSlideshowInterval(seconds * 1000)
+}
+
+function updateAnimationDelay(delay: number) {
+  if (selectedState.value?.animation) {
+    setAnimationSettings(selectedState.value.id, { frameDelayMs: delay })
   }
-})
+}
 
-function handleAnimationLoopChange(event: Event) {
-  if (!selectedState.value?.animation) return
-  setAnimationSettings(selectedState.value.id, {
-    loop: (event.target as HTMLInputElement).checked
-  })
+function updateAnimationLoop(loop: boolean) {
+  if (selectedState.value?.animation) {
+    setAnimationSettings(selectedState.value.id, { loop })
+  }
 }
 </script>
 
@@ -204,264 +272,166 @@ function handleAnimationLoopChange(event: Event) {
       <template #icon>
         <icon-lucide-git-branch class="size-panel-icon" />
       </template>
-      <span role="heading" aria-level="2">{{ selectedInteraction?.name || '交互原型' }}</span>
-      <template #actions>
-        <IconButton label="预览交互" :disabled="!canPreview" @click="previewOpen = true">
-          <icon-lucide-play class="size-3.5" />
-        </IconButton>
-      </template>
+      <span role="heading" aria-level="2">交互设计</span>
     </PanelHeader>
 
-    <div class="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-4">
-      <PanelSection label="交互">
+    <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <PanelSection label="交互方案" class="shrink-0">
         <template #actions>
           <IconButton label="新建交互" @click="addInteraction">
             <icon-lucide-plus class="size-3.5" />
           </IconButton>
-          <IconButton
-            label="删除当前交互"
-            :disabled="interactions.length <= 1"
-            @click="removeInteraction(selectedInteractionId)"
-          >
-            <icon-lucide-trash-2 class="size-3.5" />
-          </IconButton>
         </template>
 
-        <div class="grid gap-panel">
+        <div class="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-2">
           <AppSelect
             :model-value="selectedInteractionId"
-            :options="interactionOptions"
+            :options="interactionSelectOptions"
             label="当前交互"
             @update:model-value="selectInteraction"
           />
-          <label class="grid gap-1 text-[11px] text-muted">
-            名称
-            <input
-              :key="selectedInteractionId"
-              :value="selectedInteraction?.name"
-              class="h-control w-full rounded-panel border border-transparent bg-panel-field px-2 text-xs text-surface outline-none hover:bg-panel-field-hover focus:border-panel-focus"
-              @change="handleInteractionNameChange"
-            />
-          </label>
+          <input
+            :key="selectedInteractionId"
+            :value="selectedInteraction?.name"
+            aria-label="交互方案名称"
+            class="h-control w-full rounded-panel border border-transparent bg-panel-field px-2 text-xs text-surface outline-none hover:bg-panel-field-hover focus:border-panel-focus"
+            @change="handleInteractionNameChange"
+          />
         </div>
       </PanelSection>
 
-      <PanelSection label="模式">
-        <SegmentedControl
-          v-model="mode"
-          :options="modeOptions"
-          label="交互模式"
-          size="md"
-          :ui="{
-            root: 'flex w-full',
-            item: 'min-w-[72px] px-2 font-medium text-surface/80'
-          }"
+      <SplitterGroup direction="vertical" class="min-h-0 flex-1 overflow-hidden">
+        <SplitterPanel
+          :default-size="68"
+          :min-size="48"
+          class="flex min-h-0 flex-col overflow-hidden"
         >
-          <template #option="{ option }">
-            <span class="whitespace-nowrap">{{ option.label }}</span>
-          </template>
-        </SegmentedControl>
+          <PanelSection
+            label="交互状态图"
+            class="min-h-0 flex-1 overflow-hidden"
+            :ui="{
+              root: 'flex min-h-0 flex-1 flex-col',
+              header: 'flex h-9 min-w-0 items-center justify-between gap-2',
+              title: 'min-w-0 truncate text-xs font-semibold text-surface',
+              actions: 'flex h-7 w-auto shrink-0 items-center justify-end gap-1',
+              body: 'min-h-0 flex-1 overflow-hidden'
+            }"
+          >
+            <template #actions>
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1.5 rounded-panel border border-border bg-canvas px-2 text-[10px] font-medium text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="states.length >= DEVICE_PROTOTYPE_MAX_STATES"
+                @click="chooseAnimationFiles"
+              >
+                <icon-lucide-images class="size-3.5" />
+                导入 PNG
+              </button>
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1.5 rounded-panel border border-border bg-canvas px-2 text-[10px] font-medium text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!canAddSelection && !canAddFrame"
+                :aria-label="
+                  canAddSelection || canAddFrame
+                    ? `添加${selectedFrames.length > 1 ? '选中的画面' : '当前画面'}`
+                    : states.length >= DEVICE_PROTOTYPE_MAX_STATES
+                      ? `最多支持 ${DEVICE_PROTOTYPE_MAX_STATES} 个画面`
+                      : selectedFrame?.reason || '请先选中一个 Frame 或图片'
+                "
+                @click="addSelectedSources"
+              >
+                <icon-lucide-plus class="size-3.5" />
+                添加 Frame
+              </button>
+            </template>
 
-        <div v-if="selectedInteraction?.mode === 'manual'" class="mt-panel grid gap-panel">
-          <div class="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-panel">
-            <span class="text-xs font-medium text-surface/80">下一张</span>
-            <AppSelect v-model="nextEvent" :options="eventOptions" label="下一张触发事件" />
-            <span class="text-xs font-medium text-surface/80">上一张</span>
-            <AppSelect v-model="previousEvent" :options="eventOptions" label="上一张触发事件" />
-          </div>
-          <label class="flex h-control items-center gap-2 text-[11px] text-surface">
-            <input
-              type="checkbox"
-              class="size-3.5 accent-accent"
-              :checked="selectedInteraction.manual.loop"
-              @change="handleManualLoopChange"
-            />
-            首尾循环
-          </label>
-        </div>
-
-        <div v-else-if="selectedInteraction?.mode === 'slideshow'" class="mt-panel grid gap-1">
-          <label class="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-panel">
-            <span class="text-[11px] text-muted">停留时间</span>
-            <div class="grid grid-cols-[minmax(0,1fr)_20px] items-center gap-1">
-              <AppInput
-                v-model="slideshowSeconds"
-                type="number"
-                :min="0.5"
-                :max="60"
-                :step="0.5"
-                tone="panel"
-                size="sm"
+            <div class="mb-2 flex min-w-0 items-center gap-2">
+              <SegmentedControl
+                v-model="mode"
+                :options="modeOptions"
+                label="播放方式"
+                class="min-w-0 flex-1"
+                :ui="{ item: 'min-w-0 flex-1 px-2 text-[10px]' }"
               />
-              <span class="text-[11px] text-muted">秒</span>
+              <span class="max-w-24 truncate text-[9px] text-muted">{{ selectedSourceLabel }}</span>
+              <span class="shrink-0 text-[9px] text-muted"
+                >{{ states.length }}/{{ DEVICE_PROTOTYPE_MAX_STATES }}</span
+              >
             </div>
-          </label>
-        </div>
-      </PanelSection>
-
-      <PanelSection label="界面状态" :empty="states.length === 0">
-        <template #actions>
-          <IconButton
-            label="导入 PNG 动画状态"
-            :disabled="states.length >= DEVICE_PROTOTYPE_MAX_STATES"
-            @click="chooseAnimationFiles"
-          >
-            <icon-lucide-images class="size-3.5" />
-          </IconButton>
-          <IconButton
-            :label="
-              canAddSelection || canAddFrame
-                ? `添加${selectedFrames.length > 1 ? '选中的画面' : '当前画面'}`
-                : states.length >= DEVICE_PROTOTYPE_MAX_STATES
-                  ? `最多支持 ${DEVICE_PROTOTYPE_MAX_STATES} 个画面`
-                  : selectedFrame?.reason || '请先选中一个 Frame 或图片'
-            "
-            :disabled="!canAddSelection && !canAddFrame"
-            @click="addSelectedSources"
-          >
-            <icon-lucide-plus class="size-3.5" />
-          </IconButton>
-        </template>
-
-        <div class="mb-panel flex min-w-0 items-center gap-2 text-[11px]">
-          <span class="shrink-0 text-muted">画布选择</span>
-          <span class="min-w-0 flex-1 truncate text-surface">
-            {{ selectedSourceLabel }}
-          </span>
-          <span class="shrink-0 text-muted">
-            {{ states.length }} / {{ DEVICE_PROTOTYPE_MAX_STATES }}
-          </span>
-        </div>
-        <input
-          ref="animationFileInput"
-          type="file"
-          accept="image/png,.png"
-          multiple
-          class="hidden"
-          @change="importAnimationState"
-        />
-        <p v-if="animationImportError" class="mb-panel text-[11px] text-red-300">
-          {{ animationImportError }}
-        </p>
-
-        <p v-if="states.length === 0" class="text-[11px] leading-relaxed text-muted">
-          选中一个 Frame 或图片，然后点击右上角加号添加为第一个界面状态。
-        </p>
-
-        <div v-else class="grid gap-1">
-          <div
-            v-for="state in states"
-            :key="state.id"
-            class="flex min-w-0 items-center gap-1 rounded-panel border px-1 py-1"
-            :class="
-              state.id === selectedStateId ? 'border-panel-focus bg-hover' : 'border-transparent'
-            "
-          >
-            <button
-              type="button"
-              class="min-w-0 flex-1 rounded-panel px-1 py-0.5 text-left hover:bg-hover"
-              @click="selectState(state.id)"
-            >
-              <span class="block truncate text-xs text-surface">{{ state.name }}</span>
-              <span class="block truncate text-[10px] text-muted">
-                {{ state.width }} × {{ state.height }}
-                <template v-if="state.animation">
-                  · {{ state.animation.files.length }} PNG 帧</template
-                >
-                <template v-if="state.id === initialStateId"> · 初始界面</template>
-              </span>
-            </button>
-            <IconButton
-              label="设为初始界面"
-              :active="state.id === initialStateId"
-              @click="setInitialState(state.id)"
-            >
-              <icon-lucide-house class="size-3" />
-            </IconButton>
-            <IconButton
-              label="上移画面"
-              :disabled="states[0]?.id === state.id"
-              @click="moveState(state.id, -1)"
-            >
-              <icon-lucide-chevron-up class="size-3" />
-            </IconButton>
-            <IconButton
-              label="下移画面"
-              :disabled="states.at(-1)?.id === state.id"
-              @click="moveState(state.id, 1)"
-            >
-              <icon-lucide-chevron-down class="size-3" />
-            </IconButton>
-            <IconButton label="移除界面" @click="removeState(state.id)">
-              <icon-lucide-x class="size-3" />
-            </IconButton>
-          </div>
-        </div>
-      </PanelSection>
-
-      <PanelSection v-if="selectedState?.animation" label="动画状态">
-        <div class="grid gap-panel">
-          <label class="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-panel text-[11px]">
-            <span class="text-muted">帧间隔</span>
-            <div class="grid grid-cols-[minmax(0,1fr)_32px] items-center gap-1">
-              <AppInput
-                v-model="selectedAnimationDelay"
-                type="number"
-                :min="16"
-                :max="2000"
-                :step="1"
-                tone="panel"
-                size="sm"
-              />
-              <span class="text-muted">ms</span>
-            </div>
-          </label>
-          <label class="flex h-control items-center gap-2 text-[11px] text-surface">
             <input
-              type="checkbox"
-              class="size-3.5 accent-accent"
-              :checked="selectedState.animation.loop"
-              @change="handleAnimationLoopChange"
+              ref="animationFileInput"
+              type="file"
+              accept="image/png,.png"
+              multiple
+              class="hidden"
+              @change="importAnimationState"
             />
-            循环播放
-          </label>
-        </div>
-      </PanelSection>
+            <p v-if="animationImportError" class="mb-2 text-[10px] text-red-300">
+              {{ animationImportError }}
+            </p>
 
-      <PanelSection
-        v-if="selectedInteraction?.mode === 'custom'"
-        label="事件跳转"
-        :empty="!selectedState"
-      >
-        <p v-if="!selectedState" class="text-[11px] leading-relaxed text-muted">
-          选择一个界面状态后，为点击、长按和 BOOT 操作设置目标界面。
-        </p>
-        <div v-else class="grid gap-1.5">
-          <div
-            v-for="event in availableEvents"
-            :key="event.id"
-            class="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-panel"
-          >
-            <span class="truncate text-[11px] text-muted">{{ event.label }}</span>
-            <AppSelect
-              :model-value="transitionSelectValue(selectedState.id, event.id)"
-              :options="transitionOptions"
-              :label="`${event.label}的目标界面`"
-              @update:model-value="updateTransition(event.id, $event)"
+            <DevicePrototypeGraph
+              :states="states"
+              :initial-state-id="selectedInteraction?.initialStateId || ''"
+              :selected-state-id="selectedState?.id || ''"
+              :selected-transition-key="selectedTransitionKey"
+              :transitions="graphTransitions"
+              :interaction="selectedInteraction"
+              @select-state="selectState"
+              @select-transition="handleSelectTransition"
+              @connect="handleConnect"
+              @remove-transition="removeGraphTransition"
             />
-          </div>
-        </div>
-      </PanelSection>
+          </PanelSection>
+
+          <DevicePrototypeTransitionBar
+            :interaction="selectedInteraction"
+            :states="states"
+            :selected-transition="selectedTransition"
+            :selected-state="selectedState"
+            :selected-animation-delay="selectedAnimationDelay"
+            :event-options="eventOptions"
+            :next-event="nextEvent"
+            :previous-event="previousEvent"
+            :slideshow-seconds="slideshowSeconds"
+            @update-transition-event="updateTransitionEvent"
+            @update-transition-target="updateTransitionTarget"
+            @remove-transition="removeSelectedTransition"
+            @update-manual="updateManual"
+            @update-slideshow-seconds="updateSlideshowSeconds"
+            @update-animation-delay="updateAnimationDelay"
+            @update-animation-loop="updateAnimationLoop"
+          />
+        </SplitterPanel>
+        <SplitterResizeHandle
+          class="group relative z-10 h-2 shrink-0 cursor-row-resize bg-panel-field hover:bg-accent/20"
+          aria-label="调整状态图和实时预览高度"
+        >
+          <div
+            class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border-strong group-hover:bg-accent"
+          />
+        </SplitterResizeHandle>
+        <SplitterPanel :default-size="32" :min-size="24" class="min-h-0 overflow-hidden">
+          <PanelSection
+            label="实时预览"
+            :default-open="true"
+            class="h-full min-h-0 overflow-hidden"
+            :ui="{ root: 'flex min-h-0 flex-col', body: 'min-h-0 flex-1 overflow-hidden' }"
+          >
+            <DevicePrototypePreview
+              :open="true"
+              :inline="true"
+              :fit-height="true"
+              :interaction="selectedInteraction"
+              :render-frame="renderFrame"
+              :render-revision="renderRevision"
+              :profile="displayProfile"
+              :placement="imagePlacement"
+              :background-color="backgroundColor"
+            />
+          </PanelSection>
+        </SplitterPanel>
+      </SplitterGroup>
     </div>
-
-    <DevicePrototypePreview
-      v-model:open="previewOpen"
-      :interaction="selectedInteraction"
-      :render-frame="renderFrame"
-      :render-revision="renderRevision"
-      :profile="displayProfile"
-      :placement="imageSettings.placement"
-      :background-color="imageSettings.backgroundColor"
-    />
   </div>
 </template>

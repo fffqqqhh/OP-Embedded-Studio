@@ -168,6 +168,7 @@ function handleCreateEmbeddedPresetFrame(width: number, height: number, profileN
           :selected-frames="selectedDevicePrototypeFrames"
           :render-frame="devicePrototypeFrameRenderer"
           :render-revision="editorStore.state.sceneVersion"
+          @open-flashing="activeTab = 'embedded'"
         />
       </TabsContent>
 

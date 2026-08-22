@@ -16,6 +16,7 @@ import {
   type DevicePrototypeInteractionOption,
   type DevicePrototypeManualSettings,
   type DevicePrototypeMode,
+  type DevicePrototypePortDirection,
   type DevicePrototypeSlideshowSettings,
   type DevicePrototypeState
 } from '../model/types'
@@ -126,36 +127,36 @@ export function useDevicePrototype(scopeKey: object = defaultScope) {
   )
   const interactionOptions = computed<DevicePrototypeInteractionOption[]>(() =>
     interactions.value.map((interaction) => {
-        const animated = interaction.states.some((state) => state.animation)
-        const firstState = interaction.states.at(0)
-        const initialState = interaction.states.find(
-          (state) => state.id === interaction.initialStateId
-        )
-        const animationStatesValid = !animated || interaction.states.every((state) => state.animation)
-        const valid =
-          interaction.states.length >= (animated ? 1 : 2) &&
-          Boolean(initialState) &&
-          animationStatesValid
-        let reason = ''
-        if (interaction.states.length === 0) reason = '尚未添加界面状态'
-        else if (!animationStatesValid) reason = 'PNG 动画状态不能与普通画面混用'
-        else if (!animated && interaction.states.length < 2) reason = '交互至少需要两个画面'
-        else if (!initialState) reason = '未设置有效的初始状态'
+      const animated = interaction.states.some((state) => state.animation)
+      const firstState = interaction.states.at(0)
+      const initialState = interaction.states.find(
+        (state) => state.id === interaction.initialStateId
+      )
+      const animationStatesValid = !animated || interaction.states.every((state) => state.animation)
+      const valid =
+        interaction.states.length >= (animated ? 1 : 2) &&
+        Boolean(initialState) &&
+        animationStatesValid
+      let reason = ''
+      if (interaction.states.length === 0) reason = '尚未添加界面状态'
+      else if (!animationStatesValid) reason = 'PNG 动画状态不能与普通画面混用'
+      else if (!animated && interaction.states.length < 2) reason = '交互至少需要两个画面'
+      else if (!initialState) reason = '未设置有效的初始状态'
 
-        return {
-          id: interaction.id,
-          name: interaction.name,
-          contentKind: animated ? 'animated-prototype' : 'prototype',
-          mode: interaction.mode,
-          stateCount: interaction.states.length,
-          initialStateName: initialState?.name ?? '',
-          intervalMs: interaction.slideshow.intervalMs,
-          width: firstState?.width ?? 0,
-          height: firstState?.height ?? 0,
-          valid,
-          reason: reason || undefined
-        }
-      })
+      return {
+        id: interaction.id,
+        name: interaction.name,
+        contentKind: animated ? 'animated-prototype' : 'prototype',
+        mode: interaction.mode,
+        stateCount: interaction.states.length,
+        initialStateName: initialState?.name ?? '',
+        intervalMs: interaction.slideshow.intervalMs,
+        width: firstState?.width ?? 0,
+        height: firstState?.height ?? 0,
+        valid,
+        reason: reason || undefined
+      }
+    })
   )
 
   function updateSelectedInteraction(
@@ -394,13 +395,18 @@ export function useDevicePrototype(scopeKey: object = defaultScope) {
     )
   }
 
-  function setTransition(fromStateId: string, event: DevicePrototypeEventId, toStateId: string) {
+  function setTransition(
+    fromStateId: string,
+    event: DevicePrototypeEventId,
+    toStateId: string,
+    ports?: { fromPort?: DevicePrototypePortDirection; toPort?: DevicePrototypePortDirection }
+  ) {
     updateSelectedInteraction((interaction) => {
       const nextTransitions = interaction.transitions.filter(
         (transition) => !(transition.fromStateId === fromStateId && transition.event === event)
       )
       if (toStateId && interaction.states.some((state) => state.id === toStateId)) {
-        nextTransitions.push({ fromStateId, event, toStateId })
+        nextTransitions.push({ fromStateId, event, toStateId, ...ports })
       }
       return { ...interaction, transitions: nextTransitions }
     })

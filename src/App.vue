@@ -22,7 +22,7 @@ const store = useEditorStore()
 const { dialogs, locale } = useI18n()
 
 useHead({
-  titleTemplate: (title) => (title ? `${title} — OpenPencil` : 'OpenPencil'),
+  titleTemplate: (title) => (title ? `${title} — OP Embedded Studio` : 'OP Embedded Studio'),
   htmlAttrs: { lang: locale }
 })
 
