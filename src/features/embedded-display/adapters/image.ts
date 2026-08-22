@@ -21,6 +21,35 @@ function bytesFromBase64(encoded: string): Uint8Array {
   return bytes
 }
 
+export function imageDataToRgb565(
+  pixels: Uint8ClampedArray,
+  profile: EmbeddedDisplayProfile
+): Uint8Array {
+  const pixelCount = pixels.length / 4
+  const rgb565 = new Uint8Array(pixelCount * 2)
+  const isBgr = profile.image?.colorOrder === 'BGR'
+  const isBigEndian = profile.image?.byteOrder === 'big'
+
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    const offset = pixel * 4
+    const red = pixels[offset]
+    const green = pixels[offset + 1]
+    const blue = pixels[offset + 2]
+    const first = isBgr ? blue : red
+    const last = isBgr ? red : blue
+    const value = ((first & 0xf8) << 8) | ((green & 0xfc) << 3) | (last >> 3)
+
+    if (isBigEndian) {
+      rgb565[pixel * 2] = value >> 8
+      rgb565[pixel * 2 + 1] = value & 0xff
+    } else {
+      rgb565[pixel * 2] = value & 0xff
+      rgb565[pixel * 2 + 1] = value >> 8
+    }
+  }
+  return rgb565
+}
+
 export interface PixelPerfectPlacement {
   sourceX: number
   sourceY: number
@@ -104,27 +133,7 @@ export async function imageFileToRgb565(
   bitmap.close()
 
   const pixels = context.getImageData(0, 0, width, height).data
-  const rgb565 = new Uint8Array(width * height * 2)
-  const isBgr = profile.image?.colorOrder === 'BGR'
-  const isBigEndian = profile.image?.byteOrder === 'big'
-
-  for (let pixel = 0; pixel < width * height; pixel += 1) {
-    const offset = pixel * 4
-    const red = pixels[offset]
-    const green = pixels[offset + 1]
-    const blue = pixels[offset + 2]
-    const first = isBgr ? blue : red
-    const last = isBgr ? red : blue
-    const value = ((first & 0xf8) << 8) | ((green & 0xfc) << 3) | (last >> 3)
-
-    if (isBigEndian) {
-      rgb565[pixel * 2] = value >> 8
-      rgb565[pixel * 2 + 1] = value & 0xff
-    } else {
-      rgb565[pixel * 2] = value & 0xff
-      rgb565[pixel * 2 + 1] = value >> 8
-    }
-  }
+  const rgb565 = imageDataToRgb565(pixels, profile)
 
   return {
     profileId: profile.id,

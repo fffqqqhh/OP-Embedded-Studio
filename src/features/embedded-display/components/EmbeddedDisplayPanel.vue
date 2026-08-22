@@ -20,6 +20,8 @@ import {
   uploadWirelessSequence
 } from '../adapters/wireless'
 import {
+  encodeBleSequenceFrames,
+  encodeWifiSequenceFrames,
   imageFilesToBleSequence,
   imageFilesToWifiSequence,
   isWirelessSingleImagePayload,
@@ -35,7 +37,13 @@ import {
   type UsbFlashOptions
 } from '../adapters/usb-content'
 import type { UsbContentSerialPort } from '../adapters/usb-content-transfer'
-import { imageFilesToUsbSequence } from '../adapters/usb-sequence'
+import {
+  encodeUsbSequenceFrames,
+  imageFilesToUsbSequence,
+  type SequenceOverflowStrategy,
+  type UsbImageSequencePayload
+} from '../adapters/usb-sequence'
+import { videoFileToRgb565Frames } from '../adapters/video-sequence'
 import { encodeUsbAnimatedPrototype } from '../adapters/animated-prototype'
 import type { SerialPortLike } from '../adapters/serial-flasher'
 import { useBleDeviceSession } from '../composables/useBleDeviceSession'
@@ -137,6 +145,7 @@ const localContentFiles = ref<File[]>([])
 const localPreviewUrls = ref<string[]>([])
 const localPreviewIndex = ref(0)
 const localPreviewPlaying = ref(true)
+const localPreviewMediaType = ref<'image' | 'video'>('image')
 const localDropActive = ref(false)
 const localFileInput = ref<HTMLInputElement>()
 let localPreviewTimer: number | undefined
@@ -228,10 +237,39 @@ const contentUploadOptions: Array<{ value: ContentUploadMode; label: string }> =
 ]
 const imagePlacementSummary = computed(() => embeddedImagePlacementLabel(imagePlacement.value))
 const localPreviewUrl = computed(() => localPreviewUrls.value[localPreviewIndex.value] ?? '')
+function isVideoFile(file: File): boolean {
+  return file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi)$/i.test(file.name)
+}
+
+const localContentIsVideo = computed(
+  () => {
+    const file = localContentFiles.value[0]
+    return localContentFiles.value.length === 1 && Boolean(file && isVideoFile(file))
+  }
+)
+const sequenceFrameRate = ref(20)
+const sequenceOverflowStrategy = ref<SequenceOverflowStrategy>('speed')
+const sequenceFrameRateOptions = [
+  { value: '8', label: '8 FPS' },
+  { value: '12', label: '12 FPS' },
+  { value: '20', label: '20 FPS' }
+]
+const sequenceOverflowOptions = [
+  { value: 'speed', label: '完整加速' },
+  { value: 'trim', label: '裁切结尾' },
+  { value: 'reject', label: '放弃上传' }
+]
+const sequenceFrameRateSelectValue = computed({
+  get: () => String(sequenceFrameRate.value),
+  set: (value: string) => {
+    sequenceFrameRate.value = Number(value) || 20
+  }
+})
 const localContentLabel = computed(() => {
-  if (!localContentFiles.value.length) return '图片、GIF 或 PNG 序列'
+  if (!localContentFiles.value.length) return '图片、PNG 序列或视频'
+  if (localContentIsVideo.value) return `${localContentFiles.value[0]?.name ?? '本地视频'} · ${sequenceFrameRate.value} FPS`
   if (localContentFiles.value.length === 1) return localContentFiles.value[0]?.name ?? '本地图片'
-  return `${localContentFiles.value.length} 帧 PNG 序列 · 20 FPS`
+  return `${localContentFiles.value.length} 帧 PNG 序列 · ${sequenceFrameRate.value} FPS`
 })
 const localContentPrimary = computed(() => {
   if (!localContentFiles.value.length) return '0 帧'
@@ -240,8 +278,27 @@ const localContentPrimary = computed(() => {
 })
 const localContentSecondary = computed(() => {
   const firstFileName = localContentFiles.value[0]?.name
-  if (!firstFileName) return '图片、GIF 或 PNG 序列'
-  return localContentFiles.value.length > 1 ? `PNG 序列 · 20 FPS · ${firstFileName}` : firstFileName
+  if (!firstFileName) return '图片、PNG 序列或视频'
+  if (localContentIsVideo.value) return `视频 · ${sequenceFrameRate.value} FPS · PC 不限制 4 秒`
+  return localContentFiles.value.length > 1
+    ? `PNG 序列 · ${sequenceFrameRate.value} FPS · ${firstFileName}`
+    : firstFileName
+})
+const preparedLocalSequence = computed(() => {
+  if (contentUploadMode.value !== 'local') return null
+  if (transportMode.value === 'usb') return usbSequencePayload.value
+  if (transportMode.value === 'wifi') return wifiSequencePayload.value
+  if (transportMode.value === 'ble') return bleSequencePayload.value
+  return null
+})
+const preparedLocalSequenceSummary = computed(() => {
+  const payload = preparedLocalSequence.value
+  if (!payload) return ''
+  const durationSeconds = (payload.frameCount * payload.frameDelayMs) / 1000
+  let adaptation = '无需适配'
+  if (payload.adaptation === 'speed') adaptation = '完整内容已加速'
+  else if (payload.adaptation === 'trim') adaptation = '结尾已裁切'
+  return `已处理 ${payload.frameCount} 帧 · 播放 ${durationSeconds.toFixed(1)} 秒 · ${adaptation}`
 })
 const availablePrototypeOptions = computed(() =>
   (prototypeOptions ?? []).filter(
@@ -448,11 +505,6 @@ const canUploadLocal = computed(
     transportMode.value !== 'wifi-live' &&
     !uploadTaskRunning.value
 )
-const canUploadSelectedContent = computed(() => {
-  if (contentUploadMode.value === 'frame') return canUploadCurrent.value
-  if (contentUploadMode.value === 'prototype') return canUploadInteraction.value
-  return canUploadLocal.value
-})
 const NO_PROTOTYPE_VALUE = '__embedded-display-no-prototype__'
 const prototypeSelectOptions = computed(() => [
   { value: NO_PROTOTYPE_VALUE, label: '请选择交互' },
@@ -564,6 +616,7 @@ function clearLocalPreview(): void {
   for (const url of localPreviewUrls.value) URL.revokeObjectURL(url)
   localPreviewUrls.value = []
   localPreviewIndex.value = 0
+  localPreviewMediaType.value = 'image'
 }
 
 function restartLocalPreview(): void {
@@ -576,12 +629,33 @@ function restartLocalPreview(): void {
 }
 
 function setLocalContentFiles(files: File[]): void {
-  const imageFiles = files.filter((file) => file.type.startsWith('image/'))
-  if (!imageFiles.length) return
+  const supportedFiles = files.filter(
+    (file) => file.type.startsWith('image/') || isVideoFile(file)
+  )
+  const videoFiles = supportedFiles.filter(isVideoFile)
+  if (!supportedFiles.length) {
+    bakeError.value = '请选择图片、PNG 序列或视频文件'
+    return
+  }
+  if (videoFiles.length > 1 || (videoFiles.length === 1 && supportedFiles.length > 1)) {
+    bakeError.value = '视频需要单独选择，不能与图片序列混合'
+    return
+  }
+  if (
+    supportedFiles.length > 1 &&
+    supportedFiles.some(
+      (file) => file.type !== 'image/png' && !file.name.toLowerCase().endsWith('.png')
+    )
+  ) {
+    bakeError.value = '多帧序列只支持 PNG 文件'
+    return
+  }
+  const selectedFiles = supportedFiles
   clearLocalPreview()
-  localContentFiles.value = imageFiles
-  localPreviewUrls.value = imageFiles.map((file) => URL.createObjectURL(file))
-  localPreviewPlaying.value = imageFiles.length > 1
+  localContentFiles.value = selectedFiles
+  localPreviewMediaType.value = videoFiles.length ? 'video' : 'image'
+  localPreviewUrls.value = selectedFiles.map((file) => URL.createObjectURL(file))
+  localPreviewPlaying.value = selectedFiles.length > 1
   restartLocalPreview()
   contentUploadMode.value = 'local'
   bakeError.value = ''
@@ -663,22 +737,90 @@ async function handleBakeFrame(taskId?: number): Promise<boolean> {
   }
 }
 
+function localSequenceOptions() {
+  return {
+    frameDelayMs: Math.round(1000 / sequenceFrameRate.value),
+    fitToCapacity: true,
+    overflowStrategy: sequenceOverflowStrategy.value,
+    placement: imagePlacement.value,
+    backgroundColor: frameBackgroundColor.value
+  } as const
+}
+
+async function buildLocalSequencePayload(
+  files: File[],
+  profile: NonNullable<typeof selectedProfile.value>,
+  transport: 'usb' | 'wifi' | 'ble'
+): Promise<UsbImageSequencePayload> {
+  const options = localSequenceOptions()
+  if (localContentIsVideo.value) {
+    const video = await videoFileToRgb565Frames(files[0], profile, {
+      frameRate: sequenceFrameRate.value,
+      placement: imagePlacement.value,
+      backgroundColor: frameBackgroundColor.value
+    })
+    const encoder = transport === 'usb'
+      ? encodeUsbSequenceFrames
+      : transport === 'wifi'
+        ? encodeWifiSequenceFrames
+        : encodeBleSequenceFrames
+    return encoder(profile, video.frames, files[0].name, options)
+  }
+  if (transport === 'usb') return imageFilesToUsbSequence(files, profile, options)
+  if (transport === 'wifi') return imageFilesToWifiSequence(files, profile, options)
+  return imageFilesToBleSequence(files, profile, options)
+}
+
+function setPreparedSequenceMessage(payload: UsbImageSequencePayload, source: string): void {
+  const fps = Math.round(1000 / payload.frameDelayMs)
+  let adaptationMessage = ''
+  if (payload.adaptation === 'speed') {
+    adaptationMessage = `，完整内容加速至 ${payload.frameCount} 帧`
+  } else if (payload.adaptation === 'trim') {
+    adaptationMessage = `，已裁切结尾，保留 ${payload.frameCount} 帧`
+  }
+  buildStatus.value = 'idle'
+  buildMessage.value = `${source}已准备：${payload.frameCount} 帧 · ${fps} FPS · ${(payload.storedBytes / 1024 / 1024).toFixed(2)} MiB${adaptationMessage}`
+  buildLog.value = [
+    `sequence: ${payload.frameCount} frames`,
+    `source-frames: ${payload.sourceFrameCount}`,
+    `size: ${payload.width}×${payload.height}`,
+    `frame-rate: ${fps} FPS`,
+    `adaptation: ${payload.adaptation ?? 'none'}`,
+    `compressed: ${payload.compressedFrames} / ${payload.frameCount}`,
+    `patches: ${payload.patchFrames} / ${payload.frameCount}`,
+    `stored: ${payload.storedBytes} bytes`,
+    'sequence-payload: ready'
+  ]
+}
+
 async function prepareUsbFrameContent(source: 'frame' | 'file', taskId?: number): Promise<boolean> {
   if (source === 'frame') return handleBakeFrame(taskId)
   if (!uploadedUsbFiles.value.length) return false
   const files = uploadedUsbFiles.value
   await selectImage(undefined, { upload: false })
   if (files.length === 1) {
-    await selectImage(files[0], {
+    if (localContentIsVideo.value) {
+      const profile = selectedProfile.value
+      if (!profile) return false
+      usbSequencePayload.value = await buildLocalSequencePayload(files, profile, 'usb')
+      imagePayload.value = null
+      setPreparedSequenceMessage(usbSequencePayload.value, '本地序列')
+    } else await selectImage(files[0], {
       upload: false,
       placement: imagePlacement.value,
       backgroundColor: frameBackgroundColor.value
     })
   } else {
-    await selectUsbImageSequence(files, {
-      placement: imagePlacement.value,
-      backgroundColor: frameBackgroundColor.value
-    })
+    const profile = selectedProfile.value
+    if (!profile) return false
+    if (localContentIsVideo.value) {
+      usbSequencePayload.value = await buildLocalSequencePayload(files, profile, 'usb')
+      imagePayload.value = null
+      setPreparedSequenceMessage(usbSequencePayload.value, '本地序列')
+    } else {
+      await selectUsbImageSequence(files, localSequenceOptions())
+    }
   }
   if (taskId !== undefined && !isUploadTaskCurrent(taskId)) return false
   return buildStatus.value !== 'error'
@@ -994,18 +1136,6 @@ async function ensureBleUploadDevice(
   return taskId === undefined || isUploadTaskCurrent(taskId)
 }
 
-async function handleUploadSelectedContent(): Promise<void> {
-  if (contentUploadMode.value === 'frame') {
-    await handleUploadCurrentFrame()
-    return
-  }
-  if (contentUploadMode.value === 'prototype') {
-    await handleUploadInteraction()
-    return
-  }
-  await handleUploadLocalContent()
-}
-
 async function handleUploadCurrentFrame(): Promise<void> {
   const profile = selectedProfile.value
   if (!profile || !bakeState?.available) {
@@ -1107,16 +1237,18 @@ async function uploadWifiLocalContent(
   wifiSequencePayload.value = null
   await selectImage(undefined, { upload: false })
   if (files.length === 1) {
-    await selectImage(files[0], {
-      upload: false,
-      placement: imagePlacement.value,
-      backgroundColor: frameBackgroundColor.value
-    })
+    if (localContentIsVideo.value) {
+      wifiSequencePayload.value = await buildLocalSequencePayload(files, profile, 'wifi')
+      setPreparedSequenceMessage(wifiSequencePayload.value, '本地序列')
+    } else {
+      await selectImage(files[0], {
+        upload: false,
+        placement: imagePlacement.value,
+        backgroundColor: frameBackgroundColor.value
+      })
+    }
   } else {
-    wifiSequencePayload.value = await imageFilesToWifiSequence(files, profile, {
-      placement: imagePlacement.value,
-      backgroundColor: frameBackgroundColor.value
-    })
+    wifiSequencePayload.value = await buildLocalSequencePayload(files, profile, 'wifi')
   }
   if (!isUploadTaskCurrent(taskId) || selectedProfile.value?.id !== requestedProfileId) return
   await uploadWifiContent('frame', requestedProfileId, taskId)
@@ -1134,6 +1266,12 @@ async function uploadBleLocalContent(
   bleSequencePayload.value = null
   await selectImage(undefined, { upload: false })
   if (files.length === 1) {
+    if (localContentIsVideo.value) {
+      const sequence = await buildLocalSequencePayload(files, profile, 'ble')
+      bleSequencePayload.value = sequence
+      await bleSession.upload(sequence, profile)
+      return
+    }
     await selectImage(files[0], {
       upload: false,
       placement: imagePlacement.value,
@@ -1149,10 +1287,7 @@ async function uploadBleLocalContent(
     return
   }
 
-  const sequence = await imageFilesToBleSequence(files, profile, {
-    placement: imagePlacement.value,
-    backgroundColor: frameBackgroundColor.value
-  })
+  const sequence = await buildLocalSequencePayload(files, profile, 'ble')
   if (!isUploadTaskCurrent(taskId) || selectedProfile.value?.id !== requestedProfileId) return
   bleSequencePayload.value = sequence
   await bleSession.upload(sequence, profile)
@@ -1729,6 +1864,21 @@ watch([wifiSsid, wifiPassword], () => {
           {{ imagePlacementSummary }} · {{ frameBackgroundColor.toUpperCase() }} ·
           {{ resolutionLabel }}
         </p>
+        <div class="mt-2 grid grid-cols-2 gap-2">
+          <AppSelect
+            v-model="sequenceFrameRateSelectValue"
+            :options="sequenceFrameRateOptions"
+            label="序列帧率"
+          />
+          <AppSelect
+            v-model="sequenceOverflowStrategy"
+            :options="sequenceOverflowOptions"
+            label="容量不足时"
+          />
+        </div>
+        <p class="mt-1.5 text-[10px] text-muted">
+          PC 视频不限制 4 秒；选择“放弃上传”时不会自动加速或裁切内容。
+        </p>
       </PanelSection>
 
       <PanelSection v-if="transportMode !== 'wifi-live'" label="上传内容" :default-open="true">
@@ -1739,16 +1889,6 @@ watch([wifiSsid, wifiPassword], () => {
             :options="contentUploadOptions"
             label="选择内容类型"
           />
-          <button
-            type="button"
-            class="flex h-control shrink-0 items-center gap-1.5 rounded-panel bg-accent px-3 text-[11px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="!canUploadSelectedContent"
-            title="上传当前选中的内容"
-            @click="handleUploadSelectedContent"
-          >
-            <icon-lucide-upload class="size-3.5" />
-            上传
-          </button>
         </div>
 
         <div class="mt-2 min-w-0">
@@ -1801,6 +1941,15 @@ watch([wifiSsid, wifiPassword], () => {
                     <icon-lucide-square-plus class="size-3.5 shrink-0" />
                     <span class="truncate">创建预设 Frame</span>
                   </button>
+                  <button
+                    type="button"
+                    class="flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-panel bg-accent px-2 text-[9px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!canUploadCurrent"
+                    @click="handleUploadCurrentFrame"
+                  >
+                    <icon-lucide-upload class="size-3 shrink-0" />
+                    <span class="truncate">上传当前 Frame 至设备</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -1828,6 +1977,15 @@ watch([wifiSsid, wifiPassword], () => {
                   />
                 </template>
               </DevicePrototypePreview>
+              <button
+                type="button"
+                class="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-panel bg-accent px-3 text-[10px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!canUploadInteraction"
+                @click="handleUploadInteraction"
+              >
+                <icon-lucide-upload class="size-3.5" />
+                上传交互方案至设备
+              </button>
             </div>
             <div
               v-else
@@ -1852,6 +2010,7 @@ watch([wifiSsid, wifiPassword], () => {
                   <EmbeddedDisplayContentPreview
                     :src="localPreviewUrl"
                     :alt="localContentLabel"
+                    :media-type="localPreviewMediaType"
                     :placement="imagePlacement"
                     :background-color="frameBackgroundColor"
                     :target-width="selectedProfile?.resolution.width || 1"
@@ -1862,7 +2021,7 @@ watch([wifiSsid, wifiPassword], () => {
                 </template>
                 <div v-else class="flex flex-col items-center justify-center gap-1 text-muted">
                   <icon-lucide-upload-cloud class="size-5 text-accent" />
-                  <span class="text-[10px]">拖入图片、GIF 或 PNG 序列</span>
+                  <span class="text-[10px]">拖入图片、PNG 序列或视频</span>
                 </div>
               </div>
               <div class="grid h-24 min-w-0 grid-rows-3 border-t border-border px-3">
@@ -1870,7 +2029,7 @@ watch([wifiSsid, wifiPassword], () => {
                   {{ localContentPrimary }}
                 </p>
                 <p class="flex min-w-0 items-center truncate text-[9px] text-muted">
-                  {{ localContentSecondary }}
+                  {{ localContentSecondary }}{{ preparedLocalSequenceSummary ? ` · ${preparedLocalSequenceSummary}` : '' }}
                 </p>
                 <div class="flex min-w-0 items-center gap-1.5">
                   <button
@@ -1892,13 +2051,24 @@ watch([wifiSsid, wifiPassword], () => {
                     <icon-lucide-play v-else class="size-3" />
                     {{ localPreviewPlaying ? '暂停' : '播放' }}
                   </button>
+                  <button
+                    type="button"
+                    class="flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-panel bg-accent px-2 text-[9px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!canUploadLocal"
+                    @click="handleUploadLocalContent"
+                  >
+                    <icon-lucide-upload class="size-3 shrink-0" />
+                    <span class="truncate">
+                      {{ localContentIsVideo ? '上传视频序列至设备' : `上传 ${localContentFiles.length} 帧至设备` }}
+                    </span>
+                  </button>
                 </div>
               </div>
               <input
                 ref="localFileInput"
                 class="sr-only"
                 type="file"
-                accept="image/gif,image/png,image/jpeg,image/webp,image/bmp"
+                accept="image/gif,image/png,image/jpeg,image/webp,image/bmp,video/*"
                 multiple
                 :disabled="uploadTaskRunning"
                 @change="handleLocalContentChange"

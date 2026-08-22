@@ -13,7 +13,8 @@ const {
   targetHeight,
   sourceWidth = 0,
   sourceHeight = 0,
-  round = false
+  round = false,
+  mediaType = 'image'
 } = defineProps<{
   src: string
   alt: string
@@ -24,6 +25,7 @@ const {
   sourceWidth?: number
   sourceHeight?: number
   round?: boolean
+  mediaType?: 'image' | 'video'
 }>()
 
 const naturalWidth = ref(0)
@@ -57,9 +59,9 @@ const imageStyle = computed<CSSProperties>(() => {
 })
 
 function handleLoad(event: Event): void {
-  const image = event.currentTarget as HTMLImageElement
-  naturalWidth.value = image.naturalWidth
-  naturalHeight.value = image.naturalHeight
+  const media = event.currentTarget as HTMLImageElement | HTMLVideoElement
+  naturalWidth.value = 'videoWidth' in media ? media.videoWidth : media.naturalWidth
+  naturalHeight.value = 'videoHeight' in media ? media.videoHeight : media.naturalHeight
 }
 </script>
 
@@ -68,7 +70,20 @@ function handleLoad(event: Event): void {
     class="relative self-start shrink-0 overflow-hidden border border-border bg-black"
     :style="previewStyle"
   >
+    <video
+      v-if="mediaType === 'video'"
+      :src="src"
+      :aria-label="alt"
+      class="absolute block"
+      :style="imageStyle"
+      muted
+      autoplay
+      loop
+      playsinline
+      @loadedmetadata="handleLoad"
+    />
     <img
+      v-else
       :src="src"
       :alt="alt"
       class="absolute block"

@@ -14,9 +14,13 @@ const SEQUENCE_CODEC_PATCH_RGB565 = 2;
 const DEFAULT_SEQUENCE_CONTENT_BYTES = 0x1cf0000;
 const USB_SEQUENCE_FPS = 20;
 
+export type SequenceOverflowStrategy = 'speed' | 'trim' | 'reject';
+
 export interface SequenceEncodingOptions {
   allowPatches?: boolean;
   frameDelayMs?: number;
+  fitToCapacity?: boolean;
+  overflowStrategy?: SequenceOverflowStrategy;
   preserveOrder?: boolean;
   placement?: EmbeddedImagePlacement;
   backgroundColor?: string;
@@ -33,6 +37,8 @@ export interface UsbImageSequencePayload {
   storedBytes: number;
   compressedFrames: number;
   patchFrames: number;
+  sourceFrameCount: number;
+  adaptation: SequenceOverflowStrategy | null;
   content: ArrayBuffer;
 }
 
@@ -190,6 +196,7 @@ function buildUsbSequencePayload(
   encodedFrames: EncodedFrame[],
   name: string,
   frameDelayMs: number,
+  metadata: Pick<UsbImageSequencePayload, 'sourceFrameCount' | 'adaptation'>
 ): UsbImageSequencePayload {
   if (encodedFrames.length < 2) throw new Error("PNG 序列至少需要两张图片");
   if (encodedFrames.length > 0xffff)
@@ -262,8 +269,74 @@ function buildUsbSequencePayload(
     patchFrames: encodedFrames.filter(
       (frame) => frame.codec === SEQUENCE_CODEC_PATCH_RGB565,
     ).length,
+    sourceFrameCount: metadata.sourceFrameCount,
+    adaptation: metadata.adaptation,
     content: content.buffer,
   };
+}
+
+function frameIndexes(
+  sourceFrameCount: number,
+  targetFrameCount: number,
+  strategy: SequenceOverflowStrategy,
+): number[] {
+  if (strategy === 'trim') {
+    return Array.from({ length: targetFrameCount }, (_, index) => index);
+  }
+  return Array.from(
+    { length: targetFrameCount },
+    (_, index) => Math.floor(index * (sourceFrameCount - 1) / (targetFrameCount - 1)),
+  );
+}
+
+function encodeFramesToFitCapacity(
+  profile: EmbeddedDisplayProfile,
+  frames: Uint8Array[],
+  name: string,
+  options: SequenceEncodingOptions,
+  frameDelayMs: number,
+): UsbImageSequencePayload {
+  const sourceFrameCount = frames.length;
+  const encode = (selected: Uint8Array[], adaptation: SequenceOverflowStrategy | null) =>
+    buildUsbSequencePayload(
+      profile,
+      encodeSequenceFrames(profile, selected, options),
+      name,
+      frameDelayMs,
+      { sourceFrameCount, adaptation },
+    );
+
+  try {
+    return encode(frames, null);
+  } catch (error) {
+    if (!options.fitToCapacity || !(error instanceof Error) || !error.message.includes('超过')) {
+      throw error;
+    }
+  }
+
+  const strategy = options.overflowStrategy ?? 'speed';
+  if (strategy === 'reject') {
+    throw new Error('内容超过设备容量，已放弃上传；请降低帧率或选择其他容量处理策略');
+  }
+  let lowerBound = 2;
+  let upperBound = sourceFrameCount - 1;
+  let bestPayload: UsbImageSequencePayload | null = null;
+  while (lowerBound <= upperBound) {
+    const targetFrameCount = Math.floor((lowerBound + upperBound) / 2);
+    const selected = frameIndexes(sourceFrameCount, targetFrameCount, strategy).map(
+      (index) => frames[index],
+    );
+    try {
+      bestPayload = encode(selected, strategy);
+      lowerBound = targetFrameCount + 1;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('超过')) throw error;
+      upperBound = targetFrameCount - 1;
+    }
+  }
+  if (bestPayload) return bestPayload;
+
+  throw new Error('至少两帧内容仍超过设备内容分区上限，请降低帧率或缩短内容');
 }
 
 export function encodeUsbSequenceFrames(
@@ -272,10 +345,11 @@ export function encodeUsbSequenceFrames(
   name = "PNG sequence",
   options: SequenceEncodingOptions = {},
 ): UsbImageSequencePayload {
-  return buildUsbSequencePayload(
+  return encodeFramesToFitCapacity(
     profile,
-    encodeSequenceFrames(profile, frames, options),
+    frames,
     name,
+    options,
     options.frameDelayMs ?? Math.round(1000 / USB_SEQUENCE_FPS),
   );
 }
@@ -311,10 +385,11 @@ export async function imageFilesToUsbSequence(
     });
     frames.push(bytesFromBase64(payload.pixelsRgb565Base64));
   }
-  return buildUsbSequencePayload(
+  return encodeFramesToFitCapacity(
     profile,
-    encodeSequenceFrames(profile, frames, options),
+    frames,
     `${orderedFiles[0].name} 等 ${orderedFiles.length} 帧`,
+    options,
     options.frameDelayMs ?? Math.round(1000 / USB_SEQUENCE_FPS),
   );
 }

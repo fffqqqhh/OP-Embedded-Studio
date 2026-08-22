@@ -11,7 +11,11 @@ import {
   type EmbeddedImagePlacement
 } from '../adapters/image'
 import { MOCK_DISPLAY_VARIABLES } from '../adapters/mock'
-import { imageFilesToUsbSequence, type UsbImageSequencePayload } from '../adapters/usb-sequence'
+import {
+  imageFilesToUsbSequence,
+  type SequenceEncodingOptions,
+  type UsbImageSequencePayload
+} from '../adapters/usb-sequence'
 import type {
   EmbeddedBuildMode,
   EmbeddedBuildStatus,
@@ -185,7 +189,16 @@ export function useEmbeddedDisplay() {
 
   async function selectUsbImageSequence(
     files: File[],
-    options: { placement?: EmbeddedImagePlacement; backgroundColor?: string } = {}
+    options: Pick<
+      SequenceEncodingOptions,
+      | 'allowPatches'
+      | 'backgroundColor'
+      | 'fitToCapacity'
+      | 'frameDelayMs'
+      | 'overflowStrategy'
+      | 'placement'
+      | 'preserveOrder'
+    > = {}
   ) {
     const profile = selectedProfile.value
     if (!profile) throw new Error('请先连接设备服务并选择屏幕方案')
@@ -198,17 +211,31 @@ export function useEmbeddedDisplay() {
       if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
       previewUrl.value = URL.createObjectURL(files[0])
       const payload = await imageFilesToUsbSequence(files, profile, {
+        allowPatches: options.allowPatches,
         placement: options.placement ?? imagePlacement.value,
-        backgroundColor: options.backgroundColor ?? frameBackgroundColor.value
+        backgroundColor: options.backgroundColor ?? frameBackgroundColor.value,
+        fitToCapacity: options.fitToCapacity,
+        frameDelayMs: options.frameDelayMs,
+        overflowStrategy: options.overflowStrategy,
+        preserveOrder: options.preserveOrder
       })
       imagePayload.value = null
       usbSequencePayload.value = payload
       buildStatus.value = 'idle'
-      buildMessage.value = `PNG 序列已准备：${payload.frameCount} 帧 · 20 FPS · ${(payload.storedBytes / 1024 / 1024).toFixed(2)} MiB`
+      const fps = Math.round(1000 / payload.frameDelayMs)
+      let adaptationMessage = ''
+      if (payload.adaptation === 'speed') {
+        adaptationMessage = ` · 完整内容加速至 ${payload.frameCount} 帧`
+      } else if (payload.adaptation === 'trim') {
+        adaptationMessage = ` · 已裁切结尾，保留 ${payload.frameCount} 帧`
+      }
+      buildMessage.value = `PNG 序列已准备：${payload.frameCount} 帧 · ${fps} FPS · ${(payload.storedBytes / 1024 / 1024).toFixed(2)} MiB${adaptationMessage}`
       buildLog.value = [
         `sequence: ${payload.frameCount} PNG frames`,
         `size: ${payload.width}×${payload.height}`,
-        'frame-rate: 20 FPS',
+        `source-frames: ${payload.sourceFrameCount}`,
+        `frame-rate: ${fps} FPS`,
+        `adaptation: ${payload.adaptation ?? 'none'}`,
         `compressed: ${payload.compressedFrames} / ${payload.frameCount}`,
         `patches: ${payload.patchFrames} / ${payload.frameCount}`,
         `stored: ${payload.storedBytes} bytes`,
