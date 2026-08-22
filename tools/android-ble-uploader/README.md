@@ -7,7 +7,15 @@
 - 将网页生成的内容临时写入 App 缓存；
 - 使用现有 offset + payload 分包协议上传到 ESP32。
 
-支持 Waveshare 1.75C 和 M5Stack StopWatch 的 `466 × 466` RGB565 单图与 20 FPS PNG 序列。Waveshare 的内容上限为约 28.94 MiB，StopWatch 的 16MB Flash 布局上限为约 12.94 MiB。两款设备使用相同的 OP Embedded BLE 内容协议；请先为对应开发板刷入匹配的 BLE 基础固件。
+支持多个屏幕 Profile 的 RGB565 单图与 PNG 序列。上传前必须在“屏幕方案”中选择与设备固件匹配的项；Profile 会同时决定逻辑分辨率、圆屏/矩形预览、RGB/BGR 顺序、字节序以及无线内容分区容量。当前包含：
+
+| 屏幕方案 | 分辨率 | 颜色顺序 | 无线内容上限 |
+| --- | ---: | --- | ---: |
+| Waveshare 1.75C | 466 × 466 | RGB565 / little-endian | 28.94 MiB |
+| M5Stack StopWatch | 466 × 466 | RGB565 / little-endian | 12.94 MiB |
+| M5Stack CoreS3 | 320 × 240 | BGR565 / little-endian | 12.94 MiB |
+
+视频在 Android 端仍限制为最多 `4 秒`、`64 帧`；FPS 选项保留 `8 / 12 / 20`，默认 `20 FPS`。容量不足时继续使用现有的“完整加速”或“裁切结尾”策略，不提供 Web 端生产用的放弃上传选项。
 
 ## 构建
 
@@ -28,7 +36,7 @@ dist/android/OP-Embedded-BLE-debug.apk
 ## 使用
 
 1. 通过 USB 初始化支持 BLE 的 OP Embedded Studio 基础固件。
-2. 确保电脑端已经断开 BLE。
+2. 确保电脑端已经断开 BLE；使用手机 BLE 传输时建议同时拔掉设备 USB 线，避免 USB 串口复位或占用设备链路。
 3. 在 Android 手机安装 APK，并允许“附近设备”权限。
 4. 选择图片、裁切并上传，App 会自动连接 OP Embedded BLE。
 
@@ -38,4 +46,4 @@ dist/android/OP-Embedded-BLE-debug.apk
 
 ## 发布标签
 
-Android 上传器使用独立版本线。发布时同时递增 `versionCode`、更新 `versionName`，并使用 `android-vX.Y.Z` Git 标签。历史 `v0.3.5` 标签保留不变。
+Android 上传器使用独立版本线，当前版本为 `0.5.0`。发布时同时递增 `versionCode`、更新 `versionName`，并使用 `android-vX.Y.Z` Git 标签。历史 `v0.3.5` 标签保留不变。

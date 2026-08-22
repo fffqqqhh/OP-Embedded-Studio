@@ -4,10 +4,16 @@
   const context = canvas.getContext('2d', { willReadFrequently: true })
   const fileInput = document.getElementById('fileInput')
   const cameraButton = document.getElementById('cameraButton')
+  const deviceProfileControl = document.getElementById('deviceProfileControl')
+  const deviceProfileLabel = document.getElementById('deviceProfileLabel')
+  const deviceProfileMenu = document.getElementById('deviceProfileMenu')
   const fpsControl = document.getElementById('fpsControl')
   const overflowStrategyControl = document.getElementById('overflowStrategyControl')
   const editButton = document.getElementById('editButton')
   const uploadButton = document.getElementById('uploadButton')
+  const settingsButton = document.getElementById('settingsButton')
+  const closeSettingsButton = document.getElementById('closeSettingsButton')
+  const advancedSettings = document.getElementById('advancedSettings')
   const backgroundInput = document.getElementById('backgroundInput')
   const backgroundPalette = document.getElementById('backgroundPalette')
   const resetButton = document.getElementById('resetButton')
@@ -45,7 +51,64 @@
   }
 
   function selectedFps() {
-    return Number(fpsControl.dataset.value) || 12
+    return Number(fpsControl.dataset.value) || 20
+  }
+
+  function currentProfile() {
+    return protocol.getProfile()
+  }
+
+  function dimensionsSummary() {
+    const profile = currentProfile()
+    return `${profile.width} × ${profile.height}`
+  }
+
+  function setProfileControlValue(profile) {
+    deviceProfileControl.dataset.value = profile.id
+    deviceProfileLabel.textContent = `${profile.name.split(' · ')[0]} · ${dimensionsSummary()}`
+    deviceProfileMenu.querySelectorAll('[role="option"]').forEach((option) => {
+      const selected = option.dataset.value === profile.id
+      option.classList.toggle('selected', selected)
+      option.setAttribute('aria-selected', String(selected))
+    })
+  }
+
+  function setProfileMenuOpen(open) {
+    const nextOpen = Boolean(open && !busy)
+    deviceProfileMenu.hidden = !nextOpen
+    if (nextOpen) {
+      const controlBounds = deviceProfileControl.getBoundingClientRect()
+      const availableBelow = window.innerHeight - controlBounds.bottom
+      const menuHeight = deviceProfileMenu.offsetHeight
+      deviceProfileMenu.classList.toggle('open-up', availableBelow < menuHeight + 12)
+    } else {
+      deviceProfileMenu.classList.remove('open-up')
+    }
+    deviceProfileControl.setAttribute('aria-expanded', String(nextOpen))
+    deviceProfileControl.classList.toggle('open', nextOpen)
+  }
+
+  function setAdvancedSettingsOpen(open) {
+    const nextOpen = Boolean(open && !busy)
+    advancedSettings.hidden = !nextOpen
+    settingsButton.setAttribute('aria-expanded', String(nextOpen))
+    settingsButton.classList.toggle('active', nextOpen)
+  }
+
+  function applyProfile(profileId) {
+    const profile = protocol.setProfile(profileId)
+    setProfileControlValue(profile)
+    canvas.width = profile.width
+    canvas.height = profile.height
+    previewWrap.dataset.shape = profile.shape
+    previewWrap.style.aspectRatio = `${profile.width} / ${profile.height}`
+    previewWrap.style.setProperty('--preview-aspect-ratio', `${profile.width} / ${profile.height}`)
+    const shapeLabel = profile.shape === 'round' ? '圆屏' : '横向屏'
+    if (!files.length) {
+      fileSummary.textContent = `支持照片、PNG 序列或短视频，目标 ${dimensionsSummary()} ${shapeLabel}。`
+    }
+    resetCrop()
+    return profile
   }
 
   function selectedOverflowStrategy() {
@@ -104,11 +167,17 @@
   function updateActions() {
     fileInput.disabled = busy
     cameraButton.disabled = busy
+    settingsButton.disabled = busy
+    deviceProfileControl.disabled = busy
     fpsControl.querySelectorAll('button').forEach((button) => { button.disabled = busy })
     overflowStrategyControl.querySelectorAll('button').forEach((button) => { button.disabled = busy })
     backgroundPalette.querySelectorAll('button').forEach((button) => { button.disabled = busy })
     editButton.disabled = files.length === 0 || busy
     uploadButton.disabled = files.length === 0 || busy
+    if (busy) {
+      setProfileMenuOpen(false)
+      setAdvancedSettingsOpen(false)
+    }
     editButton.textContent = editing ? '完成' : '编辑'
     editButton.classList.toggle('active', editing)
   }
@@ -359,7 +428,12 @@
   }
 
   function sendPayloadToNative(content) {
-    let error = window.OpenPencilNative.beginPayload(content.byteLength)
+    let error = ''
+    if (window.OpenPencilNative.setDeviceProfile) {
+      error = window.OpenPencilNative.setDeviceProfile(currentProfile().id)
+      if (error) throw new Error(error)
+    }
+    error = window.OpenPencilNative.beginPayload(content.byteLength)
     if (error) throw new Error(error)
     const chunkBytes = 48 * 1024
     for (let offset = 0; offset < content.byteLength; offset += chunkBytes) {
@@ -492,9 +566,9 @@
       ? isVideoFile(files[0])
         ? videoFileSummary()
         : files.length === 1
-          ? '单帧图片 · 466 × 466'
-          : `${files.length} 帧 PNG 序列 · 20 FPS`
-      : '支持照片、PNG 序列或短视频，目标 466 × 466。'
+          ? `单帧图片 · ${dimensionsSummary()}`
+          : `${files.length} 帧 PNG 序列 · ${selectedFps()} FPS`
+      : `支持照片、PNG 序列或短视频，目标 ${dimensionsSummary()}。`
     payloadSummary.textContent = '尚未准备内容'
     progressBar.style.width = '0%'
     setStatus(files.length ? '编辑已激活，调整完成后点击“完成”' : '选择图片后即可上传')
@@ -507,7 +581,7 @@
       previewBitmap = null
       emptyPreview.hidden = false
       setEditing(false)
-      fileSummary.textContent = '支持单图或 PNG 序列，目标 466 × 466。'
+      fileSummary.textContent = `支持单图或 PNG 序列，目标 ${dimensionsSummary()}。`
       setStatus(error instanceof Error ? error.message : String(error), 'error')
     } finally {
       updateActions()
@@ -525,7 +599,44 @@
       window.OpenPencilNative.pickMedia()
     }
   })
-  setSegmentValue(fpsControl, localStorage.getItem('openpencil-video-fps') || '12')
+  const storedProfile = localStorage.getItem('openpencil-screen-profile')
+  const initialProfile = storedProfile && protocol.PROFILES[storedProfile]
+    ? storedProfile
+    : protocol.getProfile().id
+  applyProfile(initialProfile)
+  deviceProfileControl.addEventListener('click', () => {
+    setProfileMenuOpen(deviceProfileMenu.hidden)
+  })
+  deviceProfileMenu.addEventListener('click', (event) => {
+    const option = event.target.closest('[role="option"][data-value]')
+    if (!option || busy) return
+    try {
+      applyProfile(option.dataset.value)
+      localStorage.setItem('openpencil-screen-profile', option.dataset.value)
+      setProfileMenuOpen(false)
+      setStatus(`已切换屏幕方案：${currentProfile().name}`)
+      if (files.length) {
+        fileSummary.textContent = isVideoFile(files[0])
+          ? videoFileSummary()
+          : files.length === 1
+            ? `单帧图片 · ${dimensionsSummary()}`
+            : `${files.length} 帧 PNG 序列 · ${selectedFps()} FPS`
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error), 'error')
+    }
+  })
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest('.profile-select')) setProfileMenuOpen(false)
+    if (!event.target.closest('#advancedSettings, #settingsButton')) setAdvancedSettingsOpen(false)
+  })
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      setProfileMenuOpen(false)
+      setAdvancedSettingsOpen(false)
+    }
+  })
+  setSegmentValue(fpsControl, localStorage.getItem('openpencil-video-fps') || '20')
   bindSegmentedControl(fpsControl, (value) => {
     localStorage.setItem('openpencil-video-fps', value)
     if (files.length && isVideoFile(files[0])) {
@@ -536,6 +647,9 @@
   bindSegmentedControl(overflowStrategyControl, () => {
     localStorage.setItem('openpencil-overflow-strategy', selectedOverflowStrategy())
   })
+
+  settingsButton.addEventListener('click', () => setAdvancedSettingsOpen(advancedSettings.hidden))
+  closeSettingsButton.addEventListener('click', () => setAdvancedSettingsOpen(false))
 
   editButton.addEventListener('click', () => setEditing(!editing))
   uploadButton.addEventListener('click', processAndUpload)
@@ -605,7 +719,7 @@
         files = [file]
         fileSummary.textContent = isVideoFile(file)
           ? videoFileSummary()
-          : '单帧图片 · 466 × 466'
+          : `单帧图片 · ${dimensionsSummary()}`
         payloadSummary.textContent = '媒体已载入，点击上传到设备'
         await loadPreview()
         updateActions()

@@ -68,6 +68,9 @@ public final class MainActivity extends Activity {
     private static final String CONTENT_COMPLETE_MESSAGE = "内容已接收，正在切换画面";
     private static final int PRIMARY_MTU_REQUEST = 517;
     private static final int FALLBACK_MTU_REQUEST = 247;
+    private static final String DEFAULT_PROFILE_ID = "co5300_waveshare_amoled_1_75c";
+    private static final int LARGE_FLASH_CONTENT_BYTES = 0xcf0000;
+    private static final int WAVESHARE_CONTENT_BYTES = 0x1cf0000;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private WebView webView;
@@ -89,6 +92,7 @@ public final class MainActivity extends Activity {
     private FileOutputStream payloadOutput;
     private int payloadExpectedBytes;
     private int payloadWrittenBytes;
+    private String selectedProfileId = DEFAULT_PROFILE_ID;
     private RandomAccessFile uploadInput;
     private int uploadTotal;
     private int lastProgressBytes;
@@ -658,10 +662,30 @@ public final class MainActivity extends Activity {
         if (gatt != null) gatt.disconnect();
     }
 
+    private static int contentCapacityForProfile(String profileId) {
+        if ("co5300_waveshare_amoled_1_75c".equals(profileId)) return WAVESHARE_CONTENT_BYTES;
+        if ("co5300_m5stack_stopwatch".equals(profileId)
+                || "ili9342_m5stack_cores3".equals(profileId)) return LARGE_FLASH_CONTENT_BYTES;
+        return 0;
+    }
+
+    private static String formatMiB(int bytes) {
+        return String.format(java.util.Locale.US, "%.2f", bytes / 1024.0 / 1024.0);
+    }
+
+    private String setDeviceProfile(String profileId) {
+        if (contentCapacityForProfile(profileId) == 0) {
+            return "不支持的屏幕方案，请重新选择";
+        }
+        selectedProfileId = profileId;
+        return "";
+    }
+
     private void beginPayload(int totalBytes) throws IOException {
         closePayloadOutput();
-        if (totalBytes <= 24 || totalBytes > 0x0cf0000) {
-            throw new IOException("内容大小必须在 24 字节至 12.94 MiB 之间");
+        int capacity = contentCapacityForProfile(selectedProfileId);
+        if (totalBytes <= 24 || capacity == 0 || totalBytes > capacity) {
+            throw new IOException("内容大小必须在 24 字节至 " + formatMiB(capacity) + " MiB 之间（当前屏幕方案）");
         }
         payloadFile = new File(getCacheDir(), "openpencil-content.bin");
         payloadOutput = new FileOutputStream(payloadFile, false);
@@ -958,6 +982,10 @@ public final class MainActivity extends Activity {
 
         @JavascriptInterface
         public void pickMedia() { runOnUiThread(MainActivity.this::openNativeMediaPicker); }
+        @JavascriptInterface
+        public String setDeviceProfile(String profileId) {
+            return MainActivity.this.setDeviceProfile(profileId);
+        }
         @JavascriptInterface
         public void connect() {
             runOnUiThread(() -> {

@@ -20,7 +20,7 @@
         <div class="section-heading">
           <div class="heading-copy">
             <h2>预览</h2>
-            <p id="fileSummary">支持照片、PNG 序列或短视频，目标 466 × 466。</p>
+            <p id="fileSummary">支持照片、PNG 序列或短视频，目标 466 × 466 圆屏。</p>
           </div>
           <button id="editButton" class="edit-button" disabled>编辑</button>
         </div>
@@ -48,16 +48,49 @@
         </div>
       </section>
 
-      <section class="settings-panel" aria-label="视频设置">
+      <section class="settings-panel" aria-label="屏幕设置">
+        <div class="settings-row profile-row">
+          <div class="setting-label">
+            <span>屏幕方案</span>
+            <small>选择设备当前刷入的屏幕固件</small>
+          </div>
+          <div class="profile-select">
+            <button id="deviceProfileControl" class="profile-trigger" type="button" aria-label="屏幕方案" aria-haspopup="listbox" aria-expanded="false">
+              <span id="deviceProfileLabel" class="profile-trigger-label">Waveshare 1.75C · 466 × 466</span>
+              <span class="profile-chevron" aria-hidden="true"></span>
+            </button>
+            <div id="deviceProfileMenu" class="profile-menu" role="listbox" aria-label="屏幕方案选项" hidden>
+              <button type="button" role="option" data-value="co5300_waveshare_amoled_1_75c" aria-selected="true">
+                <span>Waveshare 1.75C</span><small>466 × 466 · 圆屏</small>
+              </button>
+              <button type="button" role="option" data-value="co5300_m5stack_stopwatch" aria-selected="false">
+                <span>M5Stack StopWatch</span><small>466 × 466 · 圆屏</small>
+              </button>
+              <button type="button" role="option" data-value="ili9342_m5stack_cores3" aria-selected="false">
+                <span>M5Stack CoreS3</span><small>320 × 240 · 横屏</small>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="advancedSettings" class="advanced-settings" aria-label="视频设置" hidden>
+        <div class="advanced-settings-heading">
+          <div>
+            <h2>视频设置</h2>
+            <p>只影响视频和 PNG 序列处理</p>
+          </div>
+          <button id="closeSettingsButton" class="sheet-close" type="button" aria-label="关闭设置">×</button>
+        </div>
         <div class="settings-row">
           <div class="setting-label">
             <span>视频帧率</span>
             <small>帧数越高，占用越大</small>
           </div>
-          <div id="fpsControl" class="segmented-control compact" role="group" aria-label="视频帧率" data-value="12">
+          <div id="fpsControl" class="segmented-control compact" role="group" aria-label="视频帧率" data-value="20">
             <button type="button" data-value="8" aria-pressed="false">8</button>
-            <button class="selected" type="button" data-value="12" aria-pressed="true">12</button>
-            <button type="button" data-value="20" aria-pressed="false">20</button>
+            <button type="button" data-value="12" aria-pressed="false">12</button>
+            <button class="selected" type="button" data-value="20" aria-pressed="true">20</button>
           </div>
         </div>
         <div class="settings-divider"></div>
@@ -83,6 +116,12 @@
       </section>
 
       <footer class="action-bar">
+        <button id="settingsButton" class="action-icon" type="button" aria-label="设置" title="设置" aria-expanded="false" aria-controls="advancedSettings">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
         <button id="cameraButton" class="action-icon" type="button" aria-label="拍照" title="拍照">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M8.2 5.5 9.4 3.8h5.2l1.2 1.7H19a2 2 0 0 1 2 2v10.2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2h3.2Z" />

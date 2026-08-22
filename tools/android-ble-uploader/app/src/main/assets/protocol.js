@@ -1,10 +1,40 @@
 (function () {
-  const WIDTH = 466
-  const HEIGHT = 466
+  const PROFILES = Object.freeze({
+    co5300_waveshare_amoled_1_75c: Object.freeze({
+      id: 'co5300_waveshare_amoled_1_75c',
+      name: 'Waveshare 1.75C · 466 × 466',
+      width: 466,
+      height: 466,
+      shape: 'round',
+      colorOrder: 'RGB',
+      byteOrder: 'little',
+      wirelessContentBytes: 0x1cf0000
+    }),
+    co5300_m5stack_stopwatch: Object.freeze({
+      id: 'co5300_m5stack_stopwatch',
+      name: 'M5Stack StopWatch · 466 × 466',
+      width: 466,
+      height: 466,
+      shape: 'round',
+      colorOrder: 'RGB',
+      byteOrder: 'little',
+      wirelessContentBytes: 0xcf0000
+    }),
+    ili9342_m5stack_cores3: Object.freeze({
+      id: 'ili9342_m5stack_cores3',
+      name: 'M5Stack CoreS3 · 320 × 240',
+      width: 320,
+      height: 240,
+      shape: 'rectangle',
+      colorOrder: 'BGR',
+      byteOrder: 'little',
+      wirelessContentBytes: 0xcf0000
+    })
+  })
+  let activeProfile = PROFILES.co5300_waveshare_amoled_1_75c
   const CONTENT_MAGIC = 0x4f504331
   const CONTENT_VERSION = 1
   const HEADER_BYTES = 24
-  const MAX_CONTENT_BYTES = 0x0cf0000
   const SEQUENCE_HEADER_BYTES = 12
   const RESOURCE_BYTES = 12
 
@@ -23,32 +53,45 @@
     view.setUint32(0, CONTENT_MAGIC, true)
     view.setUint16(4, CONTENT_VERSION, true)
     view.setUint8(6, mode)
-    view.setUint16(8, WIDTH, true)
-    view.setUint16(10, HEIGHT, true)
+    view.setUint16(8, activeProfile.width, true)
+    view.setUint16(10, activeProfile.height, true)
     view.setUint16(12, frameCount, true)
     view.setUint32(16, payload.byteLength, true)
     view.setUint32(20, crc32(payload), true)
     content.set(payload, HEADER_BYTES)
-    if (content.byteLength > MAX_CONTENT_BYTES) throw new Error('内容超过 12.94 MiB 上限')
+    if (content.byteLength > activeProfile.wirelessContentBytes) {
+      throw new Error(`内容超过 ${formatMiB(activeProfile.wirelessContentBytes)} MiB 分区上限`)
+    }
     return content
   }
 
   function rgb565(imageData) {
     const source = imageData.data
-    const output = new Uint8Array(WIDTH * HEIGHT * 2)
-    for (let pixel = 0; pixel < WIDTH * HEIGHT; pixel += 1) {
+    const output = new Uint8Array(activeProfile.width * activeProfile.height * 2)
+    for (let pixel = 0; pixel < activeProfile.width * activeProfile.height; pixel += 1) {
       const sourceOffset = pixel * 4
+      const first = activeProfile.colorOrder === 'BGR' ? source[sourceOffset + 2] : source[sourceOffset]
+      const last = activeProfile.colorOrder === 'BGR' ? source[sourceOffset] : source[sourceOffset + 2]
       const value =
-        ((source[sourceOffset] & 0xf8) << 8) |
+        ((first & 0xf8) << 8) |
         ((source[sourceOffset + 1] & 0xfc) << 3) |
-        (source[sourceOffset + 2] >> 3)
-      output[pixel * 2] = value & 0xff
-      output[pixel * 2 + 1] = value >> 8
+        (last >> 3)
+      if (activeProfile.byteOrder === 'big') {
+        output[pixel * 2] = value >> 8
+        output[pixel * 2 + 1] = value & 0xff
+      } else {
+        output[pixel * 2] = value & 0xff
+        output[pixel * 2 + 1] = value >> 8
+      }
     }
     return output
   }
 
   function encodeFrame(frame) {
+    const expectedBytes = activeProfile.width * activeProfile.height * 2
+    if (frame.byteLength !== expectedBytes) {
+      throw new Error(`帧尺寸不匹配：需要 ${activeProfile.width} × ${activeProfile.height} RGB565 数据`)
+    }
     return envelope(0, 1, frame)
   }
 
@@ -87,7 +130,7 @@
     const dataBytes = encoded.reduce((total, frame) => total + frame.bytes.byteLength, 0)
     const payload = new Uint8Array(SEQUENCE_HEADER_BYTES + encoded.length * RESOURCE_BYTES + dataBytes)
     const view = new DataView(payload.buffer)
-    view.setUint32(0, WIDTH * HEIGHT * 2, true)
+    view.setUint32(0, activeProfile.width * activeProfile.height * 2, true)
     view.setUint16(4, Math.min(0xffff, Math.max(1, Math.round(frameDelayMs))), true)
     view.setUint16(6, encoded.length, true)
     view.setUint32(8, dataBytes, true)
@@ -123,7 +166,7 @@
     for (let targetFrames = encodedFrames.length; targetFrames >= 2; targetFrames -= 1) {
       const indexes = selectedFrameIndexes(encodedFrames.length, targetFrames, strategy)
       const selected = indexes.map((index) => encodedFrames[index])
-      if (sequenceContentBytes(selected) <= MAX_CONTENT_BYTES) {
+      if (sequenceContentBytes(selected) <= activeProfile.wirelessContentBytes) {
         return {
           content: buildSequence(selected, frameDelayMs),
           frameCount: selected.length,
@@ -133,13 +176,27 @@
         }
       }
     }
-    throw new Error('至少两帧内容仍超过 12.94 MiB 上限，请缩短视频或降低帧率')
+    throw new Error(`至少两帧内容仍超过 ${formatMiB(activeProfile.wirelessContentBytes)} MiB 分区上限，请缩短视频或降低帧率`)
+  }
+
+  function formatMiB(bytes) {
+    return (bytes / 1024 / 1024).toFixed(2)
+  }
+
+  function setProfile(profileId) {
+    const profile = PROFILES[profileId]
+    if (!profile) throw new Error(`不支持的屏幕方案：${profileId}`)
+    activeProfile = profile
+    return profile
   }
 
   window.OpenPencilProtocol = {
-    WIDTH,
-    HEIGHT,
-    MAX_CONTENT_BYTES,
+    get WIDTH() { return activeProfile.width },
+    get HEIGHT() { return activeProfile.height },
+    get MAX_CONTENT_BYTES() { return activeProfile.wirelessContentBytes },
+    PROFILES,
+    getProfile: () => activeProfile,
+    setProfile,
     rgb565,
     encodeFrame,
     encodeSequence,
