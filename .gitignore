@@ -2,6 +2,7 @@
 node_modules/
 
 # Build outputs
+/build/
 dist/
 dist-ssr/
 coverage/
@@ -38,6 +39,7 @@ Caddyfile.dev
 # Test and dev-server artifacts
 test-results/
 playwright-report/
+.playwright-mcp/
 blob-report/
 storybook-static/
 .vite/
@@ -77,3 +79,11 @@ scratch/
 
 # OpenCode
 .opencode/
+
+# Portable Android toolchain and generated mobile builds
+.android-portable/
+tools/android-ble-uploader/.gradle/
+tools/android-ble-uploader/app/build/
+
+# Local Codex runtime artifacts
+.codex-runtime/
