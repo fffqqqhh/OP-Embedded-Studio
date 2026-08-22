@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import type { CanvasKit, TypefaceFontProvider } from 'canvaskit-wasm'
 
 import type { SceneGraph } from '@open-pencil/scene-graph'
@@ -29,13 +30,19 @@ import type { WebFontFetch, WebFontProviderId } from '#core/text/web-fonts'
 
 type FindLocalFontOptions = { allowVariable?: boolean }
 
+function bundledAssetURL(path: string): string {
+  const base = import.meta.env.BASE_URL || '/'
+  const prefix = base.endsWith('/') ? base : `${base}/`
+  return `${prefix}${path.replace(/^\/+/, '')}`
+}
+
 const BUNDLED_FONTS: Record<string, string> = {
-  'Inter|Regular': '/Inter-Regular.ttf',
-  'Inter|Medium': '/Inter-Medium.ttf',
-  'Inter|SemiBold': '/Inter-SemiBold.ttf',
-  'Inter|Bold': '/Inter-Bold.ttf',
-  'Inter|ExtraBold': '/Inter-ExtraBold.ttf',
-  'Noto Naskh Arabic|Regular': '/NotoNaskhArabic-Regular.ttf'
+  'Inter|Regular': bundledAssetURL('/Inter-Regular.ttf'),
+  'Inter|Medium': bundledAssetURL('/Inter-Medium.ttf'),
+  'Inter|SemiBold': bundledAssetURL('/Inter-SemiBold.ttf'),
+  'Inter|Bold': bundledAssetURL('/Inter-Bold.ttf'),
+  'Inter|ExtraBold': bundledAssetURL('/Inter-ExtraBold.ttf'),
+  'Noto Naskh Arabic|Regular': bundledAssetURL('/NotoNaskhArabic-Regular.ttf')
 }
 
 export class FontManager {
