@@ -4,7 +4,7 @@ import EditorView from './views/EditorView.vue'
 import StorageView from './views/StorageView.vue'
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', component: EditorView },
     { path: '/storage', component: StorageView },
