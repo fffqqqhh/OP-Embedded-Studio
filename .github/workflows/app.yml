@@ -27,6 +27,9 @@ jobs:
 
       - uses: ./.github/actions/setup-bun
 
+      - name: Build workspace packages
+        run: bun run build:packages
+
       - name: Build static app
         env:
           GITHUB_PAGES: 'true'
