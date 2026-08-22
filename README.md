@@ -1,317 +1,283 @@
 # OP Embedded Studio
 
-Open-source design editor. Opens `.fig` and `.pen` design files, includes built-in AI, and ships as a programmable toolkit with a headless Vue SDK for building custom editors.
-
-> **Status:** Active development. Usable today, with some rough edges as features evolve.
+嵌入式 UI 设计、交互原型、固件烧录与无线传输平台。它将可视化设计画布与真实 ESP32 显示设备连接起来，让设计内容可以直接预览、烘焙、传输和烧录。
 
-**[Try it online →](https://app.openpencil.dev/demo)** · [Download](https://github.com/open-pencil/open-pencil/releases/latest) · [Documentation](https://openpencil.dev) · [Roadmap](https://openpencil.dev/development/roadmap) · [llms.txt](https://openpencil.dev/llms.txt)
+An embedded UI design, interaction prototyping, firmware flashing, and wireless content transfer platform. OP Embedded Studio connects a visual design canvas to real ESP32 display hardware so that interfaces can be previewed, baked, transferred, and flashed directly to a device.
 
-![OpenPencil](packages/docs/public/screenshot.png)
+> **项目来源与致谢：** 本项目最初基于 [OpenPencil](https://github.com/open-pencil/open-pencil) 开发。感谢 OpenPencil 原作者与社区提供优秀的开源设计编辑器基础，包括画布、文档格式、渲染、排版、AI、MCP 和 CLI 等能力。由于嵌入式设备、固件和传输链路相关改动较大，OP Embedded Studio 目前作为独立衍生项目维护，与 OpenPencil 官方项目不存在隶属关系。
+>
+> **Origin and acknowledgements:** This project was originally built on top of [OpenPencil](https://github.com/open-pencil/open-pencil). We sincerely thank the OpenPencil authors and community for the open-source editor foundation, including its canvas, document model, rendering, typography, AI, MCP, and CLI capabilities. Because OP Embedded Studio has diverged substantially around embedded hardware, firmware, and transfer workflows, it is now maintained as an independent derivative project and is not affiliated with or endorsed by the official OpenPencil project.
 
-## Installation
-
-**macOS (Homebrew):**
+## 核心能力
 
-```sh
-brew install openpencil
-```
+- 在可视化画布中设计面向真实嵌入式屏幕的 Frame，也可以直接使用独立图片节点
+- 在同一个 AI 对话中结合文字和参考图创建或调整设备界面，并继续准备单画面烧录、手动浏览、幻灯片和自定义事件交互
+- 将 Frame 或图片按目标分辨率烘焙为 RGB565 设备内容
+- 在烧录前预览圆屏裁切、画面适配和多画面交互效果
+- USB 自动检查设备固件；固件不兼容时自动更新，再继续传输当前内容
+- 支持 USB、Wi-Fi、BLE 和 Wi-Fi 实时镜像
+- 支持本地单图、PNG 序列，以及独立 Android BLE 图片上传器
+- 交互栏可导入“状态级”PNG 序列：每个状态独立播放动画，并能由屏幕/BOOT 事件即时切换到另一段动画。该模式使用独立固件，不会改变普通烧录页的内容路径。
+- 保留 OpenPencil 的设计编辑、文档格式、MCP、CLI 和设计转代码基础能力
 
-Or download from the [releases page](https://github.com/open-pencil/open-pencil/releases/latest), or [use the web app](https://app.openpencil.dev) — no install needed.
+<p align="center">
+  <img src="public/readme/ai-device-deployment.png" alt="OP Embedded Studio AI 交互烧录确认与设备预览" width="480" />
+</p>
 
-## What it does
+<p align="center">
+  <img src="public/readme/embedded-display-panel.png" alt="OP Embedded Studio 设备烧录面板：USB、BLE、Frame、交互与本地内容" width="480" />
+</p>
 
-- **Opens `.fig` and `.pen` files** — read and write native Figma files, open supported Pencil documents from the app or OS file browser, copy & paste nodes between apps
-- **AI builds designs** — describe what you want in chat, 90+ tools create and modify nodes. Connect OpenRouter, Anthropic, OpenAI, Google AI, Z.ai, MiniMax, or compatible endpoints
-- **Fully programmable** — headless CLI, XPath queries, Figma Plugin API via `eval`, MCP server for AI agents, and desktop agent integrations for Claude Code, Codex, and Gemini CLI
-- **Lint, convert, and extract tokens** — inspect documents, lint naming/layout/accessibility, convert between supported formats, analyze colors/typography/spacing/clusters, and extract design tokens
-- **Components and variants** — create reusable components, group variants into component sets, insert local assets as instances, and switch variants from the inspector
-- **Image vectorization** — convert image layers into editable vector layers with Recraft or fal.ai
-- **Design-to-code export** — export selections as JSX/Tailwind, generate token outputs, and map designs into component-oriented code workflows
-- **Vue SDK for custom editors** — headless components and composables for embedding OpenPencil into other apps or building workflow-specific editing surfaces. [Read the SDK docs →](https://openpencil.dev/programmable/sdk/)
-- **Real-time collaboration** — P2P via WebRTC, no server, no account. Cursors, presence, follow mode
-- **Auto layout & CSS Grid** — flex and grid layout via Yoga WASM, with gap, padding, alignment, track sizing
-- **~7 MB desktop app** — Tauri v2 for macOS, Windows, Linux. Also runs in the browser as a PWA
-
-## CLI
-
-```sh
-npm install -g @open-pencil/cli
-# or: bun add -g @open-pencil/cli
-```
-
-### Inspect design files
+## What OP Embedded Studio Does
 
-Browse node trees, search by name or type, dig into properties — all without opening the editor:
+- **Design with visual AI context** — create or refine an embedded screen from text and pasted reference images.
+- **Prepare device deployments with AI** — turn selected Frames or images into a single-screen deployment, manual gallery, slideshow, or custom event graph.
+- **Preview before touching hardware** — inspect the target resolution, circular viewport, image placement, and interaction behavior from the Interaction panel or an AI confirmation card.
+- **Deploy through one USB flow** — confirm the deployment and select the device once; Studio checks firmware compatibility, updates the base firmware when required, reconnects, and transfers the content.
+- **Keep content updates fast** — compatible devices receive Frame, interaction, or sequence content without reflashing the application firmware.
+- **Transfer over Wi-Fi or BLE** — initialize the matching wireless firmware once, then update content from Studio or the Android uploader.
+- **Mirror a Frame in real time** — watch one Frame and send ordered updates over the dedicated Wi-Fi realtime channel.
 
-```sh
-openpencil tree design.fig
-openpencil find design.pen --type TEXT
-openpencil node design.fig --id 1:23
-openpencil info design.fig
-```
+## 从设计到设备
 
-```
-[0] [page] "Getting started" (0:46566)
-  [0] [section] "" (0:46567)
-    [0] [frame] "Body" (0:46568)
-      [0] [frame] "Introduction" (0:46569)
-        [0] [frame] "Introduction Card" (0:46570)
-          [0] [frame] "Guidance" (0:46571)
-```
+1. 在画布中创建 Frame，或拖入一张或多张图片。
+2. 在“烧录”页签选择目标屏幕，并设置拉伸、等比缩放或不缩放。
+3. 直接烧录单画面，或在交互栏 / AI 中创建多画面交互。
+4. 在设备模拟器中检查目标比例、圆屏裁切、背景补边和事件跳转。
+5. 确认烧录并选择 USB 设备。Studio 会检查固件兼容性，然后自动更新固件或直接传输内容。
 
-### Query with XPath
+AI 的“准备”和“预览”只生成主机侧内容，不会直接操作硬件；只有用户在确认卡片中执行烧录时，才会请求 USB 设备权限。
 
-Use XPath selectors to find nodes by type, attributes, and structure:
+## AI 工作流
 
-```sh
-openpencil query design.fig "//FRAME"                              # All frames
-openpencil query design.fig "//FRAME[@width < 300]"                # Frames under 300px
-openpencil query design.fig "//TEXT[contains(@name, 'Button')]"     # Text with 'Button' in name
-openpencil query design.fig "//*[@cornerRadius > 0]"               # Rounded corners
-openpencil query design.fig "//SECTION//TEXT"                       # Text inside sections
-```
+### 统一 AI 助手
 
-### Export
+- 选中目标 Frame 后描述需要创建或修改的界面
+- 可以粘贴或拖入参考图片，让支持视觉输入的模型结合当前画布进行设计
+- AI 修改仍写回可编辑画布，可以继续手动调整和撤销
+- 设计完成后可以在同一段对话中继续准备烧录，无需切换模式或重新描述上下文
+- 根据当前选中的 Frame 或图片准备单画面烧录
+- 将多个画面组织成手动浏览、幻灯片或自定义事件交互
+- 在确认卡片中调整画面适配和背景色，并查看设备效果
+- 在卡片中直接打开交互预览，确认后再选择设备和烧录
+- 错误卡片会区分设备选择、串口占用、固件不兼容和内容失效等原因，并给出对应恢复操作
 
-Render to PNG, JPG, WEBP, SVG, `.fig`, or JSX — or export selections/pages as `.fig` and convert whole documents between supported formats:
+完成、取消或被新方案替代的卡片会折叠为历史记录，避免连续烧录时占满对话区域。
 
-```sh
-openpencil export design.fig                           # PNG
-openpencil export design.fig -f jpg -s 2 -q 90        # JPG at 2x, quality 90
-openpencil export design.fig -f fig --page "Page 1"   # Export a page as .fig
-openpencil export design.fig -f jsx --style tailwind   # Tailwind JSX
-openpencil export design.fig -f html --css tailwind    # Tailwind HTML fragment
-openpencil export design.fig -f html --html standalone --assets external # HTML + assets
-openpencil convert design.pen output.fig               # Convert between document formats
-openpencil import page.html --css styles.css -o page.fig # HTML/CSS → editable .fig
-```
+## 交互与设备模拟器
 
-DOM/CSS input flows through `@open-pencil/dom-css`, so HTML, authored CSS, and Tailwind utility CSS can become editable OpenPencil layers:
+| 模式     | 行为                                               | 典型用途                         |
+| -------- | -------------------------------------------------- | -------------------------------- |
+| 手动浏览 | 为“下一张”和“上一张”选择设备事件，可设置首尾循环   | 图片浏览、菜单翻页、界面方案对比 |
+| 幻灯片   | 按指定间隔自动切换画面，可在模拟器中暂停和重新开始 | 展示、轮播、动态信息屏           |
+| 自定义   | 为每个画面的触屏与 BOOT 事件设置目标画面           | 菜单、流程原型、设备状态机       |
 
-```sh
-openpencil import card.html --css card.css -o card.fig
-openpencil import card.html --tailwind "flex flex-col gap-3 w-80 p-6 rounded-xl bg-white" -o card.fig
-```
+当前支持触屏单击、双击、三击、长按，以及 BOOT 单击和长按事件。交互栏和 AI 烧录卡片共用同一个设备模拟器，模拟器会使用当前设备分辨率、圆屏范围、画面适配和背景色。
 
-```html
-<div className="flex flex-col gap-4 p-6 bg-white rounded-xl">
-  <p className="text-2xl font-bold text-[#1D1B20]">Card Title</p>
-  <p className="text-sm text-[#49454F]">Description text</p>
-</div>
-```
+## 交互页更新
 
-### Lint design files
+交互页现在将“状态关系”和“设备预览”分成两个可调节区域：上方专注于状态图，下方专注于实时预览，中间的分隔条可以手动调整高度。状态图不是烧录页的缩小版，而是一个只负责组织 Frame 状态和事件关系的轻量画布。
 
-Catch naming, layout, structure, and accessibility issues from the terminal:
+- **状态节点**：每个 Frame 或 PNG 序列状态显示为简洁的圆角矩形，初始状态使用标记区分。
+- **端口连接**：悬停状态节点后，可从上、右、下、左四个端口拖出连接；只有真正落到目标端口时才会创建连接，落在节点正文或空白区域会取消。
+- **正交连线**：连接使用带圆角的折线，并尽量从节点外侧绕行。相同事件、相反状态方向且端口严格互换时合并为双向箭头；条件不同或端口不同则保留独立连线。
+- **画布操作**：中键拖动平移，滚轮平移，`Ctrl`/`⌘` 加滚轮缩放，触摸设备支持双指平移和缩放；按住 `Z` 划过连线可以删除对应交互。
+- **底部配置**：选中连线或状态后，在状态图下方配置触发事件、目标状态、手动浏览顺序、幻灯片间隔和 PNG 序列播放参数。
+- **实时预览**：预览使用目标屏幕的真实宽高比和可视区域，不把圆形屏幕压缩成跑道形；预览中的交互按钮只驱动当前状态机，不直接触发烧录。
 
-```sh
-openpencil lint design.fig
-openpencil lint design.pen --preset strict
-openpencil lint design.fig --rule color-contrast
-openpencil lint design.fig --list-rules
-```
+The Interaction page now separates the state graph from the live device preview. The graph is a lightweight state editor: nodes represent Frames or PNG-sequence states, connections are created from exact ports, and transitions are configured in the bar below the graph. Orthogonal rounded routes stay outside nodes where possible; only transitions with the same event, reversed state direction, and swapped ports merge into a bidirectional arrow. Panning, zooming, touch pinch gestures, and `Z`-gesture line removal are handled inside the graph, while the preview keeps the target display aspect ratio and remains independent from flashing.
 
-### Analyze and extract design tokens
+## 画面适配
 
-Audit an entire design system from the terminal — find inconsistencies, extract the real palette, and spot components waiting to be extracted:
+| 模式     | 说明                                                         |
+| -------- | ------------------------------------------------------------ |
+| 拉伸     | 将源画面完整拉伸到目标分辨率，可能改变宽高比                 |
+| 等比缩放 | 保持宽高比完整显示，空白区域使用所选背景色                   |
+| 不缩放   | 保持源像素尺寸并居中，超出设备区域时居中裁切，不足时补背景色 |
 
-```sh
-openpencil analyze colors design.fig
-openpencil analyze typography design.fig
-openpencil analyze spacing design.fig
-openpencil analyze clusters design.fig
-openpencil analyze overlaps design.fig
-openpencil variables design.fig
-```
+画面适配统一用于 USB、Wi-Fi、BLE、实时镜像、AI 单画面烧录和 AI 交互烧录。烧录确认卡与设备模拟器显示的是相同适配规则下的结果。
 
-```
-#1d1b20  ██████████████████████████████ 17155×
-#49454f  ██████████████████████████████ 9814×
-#ffffff  ██████████████████████████████ 8620×
-#6750a4  ██████████████████████████████ 3967×
+## 传输模式
 
-3771× frame "container" (100% match)
-     size: 40×40, structure: Frame > [Frame]
+| 模式           | 单画面 | 交互 | PNG 序列 | 说明                                                  |
+| -------------- | -----: | ---: | -------: | ----------------------------------------------------- |
+| USB            |     ✅ |   ✅ |       ✅ | 自动检查 USB 基础固件，不兼容时自动更新并继续传输内容 |
+| Wi-Fi          |     ✅ |   ✅ |       ✅ | 首次通过 USB 初始化专用固件，后续无线传输内容         |
+| BLE            |     ✅ |   ✅ |       ✅ | 支持浏览器 Web Bluetooth 与 Android BLE App           |
+| Wi-Fi 实时镜像 |     ✅ |    — | 自动更新 | 固定一个 Frame，设计变化后按顺序同步到设备            |
 
-2982× instance "Checkboxes" (100% match)
-     size: 48×48, structure: Instance > [Frame]
-```
+不同模式拥有独立的状态、固件入口和传输适配器。切换模式不会复用其他模式的临时内容或连接状态。
 
-### Script with Figma Plugin API
+## 基本工作流
 
-`eval` gives you the full Figma Plugin API. Modify the file, write it back:
+### USB
 
-```sh
-openpencil eval design.fig -c "figma.currentPage.children.length"
-openpencil eval design.fig -c "figma.currentPage.selection.forEach(n => n.opacity = 0.5)" -w
-```
+1. 选择目标设备和一个 Frame / 图片；多选画面时也可以直接创建交互。
+2. 设置画面适配，并在“烧录”页签或 AI 确认卡中准备内容。
+3. 点击确认并选择 USB 设备。
+4. Studio 检查设备是否支持当前 USB 内容协议。兼容时直接传输内容；不兼容时自动更新基础固件、等待设备重新连接，再继续传输内容。
 
-### Control the running app
+正常使用不需要先进入单独的“初始化”步骤。只有设备维护、切换无线模式或底层固件开发时，才需要主动使用固件初始化入口。
 
-When the desktop app is running, omit the file argument — the CLI connects via RPC and operates on the live canvas. Useful for automation scripts, CI pipelines, or AI agents that need to interact with the editor:
+### Wi-Fi / BLE
 
-```sh
-openpencil tree                               # Inspect the live document
-openpencil export -f png                      # Screenshot the current canvas
-openpencil eval -c "figma.currentPage.name"   # Query the editor
-```
+1. 在“首次使用与设备维护”中，通过 USB 烧录对应的预编译基础固件。
+2. 连接设备创建的 Wi-Fi，或在浏览器/Android App 中连接 BLE 设备。
+3. 选择单 Frame、状态机或 PNG 序列内容。
+4. 无线上传，设备端显示传输与刷新状态。
 
-## Android BLE App
+### Wi-Fi 实时镜像
 
-## AI & MCP
+1. 烧录独立的 Realtime 固件。
+2. 连接设备网络并选择一个固定 Frame。
+3. 开始镜像；后续对该 Frame 的修改会按顺序烘焙并传输。
 
-### Built-in chat
+## 当前重点适配设备
 
-Press <kbd>⌘</kbd><kbd>J</kbd> to open the AI assistant. It has 100+ tools that can create shapes, set fills and strokes, manage auto-layout, work with components and variables, run boolean operations, analyze design tokens, and export assets. Bring your own API key for OpenRouter, Anthropic, OpenAI, Google AI, Z.ai, MiniMax, or compatible endpoints. No backend, no account.
+### Waveshare ESP32-S3-Touch-AMOLED-1.75C
 
-Not every provider works in the browser, and not every model streams tool calls correctly. See [BYOK provider & model compatibility](packages/docs/programmable/byok-provider-compatibility.md) for measured results — contributions welcome.
+- 466 × 466 圆形 AMOLED 屏幕
+- ESP32-S3 平台与 CO5300 显示控制器
+- QSPI 显示接口、RGB565 映射和 GPIO13 TE 同步
+- 圆形可视区域、居中裁切与背景补边
+- BOOT 键与触屏交互输入
 
-### Coding agents (desktop)
+### M5Stack StopWatch
 
-Use Claude Code, Codex, or Gemini CLI directly in the chat panel. The agent connects to the editor's MCP server and uses all 100+ design tools. Requires the desktop app and the agent CLI installed locally.
+- 466 × 466 圆形 AMOLED 屏幕
+- CO5300 QSPI 显示控制器，LCD_TE 使用 GPIO38
+- USB、BLE 和序列帧内容传输
+- 独立的 16MB 内容分区，支持普通 Frame、交互状态和 PNG 序列
+- PM1 电源键唤醒时序，以及 M5-IOE1 显示供电/复位
 
-Pi is also available as an optional AI SDK Harness provider. Install its companion CLI with `npm install -g @open-pencil/harness`, then add a **Pi** model profile in **Settings → AI & agents**. The companion is installed separately so OpenPencil does not bundle a JavaScript runtime for users who do not enable Harness providers.
+### M5Stack CoreS3
 
-**Setup (Claude Code):**
+- 320 × 240 横向 LCD，ILI9342C 控制器
+- SPI 显示接口，RGB565 内容格式
+- FT6336U 电容触摸，支持普通 Frame、交互和序列帧内容
+- USB 与 BLE 固件入口已接入前端
+- AXP2101 电源管理和 AW9523B 显示复位初始化已纳入固件
 
-1. Install the ACP adapter: `npm install -g @agentclientprotocol/claude-agent-acp`
-2. Add MCP permission to `~/.claude/settings.json`:
-   ```json
-   {
-     "permissions": {
-       "allow": ["mcp__open-pencil__*"]
-     }
-   }
-   ```
-3. Open the desktop app → <kbd>Ctrl</kbd><kbd>J</kbd> → select **Claude Code** from the provider dropdown
+Waveshare 与 StopWatch 是当前主要的圆形 AMOLED 验证设备；CoreS3 的 USB/BLE
+链路已接入并持续进行硬件验证。其他屏幕 profile 保留在设备目录中，便于继续扩展。
 
-### MCP server
+## 当前限制
 
-Connect Claude Code, Cursor, Windsurf, or any MCP client to inspect, modify, and export design documents headlessly. 100+ tools. [Full docs →](https://openpencil.dev/reference/mcp-tools)
+- 当前设备交互固件最多保存 10 个画面；提高上限需要评估并重新编译固件，而不是只修改前端限制。
+- Web Serial 和 Web Bluetooth 需要支持相应硬件 API 的 Chromium 浏览器，建议使用最新版 Chrome 或 Edge。
+- Wi-Fi、BLE 和实时镜像使用各自独立的基础固件，首次切换模式仍需要通过 USB 初始化对应固件。
+- CoreS3 的屏幕、电源和 USB/BLE 链路仍建议在真实设备上分别验证；它与 CO5300 圆屏使用不同的显示控制器、分辨率和总线。
+- 其他屏幕 profile 尚未达到与 Waveshare ESP32-S3-Touch-AMOLED-1.75C 相同的完整验证程度。
 
-**Stdio** (Claude Code, Cursor, Windsurf):
+## 本地运行
 
-```sh
-npm install -g @open-pencil/mcp
-claude mcp add --scope user open-pencil -- openpencil-mcp
-```
-
-For other MCP clients:
-
-```json
-{
-  "mcpServers": {
-    "open-pencil": {
-      "command": "openpencil-mcp"
-    }
-  }
-}
-```
-
-**HTTP** (scripts, CI):
-
-```sh
-openpencil-mcp-http   # Unix socket on macOS/Linux + http://127.0.0.1:7600/mcp
-```
-
-Local clients discover the private Unix socket automatically and fall back to localhost TCP. Set `PORT=0` to disable TCP on macOS/Linux.
-
-**File access:** Set `OPENPENCIL_MCP_ROOT` to scope file operations (`open_file`, `new_document`, export `path` param) to a directory. Defaults to the current working directory.
-
-### AI agent skill
-
-Teach your AI coding agent to use OpenPencil — inspect designs, export assets, analyze tokens, modify .fig files:
-
-```sh
-npx skills add open-pencil/skills@open-pencil
-```
-
-Works with Claude Code, Cursor, Windsurf, Codex, and any agent that supports [skills](https://skills.sh).
-
-For documentation-aware agents, the docs site publishes [llms.txt](https://openpencil.dev/llms.txt), [llms-full.txt](https://openpencil.dev/llms-full.txt), and per-page Markdown files generated from the VitePress docs.
-
-## Collaboration
-
-Share a link to co-edit in real time. No server, no account — peers connect directly via WebRTC.
-
-1. Click the share button in the top-right panel
-2. Share the generated link (`app.openpencil.dev/share/<room-id>`)
-3. Collaborators see your cursor, selection, and edits in real time
-4. Click a peer's avatar to follow their viewport
-
-## Why
-
-Figma is a closed platform that actively fights programmatic access. Their MCP server is read-only. [figma-use](https://github.com/dannote/figma-use) added full read/write automation via CDP — then [Figma 126 killed CDP](https://forum.figma.com/report-a-problem-6/remote-debugging-port-not-working-in-figma-desktop-126-1-2-50858). Your design files are in a proprietary binary format that only their software can fully read. Your workflows break when they decide to ship a point release.
-
-OpenPencil is the alternative: open source (MIT), reads .fig files natively, every operation is scriptable, and your data never leaves your machine.
-
-See the [roadmap](https://openpencil.dev/development/roadmap) for product direction and current Figma compatibility gaps.
-
-## Contributing
-
-### Setup
+当前项目主要以源码方式开发和运行。
 
 ```sh
 bun install
-bun run dev        # Dev server at localhost:1420
-bun run tauri dev  # Desktop app (requires Rust)
+bun run dev
 ```
 
-Alternatively, open the repository in any [Dev Container](https://containers.dev/)-compatible tool. The container pins Bun, installs the workspace dependencies, and forwards the web editor on port 1420. Start it with `bun run dev` after the container is ready.
+默认开发地址：
 
-The Dev Container supports the web editor, packages, CLI, and automated checks. Native Tauri development still requires the host setup described below because desktop windows and platform WebView dependencies are not provided in the container.
-
-### Quality gates
-
-| Command             | Description           |
-| ------------------- | --------------------- |
-| `bun run check`     | Lint + typecheck      |
-| `bun run test`      | E2E visual regression |
-| `bun run test:unit` | Unit tests            |
-| `bun run format`    | Code formatting       |
-
-### Project structure
-
-```
-packages/
-  scene-graph/    @open-pencil/scene-graph — nodes, primitives, hit testing, copy/snap/undo
-  pen/            @open-pencil/pen — Pencil document format helpers
-  kiwi/           @open-pencil/kiwi — Kiwi runtime and low-level .fig container parsing
-  fig/            @open-pencil/fig — .fig archives, SceneGraph conversion, instances, metadata
-  core/           @open-pencil/core — editor engine, renderer, layout, tools, RPC, document I/O
-  dom-css/        @open-pencil/dom-css — HTML/CSS/Tailwind to editable design documents
-  vue/            @open-pencil/vue — headless Vue SDK
-  cli/            @open-pencil/cli — headless CLI
-  mcp/            @open-pencil/mcp — MCP server (stdio + HTTP)
-  docs/           Documentation site (openpencil.dev)
-src/              Vue app (editor shell, AI, collaboration, document I/O)
-desktop/          Tauri v2 desktop app (Rust + config)
-tests/            E2E, visual, engine, and integration tests
+```text
+http://localhost:1420
 ```
 
-### Tech stack
-
-| Layer         | Tech                                                                              |
-| ------------- | --------------------------------------------------------------------------------- |
-| Rendering     | Skia (CanvasKit WASM)                                                             |
-| Layout        | Yoga WASM (flex + grid via [fork](https://github.com/open-pencil/yoga/tree/grid)) |
-| UI            | Vue 3, Reka UI, Tailwind CSS 4                                                    |
-| File format   | Kiwi binary + Zstd + ZIP                                                          |
-| Collaboration | Trystero (WebRTC P2P) + Yjs (CRDT)                                                |
-| Desktop       | Tauri v2                                                                          |
-| AI/MCP        | Multi-provider (Anthropic, OpenAI, Google AI, OpenRouter), MCP SDK, Hono          |
-
-### Desktop builds
-
-Requires [Rust](https://rustup.rs/) and platform-specific prerequisites ([Tauri v2 guide](https://v2.tauri.app/start/prerequisites/)).
+大部分常用设备 profile 与无线基础固件已作为静态资源随项目提供。只有新增屏幕、修改底层驱动或重新生成基础固件时，才需要使用嵌入式构建服务：
 
 ```sh
-bun run tauri build
+python tools/embedded-display/server/build_server.py --host 127.0.0.1 --port 8765
 ```
 
-## Acknowledgments
+Vite 开发服务默认使用 `http://127.0.0.1:1420`。不要让 ESP-IDF 生成目录进入 Vite watcher；合并上游大版本后的排查顺序见仓库外的 [`FixExperience/README.md`](../FixExperience/README.md)。
 
-Thanks to [@sld0Ant](https://github.com/sld0Ant) (Anton Soldatov) for creating and maintaining the [documentation site](https://openpencil.dev).
+## Android BLE App
+
+项目包含一个独立、轻量的 Android BLE 图片上传器：
+
+- 拍照或选择本地图片
+- 圆形画布预览
+- 双指缩放和拖动裁切
+- 自动连接目标 BLE 设备并上传
+- 无需运行完整的桌面编辑器
+
+构建命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/android-ble-uploader/build.ps1
+```
+
+Android 工程位于 `tools/android-ble-uploader/`。
+
+## 版本与发布
+
+OP Embedded Studio 桌面端与 Android BLE 上传器独立维护版本：
+
+| 产品                      | 标签格式         | 版本文件                                                        |
+| ------------------------- | ---------------- | --------------------------------------------------------------- |
+| OP Embedded Studio 桌面端 | `studio-vX.Y.Z`  | `package.json`、`desktop/tauri.conf.json`、`desktop/Cargo.toml` |
+| Android BLE 上传器        | `android-vX.Y.Z` | `tools/android-ble-uploader/app/build.gradle`                   |
+
+历史标签 `v0.3.5` 保留为 Android 上传器的旧版标签，后续不再使用无前缀的 `v*` 标签。桌面端自动更新已暂停，待项目建立自有签名密钥和更新清单后再恢复。
+
+The desktop Studio and Android uploader use independent versions. Desktop releases use `studio-vX.Y.Z`; Android releases use `android-vX.Y.Z`. The inherited desktop updater is disabled until OP Embedded Studio has its own signing key and update manifest.
+
+## 嵌入式模块结构
+
+嵌入式能力尽量与上游编辑器保持解耦：
+
+```text
+src/app/ai/device/                       AI 设备意图、确认方案、错误恢复与烧录编排
+src/features/device-prototype/           交互模式、状态规则、编辑面板与设备模拟器
+src/features/embedded-display/           设备面板、内容转换与传输能力
+  adapters/                              图片、USB、Wi-Fi、BLE 等适配层
+  components/                            设备配置与烧录界面
+  deployment/                            USB 部署计划与生命周期
+  live-mirror/                           Wi-Fi 实时镜像
+  model/                                 类型与领域模型
+  runtime/                               设备目录与静态固件入口
+
+tools/embedded-display/                  固件工程、构建服务与屏幕 profile
+tools/embedded-display/prebuilt-firmware/  可直接调用的预编译固件资源
+tools/android-ble-uploader/              独立 Android BLE 上传器
+```
+
+AI 方案、交互规则、设备 profile、内容转换和传输协议分别维护，避免把产品流程、设备实现和固件能力耦合在同一层。
+
+## OpenPencil 基础能力
+
+OP Embedded Studio 仍保留并使用大量 OpenPencil 能力，包括：
+
+- `.fig` 与 `.pen` 文档读写
+- CanvasKit / Skia 渲染
+- Yoga 自动布局
+- 组件、变量和图层编辑
+- AI 设计助手
+- MCP 与 CLI
+- HTML、CSS、JSX 和 Tailwind 相关工作流
+
+这些能力属于项目的编辑器基础，但本仓库的主要产品方向是嵌入式 UI 原型、设备预览与内容传输。OpenPencil 的原始用法和完整文档请访问其[官方仓库](https://github.com/open-pencil/open-pencil)。
+
+## 开发检查
+
+```sh
+bun run check:vue
+bun test tests/engine/app/device-prototype.test.ts
+bun test tests/engine/app/embedded-display-ai-deployment.test.ts
+bun test tests/engine/app/embedded-display-usb-firmware-flow.test.ts
+bun test tests/engine/app/embedded-display-runtime.test.ts
+bun run build
+```
+
+仓库不包含 OpenPencil 上游的大型 Git LFS 测试素材。相关说明见 `tests/fixtures/README.md`；这些测试素材不参与产品运行，也不影响中文字体 fallback。中文 fallback 优先使用系统字体，并可通过在线字体提供方加载和缓存 Noto Sans SC 等字体。
+
+## Acknowledgements
+
+- [OpenPencil](https://github.com/open-pencil/open-pencil) — the open-source editor foundation on which this project was originally built.
+- The OpenPencil authors and contributors — for the canvas, renderer, document model, typography, AI, MCP, CLI, and the broader development work inherited by this repository.
+- [Waveshare](https://www.waveshare.com/) — for the ESP32-S3-Touch-AMOLED-1.75C hardware and technical documentation used by the current primary device integration.
+- [@sld0Ant](https://github.com/sld0Ant) — for creating and maintaining the original OpenPencil documentation site.
 
 ## License
 

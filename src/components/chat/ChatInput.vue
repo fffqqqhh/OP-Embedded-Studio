@@ -4,6 +4,7 @@ import { TooltipProvider } from 'reka-ui'
 import { computed, onBeforeUnmount, ref } from 'vue'
 
 import ChatProfileSelect from '@/components/chat/ChatProfileSelect.vue'
+import ChatScreenSelect from '@/components/chat/ChatScreenSelect.vue'
 import ProviderModelSelect from '@/components/chat/ProviderModelSelect.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import InputGroup from '@/components/ui/InputGroup.vue'
@@ -199,6 +200,7 @@ function handleSubmit(e: Event) {
             >
               <icon-lucide-image-plus class="size-4" />
             </IconButton>
+            <ChatScreenSelect :disabled="isStreaming" />
           </template>
 
           <template #model>

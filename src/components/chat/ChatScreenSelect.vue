@@ -40,8 +40,8 @@ const selectedDetails = computed(() => {
 const selectCls = useSelectUI({
   trigger:
     'flex size-7 shrink-0 items-center justify-center gap-0 overflow-hidden rounded border-none bg-transparent p-0 text-muted',
-  content: 'max-h-64 min-w-64 overflow-y-auto',
-  item: 'gap-2 rounded py-1.5 pr-7 pl-2 text-[11px]'
+  content: 'max-h-72 min-w-[22rem] max-w-[calc(100vw-2rem)] overflow-y-auto',
+  item: 'min-h-12 gap-2 rounded px-2.5 py-2 pr-8 text-[11px]'
 })
 </script>
 
