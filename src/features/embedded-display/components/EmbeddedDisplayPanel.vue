@@ -1941,18 +1941,18 @@ watch([wifiSsid, wifiPassword], () => {
                     <icon-lucide-square-plus class="size-3.5 shrink-0" />
                     <span class="truncate">创建预设 Frame</span>
                   </button>
-                  <button
-                    type="button"
-                    class="flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-panel bg-accent px-2 text-[9px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="!canUploadCurrent"
-                    @click="handleUploadCurrentFrame"
-                  >
-                    <icon-lucide-upload class="size-3 shrink-0" />
-                    <span class="truncate">上传当前 Frame 至设备</span>
-                  </button>
                 </div>
               </div>
             </div>
+            <button
+              type="button"
+              class="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-panel bg-accent px-3 text-[10px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="!canUploadCurrent"
+              @click="handleUploadCurrentFrame"
+            >
+              <icon-lucide-upload class="size-3.5" />
+              上传当前 Frame 至设备
+            </button>
           </template>
 
           <template v-else-if="contentUploadMode === 'prototype'">
@@ -1998,7 +1998,7 @@ watch([wifiSsid, wifiPassword], () => {
           <template v-else>
             <div
               data-test-id="embedded-content-stage-local"
-              class="overflow-hidden rounded-panel border border-dashed border-border bg-panel-field hover:border-accent has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
+              class="overflow-hidden rounded-panel border border-dashed border-border bg-panel-field hover:border-accent"
               :class="localDropActive ? 'border-accent bg-hover' : ''"
               @dragenter.prevent="localDropActive = true"
               @dragover.prevent="localDropActive = true"
@@ -2051,17 +2051,6 @@ watch([wifiSsid, wifiPassword], () => {
                     <icon-lucide-play v-else class="size-3" />
                     {{ localPreviewPlaying ? '暂停' : '播放' }}
                   </button>
-                  <button
-                    type="button"
-                    class="flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-panel bg-accent px-2 text-[9px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="!canUploadLocal"
-                    @click="handleUploadLocalContent"
-                  >
-                    <icon-lucide-upload class="size-3 shrink-0" />
-                    <span class="truncate">
-                      {{ localContentIsVideo ? '上传视频序列至设备' : `上传 ${localContentFiles.length} 帧至设备` }}
-                    </span>
-                  </button>
                 </div>
               </div>
               <input
@@ -2074,6 +2063,15 @@ watch([wifiSsid, wifiPassword], () => {
                 @change="handleLocalContentChange"
               />
             </div>
+            <button
+              type="button"
+              class="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-panel bg-accent px-3 text-[10px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="!canUploadLocal"
+              @click="handleUploadLocalContent"
+            >
+              <icon-lucide-upload class="size-3.5" />
+              {{ localContentIsVideo ? '上传视频序列至设备' : `上传 ${localContentFiles.length} 帧至设备` }}
+            </button>
           </template>
         </div>
       </PanelSection>
