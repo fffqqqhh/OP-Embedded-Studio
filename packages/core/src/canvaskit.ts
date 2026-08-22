@@ -18,7 +18,7 @@ export async function getCanvasKit(options?: CanvasKitOptions): Promise<CanvasKi
       const pathname = decodeURIComponent(new URL(file, ckPath).pathname)
       return /^\/[A-Za-z]:\//.test(pathname) ? pathname.slice(1) : pathname
     }
-    const base = 'env' in import.meta ? import.meta.env.BASE_URL : '/'
+    const base = import.meta.env?.BASE_URL ?? '/'
     const prefix = base === '/' ? '' : base.replace(/\/$/, '')
     return `${prefix}/${file}`
   }
