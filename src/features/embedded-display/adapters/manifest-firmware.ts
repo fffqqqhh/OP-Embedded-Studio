@@ -10,7 +10,6 @@ import {
 
 const WIRELESS_FLASH_SIZE: Partial<Record<EmbeddedBuildMode, FlashSizeValues>> = {
   'usb-frame': '32MB',
-  'usb-frame-m5gfx': '16MB',
   'wifi-frame': '32MB',
   'wifi-live': '8MB',
   'ble-frame': '32MB'
@@ -51,7 +50,7 @@ export async function loadFirmwareManifestParts(
 
 export async function flashFirmwareManifest(
   manifestUrl: string,
-  buildMode: 'usb-frame' | 'usb-frame-m5gfx' | 'wifi-frame' | 'wifi-live' | 'ble-frame',
+  buildMode: 'usb-frame' | 'wifi-frame' | 'wifi-live' | 'ble-frame',
   options: Omit<SerialFlashOptions, 'flashSize'> = {}
 ): Promise<void> {
   const { manifest, parts } = await loadFirmwareManifest(manifestUrl, options.onLog)

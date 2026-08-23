@@ -7,19 +7,19 @@ import type {
 
 interface EmbeddedProfileRegistry {
   profiles?: Array<Record<string, unknown>>
+  board?: Record<string, unknown>
 }
 
 export const DEFAULT_EMBEDDED_DISPLAY_PROFILE_ID = 'co5300_waveshare_amoled_1_75c'
 
 const BUNDLED_FIRMWARE_PROFILES: Partial<Record<EmbeddedBuildMode, ReadonlySet<string>>> = {
   'usb-frame': new Set(['co5300_waveshare_amoled_1_75c', 'co5300_m5stack_stopwatch', 'ili9342_m5stack_cores3']),
-  'usb-frame-m5gfx': new Set(['co5300_m5stack_stopwatch']),
   'wifi-frame': new Set(['co5300_waveshare_amoled_1_75c', 'co5300_m5stack_stopwatch']),
   'wifi-live': new Set(['co5300_waveshare_amoled_1_75c', 'co5300_m5stack_stopwatch']),
   'ble-frame': new Set(['co5300_waveshare_amoled_1_75c', 'co5300_m5stack_stopwatch', 'ili9342_m5stack_cores3'])
 }
 
-function profileFromRegistry(profile: Record<string, unknown>): EmbeddedDisplayProfile {
+function profileFromRegistry(profile: Record<string, unknown>, boardFlash?: string): EmbeddedDisplayProfile {
   const resolution = profile.logicalResolution as { width?: number; height?: number } | undefined
   const visibleArea = profile.visibleArea as EmbeddedDisplayProfile['visibleArea']
   return {
@@ -40,14 +40,35 @@ function profileFromRegistry(profile: Record<string, unknown>): EmbeddedDisplayP
     wirelessContentBytes:
       typeof profile.wirelessContentBytes === 'number' ? profile.wirelessContentBytes : undefined,
     imageOnly: Boolean(profile.imageOnly),
-    image: profile.image as EmbeddedDisplayProfile['image']
+    image: profile.image as EmbeddedDisplayProfile['image'],
+    gpio: Array.isArray(profile.wiring)
+      ? (profile.wiring as Array<Record<string, unknown>>).map((entry) => ({
+          signal: String(entry.signal || ''),
+          gpio:
+            typeof entry.connectTo === 'string'
+              ? entry.connectTo
+              : entry.gpio === null || entry.gpio === undefined
+                ? ''
+                : `GPIO${String(entry.gpio)}`,
+          pin: entry.fpcPin === undefined ? undefined : `FPC ${String(entry.fpcPin)}`,
+          note: typeof entry.note === 'string' ? entry.note : undefined
+        })).filter((entry) => entry.signal && entry.gpio)
+      : [],
+    flashSize:
+      typeof profile.flash === 'string'
+        ? profile.flash
+        : boardFlash,
+    source: 'bundled',
+    firmwareAvailable: true
   }
 }
 
 export function bundledDisplayProfiles(): EmbeddedDisplayProfile[] {
   const registry = profileRegistry as EmbeddedProfileRegistry
+  const board = registry.board as Record<string, unknown> | undefined
+  const boardFlash = typeof board?.flash === 'string' ? board.flash : undefined
   return (registry.profiles || [])
-    .map(profileFromRegistry)
+    .map((profile) => profileFromRegistry(profile, boardFlash))
     .filter(
       (profile) =>
         profile.id &&

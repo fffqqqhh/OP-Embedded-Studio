@@ -8,7 +8,7 @@ Embedded Studio:
 | Device | Resolution | Controller / bus | Content paths |
 | --- | ---: | --- | --- |
 | M5Stack StopWatch | 466 x 466 | CO5300 / QSPI | USB, BLE, interaction, PNG sequence |
-| Waveshare ESP32-S3-Touch-AMOLED-1.75C | 466 x 466 | CO5300 / QSPI | USB, BLE, Wi-Fi, live mirror |
+| Waveshare ESP32-S3-Touch-AMOLED-1.75C | 466 x 466 | CO5300 / QSPI | USB, BLE; Wi-Fi/live mirror experimental |
 | M5Stack CoreS3 | 320 x 240 | ILI9342C / SPI | USB, BLE, interaction, PNG sequence |
 
 The matching defaults, firmware manifests, and prebuilt images are maintained in

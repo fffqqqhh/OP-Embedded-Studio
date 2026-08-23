@@ -26,6 +26,14 @@ import type {
   EmbeddedWifiCredentials
 } from '../model/types'
 import { bundledDisplayProfiles, DEFAULT_EMBEDDED_DISPLAY_PROFILE_ID } from '../runtime/catalog'
+import {
+  exportCustomDisplayProfiles,
+  importCustomDisplayProfiles,
+  loadCustomDisplayProfiles,
+  removeCustomDisplayProfile,
+  saveCustomDisplayProfile,
+  type CustomProfileExport
+} from '../runtime/profile-storage'
 
 const adapter = createEmbeddedDisplayHttpAdapter()
 const profiles = ref<EmbeddedDisplayProfile[]>([])
@@ -87,7 +95,7 @@ export function useEmbeddedDisplay() {
     buildStatus.value = 'loading'
     buildMessage.value = '正在读取屏幕方案…'
     try {
-      profiles.value = await adapter.listProfiles()
+      profiles.value = [...(await adapter.listProfiles()), ...loadCustomDisplayProfiles()]
       selectedProfileId.value =
         profiles.value.find((profile) => profile.id === DEFAULT_EMBEDDED_DISPLAY_PROFILE_ID)?.id ??
         profiles.value[0]?.id ??
@@ -117,6 +125,40 @@ export function useEmbeddedDisplay() {
         buildMessage.value = '屏幕方案已切换，请重新选择图片后再生成固件。'
       }
     }
+  }
+
+  function saveCustomProfile(profile: EmbeddedDisplayProfile): EmbeddedDisplayProfile {
+    const saved = saveCustomDisplayProfile(profile)
+    const existingIndex = profiles.value.findIndex((item) => item.id === saved.id)
+    if (existingIndex >= 0) profiles.value[existingIndex] = saved
+    else profiles.value.push(saved)
+    return saved
+  }
+
+  function deleteCustomProfile(id: string): void {
+    const profile = profiles.value.find((item) => item.id === id)
+    if (profile?.source !== 'custom') return
+    removeCustomDisplayProfile(id)
+    profiles.value = profiles.value.filter((item) => item.id !== id)
+    if (selectedProfileId.value === id) {
+      selectedProfileId.value =
+        profiles.value.find((item) => item.id === DEFAULT_EMBEDDED_DISPLAY_PROFILE_ID)?.id ??
+        profiles.value[0]?.id ?? ''
+    }
+  }
+
+  function exportCustomProfiles(): CustomProfileExport {
+    return exportCustomDisplayProfiles()
+  }
+
+  function importCustomProfiles(value: unknown): EmbeddedDisplayProfile[] {
+    const imported = importCustomDisplayProfiles(value)
+    for (const profile of imported) {
+      const existingIndex = profiles.value.findIndex((item) => item.id === profile.id)
+      if (existingIndex >= 0) profiles.value[existingIndex] = profile
+      else profiles.value.push(profile)
+    }
+    return imported
   }
 
   async function selectImage(
@@ -381,6 +423,7 @@ export function useEmbeddedDisplay() {
   return {
     selectedProfile,
     profiles,
+    customProfiles: computed(() => profiles.value.filter((profile) => profile.source === 'custom')),
     variables: MOCK_DISPLAY_VARIABLES,
     selectedImageName,
     imagePlacement,
@@ -395,6 +438,10 @@ export function useEmbeddedDisplay() {
     prototypePayload,
     serviceAvailable,
     selectProfile,
+    saveCustomProfile,
+    deleteCustomProfile,
+    exportCustomProfiles,
+    importCustomProfiles,
     selectImage,
     selectUsbImageSequence,
     selectPrototype,

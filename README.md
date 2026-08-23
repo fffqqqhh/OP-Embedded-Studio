@@ -15,7 +15,7 @@ An embedded UI design, interaction prototyping, firmware flashing, and wireless 
 - 将 Frame 或图片按目标分辨率烘焙为 RGB565 设备内容
 - 在烧录前预览圆屏裁切、画面适配和多画面交互效果
 - USB 自动检查设备固件；固件不兼容时自动更新，再继续传输当前内容
-- 支持 USB、Wi-Fi、BLE 和 Wi-Fi 实时镜像
+- 默认提供 USB 与 BLE 内容传输；Wi-Fi 和 Wi-Fi 实时镜像仍保留在源码中，属于实验性能力，默认界面不展示
 - 支持本地单图、PNG 序列，以及独立 Android BLE 图片上传器
 - 交互栏可导入“状态级”PNG 序列：每个状态独立播放动画，并能由屏幕/BOOT 事件即时切换到另一段动画。该模式使用独立固件，不会改变普通烧录页的内容路径。
 - 保留 OpenPencil 的设计编辑、文档格式、MCP、CLI 和设计转代码基础能力
@@ -35,8 +35,8 @@ An embedded UI design, interaction prototyping, firmware flashing, and wireless 
 - **Preview before touching hardware** — inspect the target resolution, circular viewport, image placement, and interaction behavior from the Interaction panel or an AI confirmation card.
 - **Deploy through one USB flow** — confirm the deployment and select the device once; Studio checks firmware compatibility, updates the base firmware when required, reconnects, and transfers the content.
 - **Keep content updates fast** — compatible devices receive Frame, interaction, or sequence content without reflashing the application firmware.
-- **Transfer over Wi-Fi or BLE** — initialize the matching wireless firmware once, then update content from Studio or the Android uploader.
-- **Mirror a Frame in real time** — watch one Frame and send ordered updates over the dedicated Wi-Fi realtime channel.
+- **Transfer over BLE** — use Web Bluetooth in a Chromium browser or the companion Android uploader.
+- **Experimental wireless paths** — Wi-Fi and Wi-Fi realtime mirror remain available for contributors who clone the repository and enable the source-level debug path; they are not part of the default product workflow.
 
 ## 从设计到设备
 
@@ -95,16 +95,16 @@ The Interaction page now separates the state graph from the live device preview.
 | 等比缩放 | 保持宽高比完整显示，空白区域使用所选背景色                   |
 | 不缩放   | 保持源像素尺寸并居中，超出设备区域时居中裁切，不足时补背景色 |
 
-画面适配统一用于 USB、Wi-Fi、BLE、实时镜像、AI 单画面烧录和 AI 交互烧录。烧录确认卡与设备模拟器显示的是相同适配规则下的结果。
+画面适配统一用于 USB、BLE、AI 单画面烧录和 AI 交互烧录。Wi-Fi 与实时镜像沿用同一套编码规则，但属于默认不开放的实验性路径。烧录确认卡与设备模拟器显示的是相同适配规则下的结果。
 
 ## 传输模式
 
-| 模式           | 单画面 | 交互 | PNG 序列 | 说明                                                  |
-| -------------- | -----: | ---: | -------: | ----------------------------------------------------- |
-| USB            |     ✅ |   ✅ |       ✅ | 自动检查 USB 基础固件，不兼容时自动更新并继续传输内容 |
-| Wi-Fi          |     ✅ |   ✅ |       ✅ | 首次通过 USB 初始化专用固件，后续无线传输内容         |
-| BLE            |     ✅ |   ✅ |       ✅ | 支持浏览器 Web Bluetooth 与 Android BLE App           |
-| Wi-Fi 实时镜像 |     ✅ |    — | 自动更新 | 固定一个 Frame，设计变化后按顺序同步到设备            |
+| 模式           | 默认状态 | 单画面 | 交互 | PNG 序列 | 说明                                                  |
+| -------------- | -------- | -----: | ---: | -------: | ----------------------------------------------------- |
+| USB            | 提供     |     ✅ |   ✅ |       ✅ | 自动检查 USB 模式固件，不兼容时更新后继续传输内容     |
+| BLE            | 提供     |     ✅ |   ✅ |       ✅ | 支持浏览器 Web Bluetooth 与 Android BLE App           |
+| Wi-Fi          | 实验性   |     — |    — |        — | 源码保留，默认界面不展示，需要自行启用并验证固件      |
+| Wi-Fi 实时镜像 | 实验性   |     — |    — |        — | 源码保留，默认界面不展示，需要自行启用并验证固件      |
 
 不同模式拥有独立的状态、固件入口和传输适配器。切换模式不会复用其他模式的临时内容或连接状态。
 
@@ -119,18 +119,16 @@ The Interaction page now separates the state graph from the live device preview.
 
 正常使用不需要先进入单独的“初始化”步骤。只有设备维护、切换无线模式或底层固件开发时，才需要主动使用固件初始化入口。
 
-### Wi-Fi / BLE
+### BLE
 
-1. 在“首次使用与设备维护”中，通过 USB 烧录对应的预编译基础固件。
-2. 连接设备创建的 Wi-Fi，或在浏览器/Android App 中连接 BLE 设备。
-3. 选择单 Frame、状态机或 PNG 序列内容。
-4. 无线上传，设备端显示传输与刷新状态。
+1. 选择支持 BLE 的内置设备方案。
+2. 在浏览器中授予 Web Bluetooth 权限，或使用 Android BLE 上传器。
+3. 选择单 Frame、交互状态机或 PNG 序列内容。
+4. 上传后等待设备返回完成状态，再开始下一次传输。
 
-### Wi-Fi 实时镜像
+### Wi-Fi 与实时镜像（实验性）
 
-1. 烧录独立的 Realtime 固件。
-2. 连接设备网络并选择一个固定 Frame。
-3. 开始镜像；后续对该 Frame 的修改会按顺序烘焙并传输。
+这两条链路不属于默认产品体验，也不在发布版界面中暴露。对底层固件、网络传输或实时镜像感兴趣的开发者可以 clone 仓库后自行启用调试路径；当前不承诺稳定性，也不提供常规用户支持。
 
 ## 当前重点适配设备
 
@@ -159,13 +157,28 @@ The Interaction page now separates the state graph from the live device preview.
 - AXP2101 电源管理和 AW9523B 显示复位初始化已纳入固件
 
 Waveshare 与 StopWatch 是当前主要的圆形 AMOLED 验证设备；CoreS3 的 USB/BLE
-链路已接入并持续进行硬件验证。其他屏幕 profile 保留在设备目录中，便于继续扩展。
+链路已接入并持续进行硬件验证。设备下拉框默认只展示这三套已接入前端的方案。
+
+## 屏幕方案与预编译固件
+
+设备方案下拉框右侧的 `+` 可以打开“屏幕方案管理”。自定义方案支持保存到当前浏览器，也可以导出 JSON 在其他机器导入。方案中可以记录：
+
+- 屏幕模块、驱动控制器和驱动型号
+- 分辨率、圆屏/矩形可视区域、接口和传输总线
+- RGB/BGR、大小端、Flash 容量和内容分区大小
+- GPIO 信号、开发板 GPIO、FPC 引脚和接线备注
+
+自定义方案保存后可以编辑或删除，并会出现在设备选单中。自定义参数可以用于预览和 RGB565 内容编码，但不会自动生成固件，也不能直接套用其他设备的固件。当前只有仓库内置且带有匹配 manifest 的三套设备可以烧录。
+
+如果要让新的 GPIO、驱动或分区配置真正可烧录，需要在 `tools/embedded-display/` 中增加对应的 ESP-IDF 默认配置、构建产物和 manifest。仅修改浏览器中的方案 JSON 不会改变设备端驱动。
 
 ## 当前限制
 
 - 当前设备交互固件最多保存 10 个画面；提高上限需要评估并重新编译固件，而不是只修改前端限制。
 - Web Serial 和 Web Bluetooth 需要支持相应硬件 API 的 Chromium 浏览器，建议使用最新版 Chrome 或 Edge。
-- Wi-Fi、BLE 和实时镜像使用各自独立的基础固件，首次切换模式仍需要通过 USB 初始化对应固件。
+- Wi-Fi 和实时镜像属于实验性源码路径，默认 UI 不展示，也不作为发布版稳定能力承诺。
+- BLE 传输依赖浏览器 Web Bluetooth 或 Android BLE 上传器；首次使用时需要在系统中授予蓝牙权限。
+- 自定义屏幕方案只有在匹配的预编译固件生成后才能烧录。
 - CoreS3 的屏幕、电源和 USB/BLE 链路仍建议在真实设备上分别验证；它与 CO5300 圆屏使用不同的显示控制器、分辨率和总线。
 - 其他屏幕 profile 尚未达到与 Waveshare ESP32-S3-Touch-AMOLED-1.75C 相同的完整验证程度。
 
@@ -184,13 +197,17 @@ bun run dev
 http://localhost:1420
 ```
 
-大部分常用设备 profile 与无线基础固件已作为静态资源随项目提供。只有新增屏幕、修改底层驱动或重新生成基础固件时，才需要使用嵌入式构建服务：
+三套内置设备 profile 及其 USB/BLE 预编译固件清单会作为静态资源随项目提供。只有新增屏幕、修改底层驱动、调整分区或重新生成基础固件时，才需要使用嵌入式构建服务：
 
 ```sh
 python tools/embedded-display/server/build_server.py --host 127.0.0.1 --port 8765
 ```
 
-Vite 开发服务默认使用 `http://127.0.0.1:1420`。不要让 ESP-IDF 生成目录进入 Vite watcher；合并上游大版本后的排查顺序见仓库外的 [`FixExperience/README.md`](../FixExperience/README.md)。
+Vite 开发服务默认使用 `http://127.0.0.1:1420`。不要让 ESP-IDF 生成目录进入 Vite watcher；合并上游大版本后的排查顺序见仓库外的 [`FixExperience/README.md`](../FixExperience/README.md)。Wi-Fi、实时镜像和高级调试入口默认关闭，源码开发者需要自行阅读对应模块后再启用。
+
+## 网页发布
+
+推送 `main` 后，`.github/workflows/app.yml` 会先构建 workspace packages，再生成静态站点并部署到 GitHub Pages。生产站点不依赖本地嵌入式构建服务；自定义屏幕方案仍只保存在用户浏览器中，不会进入发布产物。
 
 ## Android BLE App
 
@@ -231,15 +248,15 @@ The desktop Studio and Android uploader use independent versions. Desktop releas
 src/app/ai/device/                       AI 设备意图、确认方案、错误恢复与烧录编排
 src/features/device-prototype/           交互模式、状态规则、编辑面板与设备模拟器
 src/features/embedded-display/           设备面板、内容转换与传输能力
-  adapters/                              图片、USB、Wi-Fi、BLE 等适配层
+  adapters/                              图片、USB、BLE 适配层；Wi-Fi 适配保留为实验路径
   components/                            设备配置与烧录界面
   deployment/                            USB 部署计划与生命周期
-  live-mirror/                           Wi-Fi 实时镜像
+  live-mirror/                           Wi-Fi 实时镜像实验路径（默认不展示）
   model/                                 类型与领域模型
   runtime/                               设备目录与静态固件入口
 
 tools/embedded-display/                  固件工程、构建服务与屏幕 profile
-tools/embedded-display/prebuilt-firmware/  可直接调用的预编译固件资源
+tools/embedded-display/prebuilt-firmware/  内置设备可直接调用的 USB/BLE 预编译固件资源
 tools/android-ble-uploader/              独立 Android BLE 上传器
 ```
 

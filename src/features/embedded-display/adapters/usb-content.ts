@@ -11,8 +11,6 @@ const USB_FAST_PROFILES = new Set([
   'ili9342_m5stack_cores3'
 ])
 
-export type UsbContentBuildMode = 'usb-frame' | 'usb-frame-m5gfx'
-
 export type UsbFlashOptions = UsbContentTransferOptions
 
 export { requestSerialPort as requestUsbSerialPort }

@@ -33,7 +33,6 @@ import {
   flashUsbPrototypeFirmware,
   flashUsbSequenceFirmware,
   supportsUsbFrameFastFlash,
-  type UsbContentBuildMode,
   type UsbFlashOptions
 } from '../adapters/usb-content'
 import type { UsbContentSerialPort } from '../adapters/usb-content-transfer'
@@ -51,6 +50,7 @@ import { useEmbeddedDisplay } from '../composables/useEmbeddedDisplay'
 import { useSerialDeviceSession } from '../composables/useSerialDeviceSession'
 import DevicePrototypePreview from '@/features/device-prototype/components/DevicePrototypePreview.vue'
 import EmbeddedDisplayContentPreview from './EmbeddedDisplayContentPreview.vue'
+import EmbeddedDisplayProfileManager from './EmbeddedDisplayProfileManager.vue'
 import WifiLiveMirrorPanel from '../live-mirror/components/WifiLiveMirrorPanel.vue'
 import { embeddedDisplayAdvancedDebugMode } from '../debug'
 import type {
@@ -96,7 +96,6 @@ const {
 
 type BurnMode = 'frame' | 'prototype'
 type TransportMode = 'usb' | 'wifi' | 'ble' | 'wifi-live'
-type UsbDisplayBackend = 'standard' | 'm5gfx'
 type FrameResourceSource = 'baked' | 'uploaded' | null
 type WirelessTransportMode = 'wifi' | 'ble' | 'wifi-live'
 type ContentUploadMode = 'frame' | 'prototype' | 'local'
@@ -114,7 +113,6 @@ type WifiUploadContent =
   | { kind: 'slideshow'; payload: WirelessImageSequencePayload }
 
 const transportMode = ref<TransportMode>('usb')
-const usbDisplayBackend = ref<UsbDisplayBackend>('standard')
 const burnModeByTransport = ref<Record<TransportMode, BurnMode>>({
   usb: 'frame',
   wifi: 'frame',
@@ -220,6 +218,8 @@ const {
   selectPrototype,
   loadCachedFirmware
 } = useEmbeddedDisplay()
+const profileManagerOpen = ref(false)
+const profileManagerEditId = ref<string | undefined>()
 
 const resolutionLabel = computed(() => {
   const resolution = selectedProfile.value?.resolution
@@ -419,31 +419,25 @@ const transportModeLabel = computed(
     transportOptions.value.find((option) => option.value === transportMode.value)?.label ?? '当前'
 )
 const firmwareActionLabel = computed(() => `写入 ${transportModeLabel.value} 模式固件`)
-const M5_STOPWATCH_PROFILE_ID = 'co5300_m5stack_stopwatch'
-const M5GFX_DEVICE_OPTION_ID = `${M5_STOPWATCH_PROFILE_ID}:usb-frame-m5gfx`
 const profileOptions = computed(() =>
-  profiles.value.flatMap((profile) => {
-    const baseOption = { value: profile.id, label: profile.name }
-    if (profile.id !== M5_STOPWATCH_PROFILE_ID) return [baseOption]
-    return [baseOption, { value: M5GFX_DEVICE_OPTION_ID, label: `${profile.name}（M5GFX USB）` }]
-  })
+  profiles.value.map((profile) => ({
+    value: profile.id,
+    label: profile.source === 'custom' ? `${profile.name}（自定义·需匹配固件）` : profile.name
+  }))
 )
-const selectedDeviceOptionId = computed(() =>
-  selectedProfile.value?.id === M5_STOPWATCH_PROFILE_ID && usbDisplayBackend.value === 'm5gfx'
-    ? M5GFX_DEVICE_OPTION_ID
-    : selectedProfile.value?.id || ''
+const customProfileSelected = computed(() => selectedProfile.value?.source === 'custom')
+const firmwareAvailableForSelectedProfile = computed(
+  () => selectedProfile.value?.firmwareAvailable !== false && !customProfileSelected.value
 )
-function selectDeviceOption(optionId: string): void {
-  const useM5Gfx = optionId === M5GFX_DEVICE_OPTION_ID
-  usbDisplayBackend.value = useM5Gfx ? 'm5gfx' : 'standard'
-  selectProfile(useM5Gfx ? M5_STOPWATCH_PROFILE_ID : optionId)
+function openProfileManager(profileId?: string): void {
+  profileManagerEditId.value = profileId
+  profileManagerOpen.value = true
+}
+function handleProfileSaved(profile: NonNullable<typeof selectedProfile.value>): void {
+  selectProfile(profile.id)
 }
 const bleBuildMode: EmbeddedBuildMode = 'ble-frame'
-const isM5StopWatch = computed(() => selectedProfile.value?.id === M5_STOPWATCH_PROFILE_ID)
-const usbBuildMode = computed<UsbContentBuildMode>(() =>
-  isM5StopWatch.value && usbDisplayBackend.value === 'm5gfx' ? 'usb-frame-m5gfx' : 'usb-frame'
-)
-const usbManifestUrl = computed(() => manifestUrlFor(usbBuildMode.value))
+const usbManifestUrl = computed(() => manifestUrlFor('usb-frame'))
 const bleManifestUrl = computed(() => manifestUrlFor(bleBuildMode))
 const wifiManifestUrl = computed(() => manifestUrlFor('wifi-frame'))
 const wifiLiveManifestUrl = computed(() => manifestUrlFor('wifi-live'))
@@ -838,7 +832,7 @@ async function resolveUsbFirmwareManifestUrl(): Promise<string> {
 
   let manifestUrl = usbManifestUrl.value
   if (!manifestUrl) {
-    await loadCachedFirmware(usbBuildMode.value)
+    await loadCachedFirmware('usb-frame')
     manifestUrl = usbManifestUrl.value
   }
   if (selectedProfile.value?.id !== profileId || !manifestUrl) {
@@ -858,7 +852,7 @@ async function transferPreparedUsbContent(
   const result = await transferUsbContentWithFirmwareFallback({
     port: port as UsbContentSerialPort,
     manifestUrl,
-    firmwareBuildMode: usbBuildMode.value,
+    firmwareBuildMode: 'usb-frame',
     transfer: (activePort, firmwareUpdated) => {
       const progressStart = firmwareUpdated ? 70 : 10
       if (taskId !== undefined && !isUploadTaskCurrent(taskId))
@@ -1397,7 +1391,7 @@ async function handleInitializeUsbFirmware(taskId?: number) {
 
   try {
     await withUsbDeploymentLock(() =>
-      flashFirmwareManifest(manifestUrl, usbBuildMode.value, {
+      flashFirmwareManifest(manifestUrl, 'usb-frame', {
         port,
         preparingMessage: state.message,
         connectedMessage: '已连接，正在写入 USB 高速传输固件。',
@@ -1727,7 +1721,7 @@ async function loadTransportFirmware(
   sequence: number
 ): Promise<void> {
   if (mode === 'usb') {
-    await loadCachedFirmware(usbBuildMode.value)
+    await loadCachedFirmware('usb-frame')
     return
   }
   if (mode === 'ble') {
@@ -1749,20 +1743,12 @@ async function loadTransportFirmware(
 }
 
 watch(
-  [transportMode, () => selectedProfile.value?.id, usbBuildMode],
+  [transportMode, () => selectedProfile.value?.id],
   async ([mode, profileId]) => {
     const sequence = ++firmwareLoadSequence
     resetTransportFirmwareState(mode)
     if (!profileId) return
     await loadTransportFirmware(mode, profileId, sequence)
-  },
-  { immediate: true }
-)
-
-watch(
-  () => selectedProfile.value?.id,
-  (profileId) => {
-    if (profileId !== M5_STOPWATCH_PROFILE_ID) usbDisplayBackend.value = 'standard'
   },
   { immediate: true }
 )
@@ -1803,14 +1789,43 @@ watch([wifiSsid, wifiPassword], () => {
 
     <div class="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-3">
       <PanelSection v-if="selectedProfile" label="固件烧录" :default-open="true">
-        <AppSelect
-          v-if="profiles.length"
-          :model-value="selectedDeviceOptionId"
-          :options="profileOptions"
-          :disabled="modeSwitchLocked"
-          label="设备型号"
-          @update:model-value="selectDeviceOption"
-        />
+        <div v-if="profiles.length" class="flex min-w-0 items-center gap-1.5">
+          <AppSelect
+            class="min-w-0 flex-1"
+            :model-value="selectedProfile?.id || ''"
+            :options="profileOptions"
+            :disabled="modeSwitchLocked"
+            label="设备型号"
+            @update:model-value="selectProfile"
+          />
+          <button
+            type="button"
+            class="flex size-control shrink-0 items-center justify-center rounded-panel border border-border bg-canvas text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="modeSwitchLocked"
+            title="添加屏幕方案"
+            aria-label="添加屏幕方案"
+            @click="openProfileManager()"
+          >
+            <icon-lucide-plus class="size-3.5" />
+          </button>
+          <button
+            v-if="customProfileSelected"
+            type="button"
+            class="flex size-control shrink-0 items-center justify-center rounded-panel border border-border bg-canvas text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="modeSwitchLocked"
+            title="编辑当前自定义方案"
+            aria-label="编辑当前自定义方案"
+            @click="openProfileManager(selectedProfile?.id)"
+          >
+            <icon-lucide-pencil class="size-3.5" />
+          </button>
+        </div>
+        <p
+          v-if="customProfileSelected"
+          class="mt-1.5 rounded-panel border border-warning/30 bg-warning/10 px-2 py-1.5 text-[10px] text-warning"
+        >
+          这是自定义屏幕方案：参数可用于预览和编码，但当前没有匹配的预编译固件，不能直接烧录。
+        </p>
         <div class="mt-2 flex min-w-0 items-center gap-2">
           <SegmentedControl
             v-model="transportMode"
@@ -1821,7 +1836,7 @@ watch([wifiSsid, wifiPassword], () => {
           <button
             type="button"
             class="flex h-control shrink-0 items-center gap-1.5 whitespace-nowrap rounded-panel border border-border bg-canvas px-3 text-[10px] font-medium text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="uploadTaskRunning || !activeFirmwareManifestUrl"
+            :disabled="uploadTaskRunning || !activeFirmwareManifestUrl || !firmwareAvailableForSelectedProfile"
             :title="
               serialSession.ready.value ? firmwareActionLabel : `选择串口并${firmwareActionLabel}`
             "
@@ -2124,5 +2139,10 @@ watch([wifiSsid, wifiPassword], () => {
         </button>
       </div>
     </div>
+    <EmbeddedDisplayProfileManager
+      v-model:open="profileManagerOpen"
+      :edit-profile-id="profileManagerEditId"
+      @saved="handleProfileSaved"
+    />
   </div>
 </template>

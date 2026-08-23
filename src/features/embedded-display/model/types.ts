@@ -23,6 +23,17 @@ export interface EmbeddedDisplayProfile {
     yGap: number
     transport: string
   }
+  /** Hardware wiring metadata shown by the user-configurable profile manager. */
+  gpio?: Array<{
+    signal: string
+    gpio: string
+    pin?: string
+    note?: string
+  }>
+  flashSize?: string
+  source?: 'bundled' | 'custom'
+  /** Custom profiles are data-only until a matching precompiled firmware exists. */
+  firmwareAvailable?: boolean
 }
 
 export interface EmbeddedFrameBakeState {
@@ -157,7 +168,6 @@ export interface EmbeddedWifiCredentials {
 
 export type EmbeddedBuildMode =
   | 'usb-frame'
-  | 'usb-frame-m5gfx'
   | 'usb-prototype'
   | 'wifi-frame'
   | 'wifi-prototype'
