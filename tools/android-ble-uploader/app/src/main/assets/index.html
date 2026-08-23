@@ -13,7 +13,8 @@
           <h1>OP Embedded</h1>
           <p class="subtitle">BLE 图片传输</p>
         </div>
-        <span id="connectionBadge" class="badge">按需连接</span>
+        <button id="connectionBadge" class="badge mode-trigger mode-ble" type="button"
+                aria-label="切换上传模式" title="切换上传模式">蓝牙</button>
       </header>
 
       <section class="editor-card">
@@ -48,6 +49,25 @@
         </div>
       </section>
 
+      <section id="firmwareSheet" class="firmware-sheet" aria-label="固件烧录" hidden>
+        <div class="advanced-settings-heading">
+          <div>
+            <h2>固件烧录</h2>
+            <p id="firmwareProfileHint">通过 USB OTG 写入当前屏幕方案的预编译固件</p>
+          </div>
+          <button id="closeFirmwareButton" class="sheet-close" type="button" aria-label="关闭固件烧录">×</button>
+        </div>
+        <p class="firmware-note">请连接 USB OTG，必要时按住 BOOT 再点击复位。固件烧录不会上传图片内容。</p>
+        <div class="firmware-actions">
+          <button id="flashUsbFirmwareButton" class="firmware-choice" type="button">
+            <span>USB 固件</span><small>USB 内容传输版本</small>
+          </button>
+          <button id="flashBleFirmwareButton" class="firmware-choice" type="button">
+            <span>BLE 固件</span><small>BLE 内容传输版本</small>
+          </button>
+        </div>
+      </section>
+
       <section class="settings-panel" aria-label="屏幕设置">
         <div class="settings-row profile-row">
           <div class="setting-label">
@@ -74,14 +94,7 @@
         </div>
       </section>
 
-      <section id="advancedSettings" class="advanced-settings" aria-label="视频设置" hidden>
-        <div class="advanced-settings-heading">
-          <div>
-            <h2>视频设置</h2>
-            <p>只影响视频和 PNG 序列处理</p>
-          </div>
-          <button id="closeSettingsButton" class="sheet-close" type="button" aria-label="关闭设置">×</button>
-        </div>
+      <section id="advancedSettings" class="advanced-settings" aria-label="设置" hidden>
         <div class="settings-row">
           <div class="setting-label">
             <span>视频帧率</span>
@@ -104,6 +117,13 @@
             <button type="button" data-value="trim" aria-pressed="false">裁切结尾</button>
           </div>
         </div>
+        <div class="settings-row settings-action-row">
+          <div class="setting-label">
+            <span>固件烧录</span>
+            <small>初始化设备屏幕方案</small>
+          </div>
+          <button id="firmwareButton" class="settings-action-button" type="button">打开</button>
+        </div>
       </section>
 
       <section class="transfer-status">
@@ -112,7 +132,8 @@
           <p id="payloadSummary" class="payload-summary">尚未准备内容</p>
         </div>
         <div class="progress-track"><div id="progressBar"></div></div>
-        <p id="diagnosticText" class="diagnostic" aria-live="polite">BLE diagnostics: idle</p>
+        <p id="diagnosticText" class="diagnostic" aria-live="polite" hidden>BLE diagnostics: idle</p>
+        <pre id="firmwareLog" class="firmware-log" hidden></pre>
       </section>
 
       <footer class="action-bar">

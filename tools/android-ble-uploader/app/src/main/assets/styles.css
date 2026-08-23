@@ -37,6 +37,10 @@ h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.04em; }
 h2 { font-size: 17px; font-weight: 650; letter-spacing: -0.02em; }
 .subtitle { margin-top: 2px; color: #8e8e93; font-size: 12px; }
 .badge { border-radius: 999px; background: #e5e5ea; padding: 7px 10px; color: #636366; font-size: 11px; font-weight: 600; }
+.mode-trigger { min-height: 34px; border: 1px solid transparent; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; }
+.mode-trigger.mode-ble { border-color: #b9d8ff; background: #eaf3ff; color: #007aff; }
+.mode-trigger.mode-usb { border-color: #c7b8ff; background: #f1edff; color: #5e35b1; }
+.mode-trigger:active:not(:disabled) { filter: brightness(0.96); }
 .badge.connecting { background: #fff2cc; color: #8a6200; }
 .badge.connected { background: #dff6e5; color: #248a3d; }
 
@@ -113,11 +117,14 @@ button:disabled { cursor: default; opacity: 0.38; }
 .payload-summary { flex: 0 1 auto; min-width: 0; overflow: hidden; color: #aeaeb2; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .progress-track { height: 4px; overflow: hidden; border-radius: 999px; background: #d1d1d6; }
 #progressBar { width: 0; height: 100%; border-radius: inherit; background: #007aff; }
-.diagnostic { width: 100%; min-width: 0; overflow: hidden; height: 14px; margin-top: 6px; color: #8e8e93; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic, .firmware-log { display: none !important; }
 
 .settings-panel { position: relative; z-index: 3; display: grid; margin: 2px 0 4px; overflow: visible; border: 1px solid #e5e5ea; border-radius: 12px; background: #fff; }
 .settings-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 7px 10px; color: #636366; font-size: 12px; }
 .profile-row { min-height: 54px; }
+.settings-action-row { border-top: 1px solid #e5e5ea; }
+.settings-action-button { min-width: 72px; min-height: 34px; border: 1px solid #d1d1d6; border-radius: 9px; background: #f7f7fa; color: #007aff; padding: 0 12px; font-size: 11px; font-weight: 650; }
+.settings-action-button:active:not(:disabled) { border-color: #007aff; background: #eaf3ff; }
 .profile-select { position: relative; flex: 0 1 62%; min-width: 0; }
 .profile-trigger { display: flex; width: 100%; min-width: 0; min-height: 40px; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid #d1d1d6; border-radius: 10px; outline: none; background: #f7f7fa; color: #1c1c1e; padding: 0 12px; font-size: 11px; font-weight: 600; text-align: left; transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease; }
 .profile-trigger.open, .profile-trigger:focus-visible { border-color: #007aff; background: #fff; box-shadow: 0 0 0 3px rgb(0 122 255 / 14%); }
@@ -135,7 +142,7 @@ button:disabled { cursor: default; opacity: 0.38; }
 .setting-label > span { color: #3a3a3c; font-weight: 650; }
 .setting-label small { color: #8e8e93; font-size: 9px; line-height: 1.2; }
 .settings-divider { height: 1px; margin-left: 10px; background: #e5e5ea; }
-.advanced-settings { position: fixed; right: 0; bottom: max(78px, calc(env(safe-area-inset-bottom) + 72px)); left: 50%; z-index: 20; display: grid; width: min(calc(100% - 24px), 528px); gap: 0; overflow: hidden; border: 1px solid #e5e5ea; border-radius: 16px; background: rgb(255 255 255 / 98%); padding: 14px 10px 8px; box-shadow: 0 18px 42px rgb(0 0 0 / 18%), 0 3px 10px rgb(0 0 0 / 10%); transform: translateX(-50%); }
+.advanced-settings { position: fixed; right: 0; bottom: max(78px, calc(env(safe-area-inset-bottom) + 72px)); left: 50%; z-index: 20; display: grid; width: min(calc(100% - 24px), 528px); gap: 0; overflow: hidden; border: 1px solid #e5e5ea; border-radius: 16px; background: rgb(255 255 255 / 98%); padding: 8px 10px; box-shadow: 0 18px 42px rgb(0 0 0 / 18%), 0 3px 10px rgb(0 0 0 / 10%); transform: translateX(-50%); }
 .advanced-settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 0 4px 8px; }
 .advanced-settings-heading h2 { font-size: 16px; }
 .advanced-settings-heading p { margin-top: 3px; color: #8e8e93; font-size: 10px; }
@@ -149,6 +156,13 @@ button:disabled { cursor: default; opacity: 0.38; }
 .segmented-control button.selected:active:not(:disabled) { background: #fff; }
 .segmented-control.compact { flex-basis: 142px; }
 .strategy-control { flex-basis: 190px; }
+.firmware-sheet { position: fixed; right: 0; bottom: max(78px, calc(env(safe-area-inset-bottom) + 72px)); left: 50%; z-index: 21; display: grid; width: min(calc(100% - 24px), 528px); gap: 8px; overflow: hidden; border: 1px solid #e5e5ea; border-radius: 16px; background: rgb(255 255 255 / 98%); padding: 14px 10px 12px; box-shadow: 0 18px 42px rgb(0 0 0 / 18%), 0 3px 10px rgb(0 0 0 / 10%); transform: translateX(-50%); }
+.firmware-note { padding: 0 4px 3px; color: #636366; font-size: 11px; line-height: 1.45; }
+.firmware-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.firmware-choice { display: grid; min-width: 0; min-height: 58px; align-content: center; gap: 3px; border: 1px solid #d1d1d6; border-radius: 11px; background: #f7f7fa; color: #1c1c1e; padding: 8px 10px; text-align: left; }
+.firmware-choice span { font-size: 12px; font-weight: 650; }
+.firmware-choice small { color: #8e8e93; font-size: 10px; font-weight: 500; }
+.firmware-choice:active:not(:disabled) { background: #eaf3ff; border-color: #007aff; }
 
 .action-bar { display: flex; min-width: 0; align-items: stretch; gap: 8px; padding-top: 2px; }
 .action-bar > * { height: 52px; }
@@ -158,7 +172,9 @@ button:disabled { cursor: default; opacity: 0.38; }
 .action-icon svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .action-icon input { display: none; }
 .action-bar .primary { flex: 1 1 0; width: auto; min-width: 0; }
+.action-bar .secondary { flex: 1 1 0; width: auto; min-width: 0; border: 1px solid #d1d1d6; background: #fff; color: #007aff; }
 .primary { background: #007aff; color: #fff; }
+.secondary:active:not(:disabled) { border-color: #007aff; background: #eaf3ff; }
 
 @media (max-height: 680px) {
   .app-shell { padding-top: 8px; }

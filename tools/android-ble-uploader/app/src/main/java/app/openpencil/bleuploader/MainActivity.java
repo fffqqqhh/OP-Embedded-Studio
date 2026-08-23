@@ -21,7 +21,12 @@ import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.Context;
+import android.content.BroadcastReceiver;
 import android.content.pm.PackageManager;
+import android.content.IntentFilter;
+import android.app.PendingIntent;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -41,6 +46,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -49,6 +55,8 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Collections;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public final class MainActivity extends Activity {
@@ -79,6 +87,10 @@ public final class MainActivity extends Activity {
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic transferCharacteristic;
     private BluetoothGattCharacteristic statusCharacteristic;
+    private UsbManager usbManager;
+    private boolean firmwareFlashing;
+    private boolean usbContentUploading;
+    private String pendingFirmwareMode;
     private boolean pendingConnect;
     private boolean scanning;
     private boolean connected;
@@ -112,12 +124,39 @@ public final class MainActivity extends Activity {
     private long statusReadDeadline;
     private long uploadStartedAt;
 
+    private static final String USB_PERMISSION_ACTION = "app.openpencil.bleuploader.USB_PERMISSION";
+
+    private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!USB_PERMISSION_ACTION.equals(intent.getAction())) return;
+            UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+            boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+            String mode = pendingFirmwareMode;
+            pendingFirmwareMode = null;
+            if (!granted || device == null || mode == null) {
+                if ("content".equals(mode)) emitError("没有获得 USB 设备权限");
+                else emitFirmwareEvent("firmware-error", "没有获得 USB 设备权限");
+                return;
+            }
+            if ("content".equals(mode)) startUsbContentUpload(device);
+            else startFirmwareFlash(device, mode);
+        }
+    };
+
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         bluetoothAdapter = manager == null ? null : manager.getAdapter();
+        usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        IntentFilter usbFilter = new IntentFilter(USB_PERMISSION_ACTION);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(usbPermissionReceiver, usbFilter, RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(usbPermissionReceiver, usbFilter);
+        }
 
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
@@ -669,6 +708,14 @@ public final class MainActivity extends Activity {
         return 0;
     }
 
+    private static int profileWidth(String profileId) {
+        return "ili9342_m5stack_cores3".equals(profileId) ? 320 : 466;
+    }
+
+    private static int profileHeight(String profileId) {
+        return "ili9342_m5stack_cores3".equals(profileId) ? 240 : 466;
+    }
+
     private static String formatMiB(int bytes) {
         return String.format(java.util.Locale.US, "%.2f", bytes / 1024.0 / 1024.0);
     }
@@ -752,6 +799,61 @@ public final class MainActivity extends Activity {
         } catch (IOException error) {
             emitError(error.getMessage());
         }
+    }
+
+    private void requestUsbContentUpload() {
+        if (usbContentUploading) return;
+        if (payloadFile == null || !payloadFile.isFile() || payloadWrittenBytes != payloadExpectedBytes) {
+            emitError("请先选择并处理图片");
+            return;
+        }
+        UsbDevice device = EspUsbFlasher.findDevice(usbManager);
+        if (device == null) {
+            emitError("未发现 ESP32 USB 设备，请连接 USB OTG");
+            return;
+        }
+        disconnectBle();
+        pendingFirmwareMode = "content";
+        if (!usbManager.hasPermission(device)) {
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(
+                    this,
+                    1402,
+                    new Intent(USB_PERMISSION_ACTION).setPackage(getPackageName()),
+                    Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
+            emitEvent("status", "等待 USB 设备授权…", -1, -1);
+            usbManager.requestPermission(device, permissionIntent);
+            return;
+        }
+        pendingFirmwareMode = null;
+        startUsbContentUpload(device);
+    }
+
+    private void startUsbContentUpload(UsbDevice device) {
+        if (usbContentUploading) return;
+        usbContentUploading = true;
+        emitEvent("status", "正在打开 USB 内容接口…", 0, payloadExpectedBytes);
+        new Thread(() -> {
+            try (RandomAccessFile input = new RandomAccessFile(payloadFile, "r");
+                 EspUsbContentUploader uploader = EspUsbContentUploader.open(usbManager, device)) {
+                uploader.upload(input, payloadExpectedBytes, profileWidth(selectedProfileId),
+                        profileHeight(selectedProfileId), new EspUsbContentUploader.ProgressListener() {
+                            @Override
+                            public void onProgress(int written, int total, String message) {
+                                emitEvent("progress", message, written, total);
+                            }
+
+                            @Override
+                            public void onLog(String message) {
+                                emitEvent("status", message, -1, -1);
+                            }
+                        });
+                usbContentUploading = false;
+                emitEvent("complete", "USB 内容上传完成，设备正在重启", payloadExpectedBytes, payloadExpectedBytes);
+            } catch (Exception error) {
+                usbContentUploading = false;
+                emitError(error.getMessage() == null ? "USB 内容上传失败" : error.getMessage());
+            }
+        }, "op-usb-content-upload").start();
     }
 
     private final Runnable uploadRunnable = new Runnable() {
@@ -873,6 +975,102 @@ public final class MainActivity extends Activity {
 
     private void emitDiagnostic(String message) {
         emitEvent("diagnostic", message, -1, -1);
+    }
+
+    private void flashFirmware(String mode) {
+        if (firmwareFlashing) return;
+        if (!"usb".equals(mode) && !"ble".equals(mode)) {
+            emitFirmwareEvent("firmware-error", "未知固件版本");
+            return;
+        }
+        if (usbManager == null) {
+            emitFirmwareEvent("firmware-error", "当前手机不支持 USB Host");
+            return;
+        }
+        UsbDevice device = EspUsbFlasher.findDevice(usbManager);
+        if (device == null) {
+            emitFirmwareEvent("firmware-error", "未发现 ESP32 USB 设备，请使用 USB OTG 连接并进入下载模式");
+            return;
+        }
+        disconnectBle();
+        pendingFirmwareMode = mode;
+        if (!usbManager.hasPermission(device)) {
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(
+                    this,
+                    1401,
+                    new Intent(USB_PERMISSION_ACTION).setPackage(getPackageName()),
+                    Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
+            emitFirmwareEvent("firmware-status", "等待 USB 设备授权…");
+            usbManager.requestPermission(device, permissionIntent);
+            return;
+        }
+        pendingFirmwareMode = null;
+        startFirmwareFlash(device, mode);
+    }
+
+    private void startFirmwareFlash(UsbDevice device, String mode) {
+        if (firmwareFlashing) return;
+        firmwareFlashing = true;
+        emitFirmwareEvent("firmware-status", "正在打开 USB 下载接口…");
+        new Thread(() -> {
+            try {
+                String root = ("ble".equals(mode) ? "ble-frame" : "usb-frame")
+                        + "/" + selectedProfileId + "/";
+                List<EspUsbFlasher.Segment> segments = new ArrayList<>();
+                segments.add(new EspUsbFlasher.Segment(0x0000, readAsset(root + "bootloader.bin")));
+                segments.add(new EspUsbFlasher.Segment(0x8000, readAsset(root + "partition-table.bin")));
+                segments.add(new EspUsbFlasher.Segment(0x10000, readAsset(root + "st7789_simple.bin")));
+                segments.add(new EspUsbFlasher.Segment(0x310000, readAsset(root + "content-reset.bin")));
+                try (EspUsbFlasher flasher = EspUsbFlasher.open(usbManager, device, getAssets())) {
+                    flasher.flash(segments, new EspUsbFlasher.ProgressListener() {
+                        @Override
+                        public void onProgress(int written, int total, String message) {
+                            emitFirmwareEvent("firmware-progress", message, written, total);
+                        }
+
+                        @Override
+                        public void onLog(String message) {
+                            emitFirmwareEvent("firmware-log", message);
+                        }
+                    });
+                }
+                firmwareFlashing = false;
+                emitFirmwareEvent("firmware-complete", "ble".equals(mode)
+                        ? "BLE 固件烧录完成，设备正在重启"
+                        : "USB 固件烧录完成，设备正在重启");
+            } catch (Exception error) {
+                firmwareFlashing = false;
+                String message = error.getMessage();
+                emitFirmwareEvent("firmware-error", message == null ? "固件烧录失败" : message);
+            }
+        }, "op-firmware-flash").start();
+    }
+
+    private byte[] readAsset(String path) throws IOException {
+        try (InputStream input = getAssets().open(path);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[64 * 1024];
+            int count;
+            while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
+            return output.toByteArray();
+        }
+    }
+
+    private void emitFirmwareEvent(String type, String message) {
+        emitFirmwareEvent(type, message, -1, -1);
+    }
+
+    private void emitFirmwareEvent(String type, String message, int written, int total) {
+        JSONObject object = new JSONObject();
+        try {
+            object.put("type", type);
+            object.put("message", message == null ? "" : message);
+            if (written >= 0) object.put("written", written);
+            if (total >= 0) object.put("total", total);
+        } catch (JSONException ignored) {
+        }
+        String script = "window.OpenPencilApp&&window.OpenPencilApp.nativeEvent(" + object + ")";
+        runOnUiThread(() -> webView.evaluateJavascript(script, null));
     }
 
     private void emitEvent(String type, String message, int written, int total) {
@@ -1040,6 +1238,16 @@ public final class MainActivity extends Activity {
         public void upload() {
             runOnUiThread(MainActivity.this::startUpload);
         }
+
+        @JavascriptInterface
+        public void uploadUsb() {
+            runOnUiThread(MainActivity.this::requestUsbContentUpload);
+        }
+
+        @JavascriptInterface
+        public void flashFirmware(String mode) {
+            runOnUiThread(() -> MainActivity.this.flashFirmware(mode));
+        }
     }
 
     @Override
@@ -1050,6 +1258,10 @@ public final class MainActivity extends Activity {
         } catch (IOException ignored) {
         }
         disconnectBle();
+        try {
+            unregisterReceiver(usbPermissionReceiver);
+        } catch (IllegalArgumentException ignored) {
+        }
         if (webView != null) webView.destroy();
         super.onDestroy();
     }

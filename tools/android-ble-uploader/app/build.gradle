@@ -10,8 +10,16 @@ android {
         applicationId 'app.openpencil.bleuploader'
         minSdk 26
         targetSdk 35
-        versionCode 14
-        versionName '0.5.0'
+        versionCode 15
+        versionName '1.0.0'
+    }
+
+    sourceSets {
+        main {
+            // Package the checked-in Waveshare USB/BLE firmware as raw assets so
+            // the Android app can flash it without a network connection.
+            assets.srcDirs += ['../../../tools/embedded-display/prebuilt-firmware']
+        }
     }
 
     buildTypes {

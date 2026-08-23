@@ -172,6 +172,18 @@ Waveshare 与 StopWatch 是当前主要的圆形 AMOLED 验证设备；CoreS3 �
 
 如果要让新的 GPIO、驱动或分区配置真正可烧录，需要在 `tools/embedded-display/` 中增加对应的 ESP-IDF 默认配置、构建产物和 manifest。仅修改浏览器中的方案 JSON 不会改变设备端驱动。
 
+### 固件抽象边界
+
+屏幕方案和固件变体不是一一对应的。长期目标是按 **ESP32 芯片系列/硬件平台** 提供少量通用预编译固件，而不是为每一块屏幕单独编译一份：
+
+- 固件可以内置多个常见屏幕驱动，并在启动时读取方案配置；GPIO、SPI/QSPI 参数、分辨率、方向、偏移、颜色顺序和大小端都可以作为运行时参数。
+- 分区表与屏幕驱动没有直接关系。同一 Flash 容量和功能模式（例如 8/16/32MB、OTA/非 OTA、内容容量）可以复用同一份分区表，只有容量或功能边界变化时才需要切换分区模板。
+- 仍需独立提供固件的情况主要是 ESP32 芯片系列不同、外设能力或 Flash/PSRAM 规格不同，以及需要特殊电源、总线时序或显示同步处理的开发板。
+
+当前构建服务仍会为内置 profile 生成编译期 `sdkconfig`，因此自定义方案暂时只能用于预览和内容编码；这属于实现阶段限制，不代表 GPIO、驱动和分区表无法抽象。后续会将这些字段收敛为固件能力清单与运行时配置，并让方案管理器根据芯片平台和能力匹配对应的预编译固件。
+
+Firmware profiles are not intended to map one-to-one to screens. The target architecture is a small set of prebuilt images per ESP32 SoC family or hardware platform, with common panel drivers and display settings selected at runtime. GPIO, SPI/QSPI parameters, resolution, orientation, offsets, color order, and byte order can be loaded from the saved profile. Partition tables can also be shared whenever flash capacity and feature mode match; they only need a separate template when storage or OTA/content boundaries differ. The current build service still emits compile-time `sdkconfig` files for bundled profiles, so custom profiles remain preview-only for now. That is an implementation limitation, not a fundamental hardware limitation.
+
 ## 当前限制
 
 - 当前设备交互固件最多保存 10 个画面；提高上限需要评估并重新编译固件，而不是只修改前端限制。
@@ -217,6 +229,7 @@ Vite 开发服务默认使用 `http://127.0.0.1:1420`。不要让 ESP-IDF 生成
 - 圆形画布预览
 - 双指缩放和拖动裁切
 - 自动连接目标 BLE 设备并上传
+- 通过 USB OTG 烧录微雪 1.75C 的 USB 或 BLE 预编译固件（测试功能）
 - 无需运行完整的桌面编辑器
 
 构建命令：
@@ -237,6 +250,10 @@ OP Embedded Studio 桌面端与 Android BLE 上传器独立维护版本：
 | Android BLE 上传器        | `android-vX.Y.Z` | `tools/android-ble-uploader/app/build.gradle`                   |
 
 历史标签 `v0.3.5` 保留为 Android 上传器的旧版标签，后续不再使用无前缀的 `v*` 标签。桌面端自动更新已暂停，待项目建立自有签名密钥和更新清单后再恢复。
+
+当前 Android 上传器版本为 `1.0.0`，对应 `versionCode 15`。
+
+Android 发布流程：提交并推送代码后创建 `android-v1.0.0` 标签，在 GitHub Release 中上传 `dist/android/OP-Embedded-BLE-debug.apk`。当前构建产物使用 debug 签名，适合测试和内部分发；面向公开应用商店发布前需要配置正式签名。
 
 The desktop Studio and Android uploader use independent versions. Desktop releases use `studio-vX.Y.Z`; Android releases use `android-vX.Y.Z`. The inherited desktop updater is disabled until OP Embedded Studio has its own signing key and update manifest.
 

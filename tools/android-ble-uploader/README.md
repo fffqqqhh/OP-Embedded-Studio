@@ -38,12 +38,23 @@ dist/android/OP-Embedded-BLE-debug.apk
 1. 通过 USB 初始化支持 BLE 的 OP Embedded Studio 基础固件。
 2. 确保电脑端已经断开 BLE；使用手机 BLE 传输时建议同时拔掉设备 USB 线，避免 USB 串口复位或占用设备链路。
 3. 在 Android 手机安装 APK，并允许“附近设备”权限。
-4. 选择图片、裁切并上传，App 会自动连接 OP Embedded BLE。
+4. 选择图片、裁切后点击“上传到设备”；右上角可切换 USB / 蓝牙传输模式。
 
 应用不访问网络，图片处理和传输均在手机本地完成。
+
+## USB 固件烧录（测试功能）
+
+应用现在也可以通过 Android USB OTG 烧录微雪 ESP32-S3-Touch-AMOLED-1.75C 的预编译固件：
+
+1. 使用支持 USB Host/OTG 的 Android 手机连接开发板。
+2. 打开底部“设置”，点击“固件烧录”，再选择“USB 固件”或“BLE 固件”。
+3. 授予 USB 设备权限；如果设备没有自动进入下载模式，按住 `BOOT` 后重新插拔或点击复位。
+4. 等待 USB、分区表和应用固件写入完成，设备会自动重启。
+
+这里的“BLE 固件”仍然是通过 USB 烧录的设备固件，烧录完成后才可以使用本应用的 BLE 内容上传。当前只打包微雪 1.75C 的两套测试固件，其他屏幕方案暂不支持 Android 固件烧录。
 
 视频或 PNG 序列超过设备内容分区时，手机端会按“容量不足时”设置自动适配：默认均匀抽帧并保持所选 FPS，使完整内容以更快速度播放；也可以选择保留开头连续帧并裁切结尾，维持原播放速度。
 
 ## 发布标签
 
-Android 上传器使用独立版本线，当前版本为 `0.5.0`。发布时同时递增 `versionCode`、更新 `versionName`，并使用 `android-vX.Y.Z` Git 标签。历史 `v0.3.5` 标签保留不变。
+Android 上传器使用独立版本线，当前版本为 `1.0.0`（`versionCode 15`）。发布时同时递增 `versionCode`、更新 `versionName`，并使用 `android-vX.Y.Z` Git 标签；GitHub Release 上传 `dist/android/OP-Embedded-BLE-debug.apk`。当前构建产物使用 debug 签名，适合测试和内部分发。历史 `v0.3.5` 标签保留不变。

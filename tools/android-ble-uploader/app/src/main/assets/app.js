@@ -12,8 +12,13 @@
   const editButton = document.getElementById('editButton')
   const uploadButton = document.getElementById('uploadButton')
   const settingsButton = document.getElementById('settingsButton')
-  const closeSettingsButton = document.getElementById('closeSettingsButton')
   const advancedSettings = document.getElementById('advancedSettings')
+  const firmwareButton = document.getElementById('firmwareButton')
+  const firmwareSheet = document.getElementById('firmwareSheet')
+  const firmwareProfileHint = document.getElementById('firmwareProfileHint')
+  const closeFirmwareButton = document.getElementById('closeFirmwareButton')
+  const flashUsbFirmwareButton = document.getElementById('flashUsbFirmwareButton')
+  const flashBleFirmwareButton = document.getElementById('flashBleFirmwareButton')
   const backgroundInput = document.getElementById('backgroundInput')
   const backgroundPalette = document.getElementById('backgroundPalette')
   const resetButton = document.getElementById('resetButton')
@@ -23,6 +28,7 @@
   const fileSummary = document.getElementById('fileSummary')
   const payloadSummary = document.getElementById('payloadSummary')
   const diagnosticText = document.getElementById('diagnosticText')
+  const firmwareLog = document.getElementById('firmwareLog')
   const emptyPreview = document.getElementById('emptyPreview')
   const editHint = document.getElementById('editHint')
   const editControls = document.getElementById('editControls')
@@ -35,6 +41,9 @@
   let connecting = false
   let busy = false
   let pendingUpload = false
+  let firmwareBusy = false
+  let uploadTransport = localStorage.getItem('openpencil-upload-transport') === 'usb' ? 'usb' : 'ble'
+  const firmwareLogLines = []
   let editing = false
   let renderedProgressPercent = -1
   let lastProgressStatusAt = 0
@@ -95,9 +104,17 @@
     settingsButton.classList.toggle('active', nextOpen)
   }
 
+  function setFirmwareSheetOpen(open) {
+    const nextOpen = Boolean(open && !busy && !firmwareBusy)
+    firmwareSheet.hidden = !nextOpen
+    firmwareButton.classList.toggle('active', nextOpen)
+    if (nextOpen) setAdvancedSettingsOpen(false)
+  }
+
   function applyProfile(profileId) {
     const profile = protocol.setProfile(profileId)
     setProfileControlValue(profile)
+    firmwareProfileHint.textContent = `通过 USB OTG 写入 ${profile.name} 预编译固件`
     canvas.width = profile.width
     canvas.height = profile.height
     previewWrap.dataset.shape = profile.shape
@@ -152,22 +169,18 @@
   }
 
   function updateConnectionBadge() {
-    connectionBadge.className = 'badge'
-    if (connected) {
-      connectionBadge.textContent = '已连接'
-      connectionBadge.classList.add('connected')
-    } else if (connecting) {
-      connectionBadge.textContent = '连接中'
-      connectionBadge.classList.add('connecting')
-    } else {
-      connectionBadge.textContent = '按需连接'
-    }
+    connectionBadge.className = `badge mode-trigger mode-${uploadTransport}`
+    connectionBadge.textContent = uploadTransport === 'usb' ? 'USB' : '蓝牙'
+    connectionBadge.setAttribute('aria-label', `上传模式：${uploadTransport === 'usb' ? 'USB' : '蓝牙'}，点击切换`)
+    connectionBadge.title = `上传模式：${uploadTransport === 'usb' ? 'USB' : '蓝牙'}（点击切换）`
+    connectionBadge.disabled = busy
   }
 
   function updateActions() {
     fileInput.disabled = busy
     cameraButton.disabled = busy
     settingsButton.disabled = busy
+    firmwareButton.disabled = busy || firmwareBusy
     deviceProfileControl.disabled = busy
     fpsControl.querySelectorAll('button').forEach((button) => { button.disabled = busy })
     overflowStrategyControl.querySelectorAll('button').forEach((button) => { button.disabled = busy })
@@ -177,6 +190,7 @@
     if (busy) {
       setProfileMenuOpen(false)
       setAdvancedSettingsOpen(false)
+      setFirmwareSheetOpen(false)
     }
     editButton.textContent = editing ? '完成' : '编辑'
     editButton.classList.toggle('active', editing)
@@ -448,12 +462,14 @@
 
   function startNativeUpload() {
     pendingUpload = false
-    setStatus('设备已连接，正在上传…')
-    window.OpenPencilNative.upload()
+    setStatus(uploadTransport === 'usb' ? 'USB 设备已连接，正在上传…' : 'BLE 设备已连接，正在上传…')
+    if (uploadTransport === 'usb') window.OpenPencilNative.uploadUsb()
+    else window.OpenPencilNative.upload()
   }
 
-  async function processAndUpload() {
-    if (!window.OpenPencilNative) return setStatus('原生 BLE 桥不可用', 'error')
+  async function processAndUpload(transport = 'ble') {
+    if (!window.OpenPencilNative) return setStatus('原生设备桥不可用', 'error')
+    uploadTransport = transport === 'usb' ? 'usb' : 'ble'
     setEditing(false)
     busy = true
     pendingUpload = false
@@ -504,7 +520,9 @@
           : overflowDetail ? `序列已适配容量：${overflowDetail}，正在查找设备…` : '内容已准备，正在查找设备…'
       )
       sendPayloadToNative(content)
-      if (connected) {
+      if (uploadTransport === 'usb') {
+        startNativeUpload()
+      } else if (connected) {
         startNativeUpload()
       } else {
         pendingUpload = true
@@ -629,11 +647,13 @@
   document.addEventListener('pointerdown', (event) => {
     if (!event.target.closest('.profile-select')) setProfileMenuOpen(false)
     if (!event.target.closest('#advancedSettings, #settingsButton')) setAdvancedSettingsOpen(false)
+    if (!event.target.closest('#firmwareSheet, #firmwareButton')) setFirmwareSheetOpen(false)
   })
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       setProfileMenuOpen(false)
       setAdvancedSettingsOpen(false)
+      setFirmwareSheetOpen(false)
     }
   })
   setSegmentValue(fpsControl, localStorage.getItem('openpencil-video-fps') || '20')
@@ -649,10 +669,48 @@
   })
 
   settingsButton.addEventListener('click', () => setAdvancedSettingsOpen(advancedSettings.hidden))
-  closeSettingsButton.addEventListener('click', () => setAdvancedSettingsOpen(false))
+  connectionBadge.addEventListener('click', () => {
+    if (busy) return
+    uploadTransport = uploadTransport === 'usb' ? 'ble' : 'usb'
+    localStorage.setItem('openpencil-upload-transport', uploadTransport)
+    connected = false
+    connecting = false
+    updateConnectionBadge()
+    setStatus(`已切换上传模式：${uploadTransport === 'usb' ? 'USB' : '蓝牙'}`)
+  })
+
+  firmwareButton.addEventListener('click', () => setFirmwareSheetOpen(firmwareSheet.hidden))
+  closeFirmwareButton.addEventListener('click', () => setFirmwareSheetOpen(false))
+  function requestFirmwareFlash(mode) {
+    if (busy || firmwareBusy) return
+    if (!window.OpenPencilNative?.flashFirmware) {
+      setStatus('当前版本不支持 USB 固件烧录', 'error')
+      return
+    }
+    if (window.OpenPencilNative.setDeviceProfile) {
+      const profileError = window.OpenPencilNative.setDeviceProfile(currentProfile().id)
+      if (profileError) {
+        setStatus(profileError, 'error')
+        return
+      }
+    }
+    setFirmwareSheetOpen(false)
+    firmwareBusy = true
+    busy = true
+    firmwareLogLines.length = 0
+    firmwareLog.hidden = false
+    firmwareLog.textContent = ''
+    renderedProgressPercent = -1
+    progressBar.style.width = '0%'
+    setStatus(mode === 'ble' ? '准备 BLE 固件烧录…' : '准备 USB 固件烧录…')
+    window.OpenPencilNative.flashFirmware(mode)
+    updateActions()
+  }
+  flashUsbFirmwareButton.addEventListener('click', () => requestFirmwareFlash('usb'))
+  flashBleFirmwareButton.addEventListener('click', () => requestFirmwareFlash('ble'))
 
   editButton.addEventListener('click', () => setEditing(!editing))
-  uploadButton.addEventListener('click', processAndUpload)
+  uploadButton.addEventListener('click', () => processAndUpload(uploadTransport))
   resetButton.addEventListener('click', resetCrop)
   backgroundPalette.addEventListener('click', (event) => {
     const swatch = event.target.closest('.color-swatch')
@@ -729,7 +787,35 @@
       }
     },
     nativeEvent(event) {
-      if (event.type === 'connected') {
+      if (event.type === 'firmware-progress') {
+        const percent = event.total ? Math.round(event.written / event.total * 100) : 0
+        progressBar.style.width = `${percent}%`
+        setStatus(`${event.message}：${percent}%`)
+      } else if (event.type === 'firmware-status') {
+        setStatus(event.message)
+        firmwareLogLines.push(event.message)
+        firmwareLog.textContent = firmwareLogLines.join('\n')
+        firmwareLog.scrollTop = firmwareLog.scrollHeight
+      } else if (event.type === 'firmware-log') {
+        diagnosticText.textContent = `USB diagnostics: ${event.message}`
+        firmwareLogLines.push(event.message)
+        firmwareLog.textContent = firmwareLogLines.join('\n')
+        firmwareLog.scrollTop = firmwareLog.scrollHeight
+      } else if (event.type === 'firmware-complete') {
+        firmwareBusy = false
+        busy = false
+        progressBar.style.width = '100%'
+        setStatus(event.message, 'success')
+        firmwareLogLines.push(event.message)
+        firmwareLog.textContent = firmwareLogLines.join('\n')
+      } else if (event.type === 'firmware-error') {
+        firmwareBusy = false
+        busy = false
+        progressBar.style.width = '0%'
+        setStatus(event.message, 'error')
+        firmwareLogLines.push(`ERROR: ${event.message}`)
+        firmwareLog.textContent = firmwareLogLines.join('\n')
+      } else if (event.type === 'connected') {
         connected = true
         connecting = false
         updateConnectionBadge()
