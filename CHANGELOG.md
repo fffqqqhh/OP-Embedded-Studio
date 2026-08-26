@@ -8,6 +8,7 @@
 
 ### Added
 
+- Show encoded display-resource statistics after preparing local animation uploads, including source and used frames, raw and stored sizes, codec strategy, compression ratio, and content-partition capacity.
 - Support verified ST7789, ST7735S, GC9D01N, GC9A01/I80, and ST77916/QSPI display profiles across USB, Wi-Fi, Wi-Fi live-mirror, and BLE deployment modes.
 - Snap vector points, moved layers, and resized edges to nearby geometry, sibling layer bounds, canvas and frame layout guides, and whole-pixel coordinates with visible alignment guides, fractional-coordinate preservation when pixel snapping is off, and persistent geometry, object, and pixel-grid controls in General settings and the Preferences menu.
 - Run Pi through AI SDK HarnessAgent as a configurable desktop provider with multiple saved model profiles, secure credentials, existing MCP design tools, and per-profile thinking and permission settings.

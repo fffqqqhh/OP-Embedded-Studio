@@ -39,6 +39,7 @@ import type { UsbContentSerialPort } from '../adapters/usb-content-transfer'
 import {
   encodeUsbSequenceFrames,
   imageFilesToUsbSequence,
+  sequenceContentCapacityBytes,
   type SequenceOverflowStrategy,
   type UsbImageSequencePayload
 } from '../adapters/usb-sequence'
@@ -146,8 +147,11 @@ const localPreviewPlaying = ref(true)
 const localPreviewMediaType = ref<'image' | 'video'>('image')
 const localDropActive = ref(false)
 const localFileInput = ref<HTMLInputElement>()
+const localSequenceStatsPending = ref(false)
+const localSequenceStatsError = ref('')
 let localPreviewTimer: number | undefined
 let framePreviewRequest = 0
+let localSequenceStatsRequest = 0
 const activeUploadId = ref<number | null>(null)
 const uploadTaskLabel = ref('')
 const uploadTaskStatus = ref<'idle' | 'running' | 'success' | 'error' | 'cancelled'>('idle')
@@ -241,12 +245,10 @@ function isVideoFile(file: File): boolean {
   return file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi)$/i.test(file.name)
 }
 
-const localContentIsVideo = computed(
-  () => {
-    const file = localContentFiles.value[0]
-    return localContentFiles.value.length === 1 && Boolean(file && isVideoFile(file))
-  }
-)
+const localContentIsVideo = computed(() => {
+  const file = localContentFiles.value[0]
+  return localContentFiles.value.length === 1 && Boolean(file && isVideoFile(file))
+})
 const sequenceFrameRate = ref(20)
 const sequenceOverflowStrategy = ref<SequenceOverflowStrategy>('speed')
 const sequenceFrameRateOptions = [
@@ -267,7 +269,8 @@ const sequenceFrameRateSelectValue = computed({
 })
 const localContentLabel = computed(() => {
   if (!localContentFiles.value.length) return '图片、PNG 序列或视频'
-  if (localContentIsVideo.value) return `${localContentFiles.value[0]?.name ?? '本地视频'} · ${sequenceFrameRate.value} FPS`
+  if (localContentIsVideo.value)
+    return `${localContentFiles.value[0]?.name ?? '本地视频'} · ${sequenceFrameRate.value} FPS`
   if (localContentFiles.value.length === 1) return localContentFiles.value[0]?.name ?? '本地图片'
   return `${localContentFiles.value.length} 帧 PNG 序列 · ${sequenceFrameRate.value} FPS`
 })
@@ -299,6 +302,45 @@ const preparedLocalSequenceSummary = computed(() => {
   if (payload.adaptation === 'speed') adaptation = '完整内容已加速'
   else if (payload.adaptation === 'trim') adaptation = '结尾已裁切'
   return `已处理 ${payload.frameCount} 帧 · 播放 ${durationSeconds.toFixed(1)} 秒 · ${adaptation}`
+})
+
+interface SequenceStatItem {
+  label: string
+  value: string
+}
+
+function formatMiB(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(2)} MiB`
+}
+
+const preparedLocalSequenceEncoding = computed(() => {
+  const payload = preparedLocalSequence.value
+  if (!payload) return ''
+  if (payload.patchFrames > 0) return '局部差分 / RLE16 自动'
+  if (payload.compressedFrames === payload.frameCount) return 'RLE16'
+  if (payload.compressedFrames > 0) return 'Raw / RLE16 自动'
+  return 'Raw RGB565'
+})
+const preparedLocalSequenceStats = computed<SequenceStatItem[]>(() => {
+  const payload = preparedLocalSequence.value
+  const profile = selectedProfile.value
+  if (!payload || !profile) return []
+  return [
+    { label: '原始帧数', value: `${payload.sourceFrameCount} 帧` },
+    { label: '使用帧数', value: `${payload.frameCount} 帧` },
+    { label: '原始数据', value: formatMiB(payload.rawBytes) },
+    {
+      label: '设备数据',
+      value: `${preparedLocalSequenceEncoding.value} · ${formatMiB(payload.storedBytes)}`
+    },
+    { label: '资源区容量', value: formatMiB(sequenceContentCapacityBytes(profile)) }
+  ]
+})
+const preparedLocalSequenceStatus = computed(() => {
+  const payload = preparedLocalSequence.value
+  if (!payload) return ''
+  const ratio = payload.rawBytes > 0 ? (payload.storedBytes / payload.rawBytes) * 100 : 0
+  return `资源已编码：${payload.width}×${payload.height} · ${payload.frameCount} 帧 · ${preparedLocalSequenceEncoding.value} · ${formatMiB(payload.storedBytes)}（原始数据的 ${ratio.toFixed(1)}%）`
 })
 const availablePrototypeOptions = computed(() =>
   (prototypeOptions ?? []).filter(
@@ -623,9 +665,7 @@ function restartLocalPreview(): void {
 }
 
 function setLocalContentFiles(files: File[]): void {
-  const supportedFiles = files.filter(
-    (file) => file.type.startsWith('image/') || isVideoFile(file)
-  )
+  const supportedFiles = files.filter((file) => file.type.startsWith('image/') || isVideoFile(file))
   const videoFiles = supportedFiles.filter(isVideoFile)
   if (!supportedFiles.length) {
     bakeError.value = '请选择图片、PNG 序列或视频文件'
@@ -645,6 +685,9 @@ function setLocalContentFiles(files: File[]): void {
     return
   }
   const selectedFiles = supportedFiles
+  usbSequencePayload.value = null
+  wifiSequencePayload.value = null
+  bleSequencePayload.value = null
   clearLocalPreview()
   localContentFiles.value = selectedFiles
   localPreviewMediaType.value = videoFiles.length ? 'video' : 'image'
@@ -653,6 +696,7 @@ function setLocalContentFiles(files: File[]): void {
   restartLocalPreview()
   contentUploadMode.value = 'local'
   bakeError.value = ''
+  void prepareLocalSequenceStats()
 }
 
 function handleLocalContentChange(event: Event): void {
@@ -702,8 +746,30 @@ watch([contentUploadMode, localPreviewPlaying, () => localPreviewUrls.value.leng
   else clearLocalPreviewTimer()
 })
 
+watch(
+  [
+    sequenceFrameRate,
+    sequenceOverflowStrategy,
+    imagePlacement,
+    frameBackgroundColor,
+    () => selectedProfile.value?.id
+  ],
+  () => {
+    if (contentUploadMode.value !== 'local') return
+    usbSequencePayload.value = null
+    wifiSequencePayload.value = null
+    bleSequencePayload.value = null
+    void prepareLocalSequenceStats()
+  }
+)
+
+watch(transportMode, () => {
+  if (contentUploadMode.value === 'local') void prepareLocalSequenceStats()
+})
+
 onUnmounted(() => {
   framePreviewRequest += 1
+  localSequenceStatsRequest += 1
   if (framePreviewUrl.value) URL.revokeObjectURL(framePreviewUrl.value)
   clearLocalPreview()
 })
@@ -753,16 +819,48 @@ async function buildLocalSequencePayload(
       placement: imagePlacement.value,
       backgroundColor: frameBackgroundColor.value
     })
-    const encoder = transport === 'usb'
-      ? encodeUsbSequenceFrames
-      : transport === 'wifi'
-        ? encodeWifiSequenceFrames
-        : encodeBleSequenceFrames
+    const encoder =
+      transport === 'usb'
+        ? encodeUsbSequenceFrames
+        : transport === 'wifi'
+          ? encodeWifiSequenceFrames
+          : encodeBleSequenceFrames
     return encoder(profile, video.frames, files[0].name, options)
   }
   if (transport === 'usb') return imageFilesToUsbSequence(files, profile, options)
   if (transport === 'wifi') return imageFilesToWifiSequence(files, profile, options)
   return imageFilesToBleSequence(files, profile, options)
+}
+
+async function prepareLocalSequenceStats(): Promise<void> {
+  const request = ++localSequenceStatsRequest
+  const files = [...localContentFiles.value]
+  const profile = selectedProfile.value
+  const transport = transportMode.value
+  localSequenceStatsError.value = ''
+  if (
+    !profile ||
+    !files.length ||
+    (!localContentIsVideo.value && files.length < 2) ||
+    transport === 'wifi-live'
+  ) {
+    localSequenceStatsPending.value = false
+    return
+  }
+
+  localSequenceStatsPending.value = true
+  try {
+    const payload = await buildLocalSequencePayload(files, profile, transport)
+    if (request !== localSequenceStatsRequest) return
+    if (transport === 'usb') usbSequencePayload.value = payload
+    else if (transport === 'wifi') wifiSequencePayload.value = payload
+    else bleSequencePayload.value = payload
+  } catch (error) {
+    if (request !== localSequenceStatsRequest) return
+    localSequenceStatsError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (request === localSequenceStatsRequest) localSequenceStatsPending.value = false
+  }
 }
 
 function setPreparedSequenceMessage(payload: UsbImageSequencePayload, source: string): void {
@@ -800,11 +898,12 @@ async function prepareUsbFrameContent(source: 'frame' | 'file', taskId?: number)
       usbSequencePayload.value = await buildLocalSequencePayload(files, profile, 'usb')
       imagePayload.value = null
       setPreparedSequenceMessage(usbSequencePayload.value, '本地序列')
-    } else await selectImage(files[0], {
-      upload: false,
-      placement: imagePlacement.value,
-      backgroundColor: frameBackgroundColor.value
-    })
+    } else
+      await selectImage(files[0], {
+        upload: false,
+        placement: imagePlacement.value,
+        backgroundColor: frameBackgroundColor.value
+      })
   } else {
     const profile = selectedProfile.value
     if (!profile) return false
@@ -1836,7 +1935,11 @@ watch([wifiSsid, wifiPassword], () => {
           <button
             type="button"
             class="flex h-control shrink-0 items-center gap-1.5 whitespace-nowrap rounded-panel border border-border bg-canvas px-3 text-[10px] font-medium text-surface hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="uploadTaskRunning || !activeFirmwareManifestUrl || !firmwareAvailableForSelectedProfile"
+            :disabled="
+              uploadTaskRunning ||
+              !activeFirmwareManifestUrl ||
+              !firmwareAvailableForSelectedProfile
+            "
             :title="
               serialSession.ready.value ? firmwareActionLabel : `选择串口并${firmwareActionLabel}`
             "
@@ -2044,7 +2147,8 @@ watch([wifiSsid, wifiPassword], () => {
                   {{ localContentPrimary }}
                 </p>
                 <p class="flex min-w-0 items-center truncate text-[9px] text-muted">
-                  {{ localContentSecondary }}{{ preparedLocalSequenceSummary ? ` · ${preparedLocalSequenceSummary}` : '' }}
+                  {{ localContentSecondary
+                  }}{{ preparedLocalSequenceSummary ? ` · ${preparedLocalSequenceSummary}` : '' }}
                 </p>
                 <div class="flex min-w-0 items-center gap-1.5">
                   <button
@@ -2078,6 +2182,38 @@ watch([wifiSsid, wifiPassword], () => {
                 @change="handleLocalContentChange"
               />
             </div>
+            <p
+              v-if="localSequenceStatsPending"
+              class="mt-2 rounded-panel border border-border bg-panel-field px-2.5 py-2 text-[10px] text-muted"
+            >
+              正在计算帧数、压缩数据和资源区占用…
+            </p>
+            <p
+              v-else-if="localSequenceStatsError"
+              class="mt-2 rounded-panel border border-danger/40 bg-panel-field px-2.5 py-2 text-[10px] text-danger"
+            >
+              {{ localSequenceStatsError }}
+            </p>
+            <div
+              v-if="preparedLocalSequenceStats.length"
+              class="mt-2 rounded-panel border border-border bg-panel-field p-2.5"
+            >
+              <p class="text-[10px] leading-4 text-success">
+                {{ preparedLocalSequenceStatus }}
+              </p>
+              <div class="mt-2 grid grid-cols-2 gap-1.5">
+                <div
+                  v-for="stat in preparedLocalSequenceStats"
+                  :key="stat.label"
+                  class="min-w-0 rounded-panel border border-border bg-canvas px-2.5 py-2 last:col-span-2"
+                >
+                  <p class="text-[9px] text-muted">{{ stat.label }}</p>
+                  <p class="mt-0.5 break-words text-[10px] font-medium leading-4 text-surface">
+                    {{ stat.value }}
+                  </p>
+                </div>
+              </div>
+            </div>
             <button
               type="button"
               class="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-panel bg-accent px-3 text-[10px] font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
@@ -2085,7 +2221,11 @@ watch([wifiSsid, wifiPassword], () => {
               @click="handleUploadLocalContent"
             >
               <icon-lucide-upload class="size-3.5" />
-              {{ localContentIsVideo ? '上传视频序列至设备' : `上传 ${localContentFiles.length} 帧至设备` }}
+              {{
+                localContentIsVideo
+                  ? '上传视频序列至设备'
+                  : `上传 ${localContentFiles.length} 帧至设备`
+              }}
             </button>
           </template>
         </div>

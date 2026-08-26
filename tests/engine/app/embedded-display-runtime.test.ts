@@ -35,6 +35,8 @@ describe('embedded display runtime catalog', () => {
     const modes = ['usb-frame', 'wifi-frame', 'wifi-live', 'ble-frame'] as const
 
     for (const profileId of importedProfileIds) {
+      const profile = bundledDisplayProfiles().find((candidate) => candidate.id === profileId)
+      expect(profile?.wirelessContentBytes).toBe(0x4f0000)
       for (const mode of modes) {
         expect(bundledFirmwareManifestUrl(profileId, mode)).not.toBeNull()
       }

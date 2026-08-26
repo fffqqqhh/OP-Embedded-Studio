@@ -132,7 +132,8 @@
         "controlledByFirmware": false,
         "menuconfigBacklightGpio": -1
       },
-      "flash": "8MB"
+      "flash": "8MB",
+      "wirelessContentBytes": 5177344
     },
     {
       "id": "st7735s_lb090r_if03",
@@ -244,7 +245,8 @@
         "controlledByFirmware": false,
         "menuconfigBacklightGpio": -1
       },
-      "flash": "8MB"
+      "flash": "8MB",
+      "wirelessContentBytes": 5177344
     },
     {
       "id": "gc9d01n_gvh099wq010b_a0",
@@ -368,7 +370,8 @@
         "controlledByFirmware": false,
         "menuconfigBacklightGpio": -1
       },
-      "flash": "8MB"
+      "flash": "8MB",
+      "wirelessContentBytes": 5177344
     },
     {
       "id": "co5300_waveshare_amoled_1_75c",
@@ -714,7 +717,8 @@
         "controlledByFirmware": false,
         "menuconfigBacklightGpio": -1
       },
-      "flash": "8MB"
+      "flash": "8MB",
+      "wirelessContentBytes": 5177344
     },
     {
       "id": "st77916_xf_gf132a159",
@@ -889,7 +893,8 @@
         "controlledByFirmware": false,
         "menuconfigBacklightGpio": -1
       },
-      "flash": "8MB"
+      "flash": "8MB",
+      "wirelessContentBytes": 5177344
     }
   ]
 }
