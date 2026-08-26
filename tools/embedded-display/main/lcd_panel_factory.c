@@ -7,10 +7,12 @@
 #include "lcd_panel_factory.h"
 #include "esp_check.h"
 #include "esp_lcd_panel_st7789.h"
+#include "gc9a01_panel.h"
 #include "gc9d01n_panel.h"
 #include "co5300_panel.h"
 #include "st7735_panel.h"
 #include "ili9342_panel.h"
+#include "st77916_panel.h"
 
 static const char *TAG __attribute__((unused)) = "lcd_panel_factory";
 
@@ -20,6 +22,10 @@ const char *example_lcd_controller_name(void)
     return "CO5300";
 #elif CONFIG_EXAMPLE_LCD_CONTROLLER_GC9D01N
     return "GC9D01N";
+#elif CONFIG_EXAMPLE_LCD_CONTROLLER_GC9A01
+    return "GC9A01";
+#elif CONFIG_EXAMPLE_LCD_CONTROLLER_ST77916
+    return "ST77916";
 #elif CONFIG_EXAMPLE_LCD_CONTROLLER_ST7735
     return "ST7735";
 #elif CONFIG_EXAMPLE_LCD_CONTROLLER_ILI9342
@@ -32,7 +38,8 @@ const char *example_lcd_controller_name(void)
 bool example_lcd_panel_needs_rgb565_byte_swap(void)
 {
 #if CONFIG_EXAMPLE_LCD_CONTROLLER_CO5300 || CONFIG_EXAMPLE_LCD_CONTROLLER_ST7735 || \
-    CONFIG_EXAMPLE_LCD_CONTROLLER_GC9D01N || CONFIG_EXAMPLE_LCD_CONTROLLER_ILI9342
+    CONFIG_EXAMPLE_LCD_CONTROLLER_GC9D01N || CONFIG_EXAMPLE_LCD_CONTROLLER_GC9A01 || \
+    CONFIG_EXAMPLE_LCD_CONTROLLER_ST77916 || CONFIG_EXAMPLE_LCD_CONTROLLER_ILI9342
     return true;
 #else
     return false;
@@ -54,6 +61,10 @@ esp_err_t example_lcd_new_panel(const esp_lcd_panel_io_handle_t io,
     ESP_RETURN_ON_FALSE(false, ESP_ERR_NOT_SUPPORTED, TAG, "CO5300 uses QSPI initialization");
 #elif CONFIG_EXAMPLE_LCD_CONTROLLER_GC9D01N
     return esp_lcd_new_panel_gc9d01n(io, panel_dev_config, ret_panel);
+#elif CONFIG_EXAMPLE_LCD_CONTROLLER_GC9A01
+    return esp_lcd_new_panel_gc9a01(io, panel_dev_config, ret_panel);
+#elif CONFIG_EXAMPLE_LCD_CONTROLLER_ST77916
+    return esp_lcd_new_panel_st77916(io, panel_dev_config, ret_panel);
 #elif CONFIG_EXAMPLE_LCD_CONTROLLER_ST7735
     return esp_lcd_new_panel_st7735(io, panel_dev_config, ret_panel);
 #elif CONFIG_EXAMPLE_LCD_CONTROLLER_ST7789

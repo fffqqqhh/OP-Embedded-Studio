@@ -11,6 +11,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
+#include "esp_lcd_io_i80.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
@@ -44,6 +45,7 @@
 #include "co5300_panel.h"
 #include "m5ioe1.h"
 #include "m5cores3.h"
+#include "st77916_qspi_io.h"
 
 static const char *TAG = "lcd_simple";
 
@@ -51,6 +53,8 @@ static const char *TAG = "lcd_simple";
 #define LCD_CMD_BITS          8
 #define LCD_PARAM_BITS        8
 #define LCD_FRAME_PIXELS      (CONFIG_EXAMPLE_LCD_H_RES * CONFIG_EXAMPLE_LCD_V_RES)
+#define LCD_I80_BUS_WIDTH     8
+#define LCD_I80_DMA_BURST_SIZE 64
 
 #if CONFIG_EXAMPLE_LCD_RGB_ORDER_BGR
 #define LCD_RGB_ELEMENT_ORDER LCD_RGB_ELEMENT_ORDER_BGR
@@ -250,17 +254,79 @@ void app_main(void)
         &io_handle,
         &panel_handle));
 #else
+#if CONFIG_EXAMPLE_LCD_BUS_I80
+    ESP_LOGI(TAG, "Initialize I80 bus");
+    esp_lcd_i80_bus_handle_t i80_bus = NULL;
+    esp_lcd_i80_bus_config_t buscfg = {
+        .dc_gpio_num = CONFIG_EXAMPLE_PIN_NUM_LCD_DC,
+        .wr_gpio_num = CONFIG_EXAMPLE_PIN_NUM_LCD_WR,
+        .data_gpio_nums = {
+            CONFIG_EXAMPLE_PIN_NUM_DATA0,
+            CONFIG_EXAMPLE_PIN_NUM_DATA1,
+            CONFIG_EXAMPLE_PIN_NUM_DATA2,
+            CONFIG_EXAMPLE_PIN_NUM_DATA3,
+            CONFIG_EXAMPLE_PIN_NUM_DATA4,
+            CONFIG_EXAMPLE_PIN_NUM_DATA5,
+            CONFIG_EXAMPLE_PIN_NUM_DATA6,
+            CONFIG_EXAMPLE_PIN_NUM_DATA7,
+        },
+        .bus_width = LCD_I80_BUS_WIDTH,
+        .max_transfer_bytes = LCD_FRAME_PIXELS * sizeof(uint16_t),
+        .dma_burst_size = LCD_I80_DMA_BURST_SIZE,
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&buscfg, &i80_bus));
+
+    ESP_LOGI(TAG, "Install I80 LCD panel IO");
+    esp_lcd_panel_io_i80_config_t io_config = {
+        .cs_gpio_num = CONFIG_EXAMPLE_PIN_NUM_LCD_CS,
+        .pclk_hz = CONFIG_EXAMPLE_LCD_PIXEL_CLOCK_HZ,
+        .trans_queue_depth = 10,
+        .dc_levels = {
+            .dc_idle_level = 0,
+            .dc_cmd_level = 0,
+            .dc_dummy_level = 0,
+            .dc_data_level = 1,
+        },
+        .on_color_trans_done = openpencil_display_presenter_on_color_done,
+        .lcd_cmd_bits = LCD_CMD_BITS,
+        .lcd_param_bits = LCD_PARAM_BITS,
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &io_config, &io_handle));
+#else
+#if CONFIG_EXAMPLE_LCD_BUS_QSPI
+    ESP_LOGI(TAG, "Initialize ST77916 QSPI bus");
+#else
     ESP_LOGI(TAG, "Initialize SPI bus");
+#endif
     spi_bus_config_t buscfg = {
         .sclk_io_num = CONFIG_EXAMPLE_PIN_NUM_SCLK,
         .mosi_io_num = CONFIG_EXAMPLE_PIN_NUM_MOSI,
         .miso_io_num = CONFIG_EXAMPLE_PIN_NUM_MISO,
+#if CONFIG_EXAMPLE_LCD_BUS_QSPI
+        .quadwp_io_num = CONFIG_EXAMPLE_PIN_NUM_SPI_DATA2,
+        .quadhd_io_num = CONFIG_EXAMPLE_PIN_NUM_SPI_DATA3,
+#else
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
+#endif
         .max_transfer_sz = LCD_FRAME_PIXELS * sizeof(uint16_t),
     };
     ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
+#if CONFIG_EXAMPLE_LCD_BUS_QSPI
+    example_lcd_st77916_qspi_io_config_t io_config = {
+        .cs_gpio_num = CONFIG_EXAMPLE_PIN_NUM_LCD_CS,
+        .pclk_hz = CONFIG_EXAMPLE_LCD_PIXEL_CLOCK_HZ,
+        .spi_mode = 0,
+        .trans_queue_depth = 10,
+        .max_transfer_bytes = LCD_FRAME_PIXELS * sizeof(uint16_t),
+    };
+    ESP_ERROR_CHECK(example_lcd_new_panel_io_st77916_qspi(LCD_HOST, &io_config, &io_handle));
+    const esp_lcd_panel_io_callbacks_t callbacks = {
+        .on_color_trans_done = openpencil_display_presenter_on_color_done,
+    };
+    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &callbacks, NULL));
+#else
     ESP_LOGI(TAG, "Install LCD panel IO");
     esp_lcd_panel_io_spi_config_t io_config = {
         .dc_gpio_num = CONFIG_EXAMPLE_PIN_NUM_LCD_DC,
@@ -273,6 +339,8 @@ void app_main(void)
         .on_color_trans_done = openpencil_display_presenter_on_color_done,
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(LCD_HOST, &io_config, &io_handle));
+#endif
+#endif
 
     ESP_LOGI(TAG, "Install %s panel driver", example_lcd_controller_name());
     esp_lcd_panel_dev_config_t panel_config = {
@@ -293,10 +361,15 @@ void app_main(void)
 #endif
 
     const size_t frame_buffer_size = LCD_FRAME_PIXELS * sizeof(uint16_t);
-    uint16_t *frame_buffer = heap_caps_malloc(frame_buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    uint16_t *frame_buffer = NULL;
+#if CONFIG_EXAMPLE_LCD_BUS_I80
+    frame_buffer = esp_lcd_i80_alloc_draw_buffer(io_handle, frame_buffer_size, MALLOC_CAP_DMA);
+#else
+    frame_buffer = heap_caps_malloc(frame_buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
     if (!frame_buffer) {
         frame_buffer = heap_caps_malloc(frame_buffer_size, MALLOC_CAP_DMA);
     }
+#endif
     ESP_LOGI(TAG, "Frame buffer: %u bytes at %p", (unsigned)frame_buffer_size, (void *)frame_buffer);
     ESP_ERROR_CHECK(frame_buffer ? ESP_OK : ESP_ERR_NO_MEM);
 

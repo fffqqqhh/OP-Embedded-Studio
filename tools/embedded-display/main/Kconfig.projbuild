@@ -68,11 +68,34 @@ menu "Example Configuration"
         config EXAMPLE_LCD_CONTROLLER_GC9D01N
             bool "GC9D01N"
 
+        config EXAMPLE_LCD_CONTROLLER_GC9A01
+            bool "GC9A01"
+
+        config EXAMPLE_LCD_CONTROLLER_ST77916
+            bool "ST77916"
+
         config EXAMPLE_LCD_CONTROLLER_CO5300
             bool "CO5300 (Waveshare 1.75C QSPI)"
 
         config EXAMPLE_LCD_CONTROLLER_ILI9342
             bool "ILI9342C (M5Stack CoreS3)"
+    endchoice
+
+    choice EXAMPLE_LCD_BUS
+        prompt "LCD bus interface"
+        default EXAMPLE_LCD_BUS_I80 if EXAMPLE_LCD_CONTROLLER_GC9A01
+        default EXAMPLE_LCD_BUS_QSPI if EXAMPLE_LCD_CONTROLLER_ST77916
+        default EXAMPLE_LCD_BUS_SPI
+
+        config EXAMPLE_LCD_BUS_SPI
+            bool "4-wire SPI"
+
+        config EXAMPLE_LCD_BUS_QSPI
+            bool "QSPI / Quad SPI"
+
+        config EXAMPLE_LCD_BUS_I80
+            bool "Intel 8080 / MCU parallel"
+            depends on SOC_LCD_I80_SUPPORTED
     endchoice
 
     config EXAMPLE_LCD_PIXEL_CLOCK_HZ
@@ -96,8 +119,19 @@ menu "Example Configuration"
         int "LCD SPI MISO GPIO (-1 if unused)"
         default -1
 
+    config EXAMPLE_PIN_NUM_SPI_DATA2
+        int "LCD QSPI data2 GPIO"
+        depends on EXAMPLE_LCD_BUS_QSPI
+        default 15
+
+    config EXAMPLE_PIN_NUM_SPI_DATA3
+        int "LCD QSPI data3 GPIO"
+        depends on EXAMPLE_LCD_BUS_QSPI
+        default 16
+
     config EXAMPLE_PIN_NUM_LCD_DC
         int "LCD DC GPIO"
+        default -1 if EXAMPLE_LCD_BUS_QSPI
         default 9
 
     config EXAMPLE_PIN_NUM_LCD_RST
@@ -118,6 +152,51 @@ menu "Example Configuration"
             Optional tearing-effect signal used to align full-frame transfers
             with the panel refresh cycle. The Waveshare CO5300 board routes
             LCD_TE to GPIO13.
+
+    config EXAMPLE_PIN_NUM_LCD_WR
+        int "LCD I80 WR GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 12
+
+    config EXAMPLE_PIN_NUM_DATA0
+        int "LCD I80 data DB0 GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 4
+
+    config EXAMPLE_PIN_NUM_DATA1
+        int "LCD I80 data DB1 GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 5
+
+    config EXAMPLE_PIN_NUM_DATA2
+        int "LCD I80 data DB2 GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 6
+
+    config EXAMPLE_PIN_NUM_DATA3
+        int "LCD I80 data DB3 GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 7
+
+    config EXAMPLE_PIN_NUM_DATA4
+        int "LCD I80 data DB4 GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 15
+
+    config EXAMPLE_PIN_NUM_DATA5
+        int "LCD I80 data DB5 GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 16
+
+    config EXAMPLE_PIN_NUM_DATA6
+        int "LCD I80 data DB6 GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 17
+
+    config EXAMPLE_PIN_NUM_DATA7
+        int "LCD I80 data DB7 GPIO"
+        depends on EXAMPLE_LCD_BUS_I80
+        default 18
 
     config EXAMPLE_PIN_NUM_QSPI_PCLK
         int "LCD QSPI clock GPIO"
@@ -153,6 +232,8 @@ menu "Example Configuration"
         default 240 if EXAMPLE_LCD_CONTROLLER_ST7789
         default 128 if EXAMPLE_LCD_CONTROLLER_ST7735
         default 160 if EXAMPLE_LCD_CONTROLLER_GC9D01N
+        default 240 if EXAMPLE_LCD_CONTROLLER_GC9A01
+        default 360 if EXAMPLE_LCD_CONTROLLER_ST77916
         default 466 if EXAMPLE_LCD_CONTROLLER_CO5300
         default 320 if EXAMPLE_LCD_CONTROLLER_ILI9342
 
@@ -161,6 +242,8 @@ menu "Example Configuration"
         default 240 if EXAMPLE_LCD_CONTROLLER_ST7789
         default 128 if EXAMPLE_LCD_CONTROLLER_ST7735
         default 160 if EXAMPLE_LCD_CONTROLLER_GC9D01N
+        default 240 if EXAMPLE_LCD_CONTROLLER_GC9A01
+        default 360 if EXAMPLE_LCD_CONTROLLER_ST77916
         default 466 if EXAMPLE_LCD_CONTROLLER_CO5300
         default 240 if EXAMPLE_LCD_CONTROLLER_ILI9342
 
@@ -190,6 +273,8 @@ menu "Example Configuration"
         default y if EXAMPLE_LCD_CONTROLLER_ST7789
         default n if EXAMPLE_LCD_CONTROLLER_ST7735
         default n if EXAMPLE_LCD_CONTROLLER_GC9D01N
+        default y if EXAMPLE_LCD_CONTROLLER_GC9A01
+        default y if EXAMPLE_LCD_CONTROLLER_ST77916
         default n if EXAMPLE_LCD_CONTROLLER_CO5300
         default y if EXAMPLE_LCD_CONTROLLER_ILI9342
 

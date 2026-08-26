@@ -54,6 +54,36 @@ BUILD_MODES = {
 }
 
 PROFILE_PARTITION_TABLES = {
+    "st7789_qs130tab1005a": {
+        "usb-frame": "partitions_8mb_content.csv",
+        "wifi-frame": "partitions_8mb_wireless.csv",
+        "wifi-live": "partitions_8mb_wireless.csv",
+        "ble-frame": "partitions_8mb_wireless.csv",
+    },
+    "st7735s_lb090r_if03": {
+        "usb-frame": "partitions_8mb_content.csv",
+        "wifi-frame": "partitions_8mb_wireless.csv",
+        "wifi-live": "partitions_8mb_wireless.csv",
+        "ble-frame": "partitions_8mb_wireless.csv",
+    },
+    "gc9d01n_gvh099wq010b_a0": {
+        "usb-frame": "partitions_8mb_content.csv",
+        "wifi-frame": "partitions_8mb_wireless.csv",
+        "wifi-live": "partitions_8mb_wireless.csv",
+        "ble-frame": "partitions_8mb_wireless.csv",
+    },
+    "gc9a01_xf_gf110648": {
+        "usb-frame": "partitions_8mb_content.csv",
+        "wifi-frame": "partitions_8mb_wireless.csv",
+        "wifi-live": "partitions_8mb_wireless.csv",
+        "ble-frame": "partitions_8mb_wireless.csv",
+    },
+    "st77916_xf_gf132a159": {
+        "usb-frame": "partitions_8mb_content.csv",
+        "wifi-frame": "partitions_8mb_wireless.csv",
+        "wifi-live": "partitions_8mb_wireless.csv",
+        "ble-frame": "partitions_8mb_wireless.csv",
+    },
     "co5300_m5stack_stopwatch": {
         "usb-frame": "partitions_16mb_usb_frame.csv",
         "wifi-frame": "partitions_16mb_wireless.csv",

@@ -1,12 +1,17 @@
 # ST7789 SPI LCD Simple Example
 
-This example initializes an SPI LCD panel and draws a geometry test pattern. It supports selecting ST7789, ST7735, or GC9D01N from `menuconfig`, and is intended as a first hardware bring-up project before adding LVGL or touch support.
+This firmware supports SPI, QSPI, and I80 LCD panels and powers the embedded-display deployment paths in OP Embedded Studio.
 
 The same firmware project also contains the production display profiles used by OP
 Embedded Studio:
 
 | Device | Resolution | Controller / bus | Content paths |
 | --- | ---: | --- | --- |
+| QS130TAB1005A | 240 x 240 | ST7789 / SPI | USB, Wi-Fi, live mirror, BLE |
+| LB090R-IF03 | 128 x 128 | ST7735S / SPI | USB, Wi-Fi, live mirror, BLE |
+| GVH099WQ010B-A0 | 160 x 160 | GC9D01N / SPI | USB, Wi-Fi, live mirror, BLE |
+| XF-GF110648 | 240 x 240 | GC9A01 / I80 | USB, Wi-Fi, live mirror, BLE |
+| XF-GF132A159 | 360 x 360 | ST77916 / QSPI | USB, Wi-Fi, live mirror, BLE |
 | M5Stack StopWatch | 466 x 466 | CO5300 / QSPI | USB, BLE, interaction, PNG sequence |
 | Waveshare ESP32-S3-Touch-AMOLED-1.75C | 466 x 466 | CO5300 / QSPI | USB, BLE; Wi-Fi/live mirror experimental |
 | M5Stack CoreS3 | 320 x 240 | ILI9342C / SPI | USB, BLE, interaction, PNG sequence |

@@ -6,6 +6,11 @@ import type { UsbImageSequencePayload } from './usb-sequence'
 import { encodeWirelessImage, encodeWirelessPrototype } from './wireless-content'
 
 const USB_FAST_PROFILES = new Set([
+  'st7789_qs130tab1005a',
+  'st7735s_lb090r_if03',
+  'gc9d01n_gvh099wq010b_a0',
+  'gc9a01_xf_gf110648',
+  'st77916_xf_gf132a159',
   'co5300_waveshare_amoled_1_75c',
   'co5300_m5stack_stopwatch',
   'ili9342_m5stack_cores3'

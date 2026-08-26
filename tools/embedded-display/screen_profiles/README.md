@@ -13,7 +13,9 @@ automation script can select a verified LCD module without interactive
 | `base.defaults` | Common ESP32-S3 board settings and shared GPIO assignment. |
 | `st7789_qs130tab1005a.defaults` | Verified settings for the QS130TAB1005A 240x240 ST7789 screen. |
 | `st7735s_lb090r_if03.defaults` | Verified settings for the LB090R-IF03 128x128 ST7735S round screen. |
-| `gc9d01n_gvh099wq010b_a0.defaults` | Settings for the GVH099WQ010B-A0 160x160 GC9D01N 0.99-inch round screen, pending final hardware verification. |
+| `gc9d01n_gvh099wq010b_a0.defaults` | Verified settings for the GVH099WQ010B-A0 160x160 GC9D01N 0.99-inch round screen. |
+| `gc9a01_xf_gf110648.defaults` | Verified settings for the XF-GF110648 240x240 GC9A01 screen over an 8-bit I80 bus. |
+| `st77916_xf_gf132a159.defaults` | Verified settings for the XF-GF132A159 360x360 ST77916 screen over QSPI. |
 
 ## Server-Side Build Flow
 

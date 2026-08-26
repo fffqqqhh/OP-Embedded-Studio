@@ -10,7 +10,9 @@
 | `base.defaults` | ESP32-S3 开发板公共配置，以及各屏幕共用的 GPIO 分配。 |
 | `st7789_qs130tab1005a.defaults` | QS130TAB1005A 240x240 ST7789 方屏的已验证配置。 |
 | `st7735s_lb090r_if03.defaults` | LB090R-IF03 128x128 ST7735S 圆屏的已验证配置，颜色顺序为 BGR。 |
-| `gc9d01n_gvh099wq010b_a0.defaults` | GVH099WQ010B-A0 160x160 GC9D01N 0.99 英寸圆屏配置，待实物最终验证。 |
+| `gc9d01n_gvh099wq010b_a0.defaults` | GVH099WQ010B-A0 160x160 GC9D01N 0.99 英寸圆屏的已验证配置。 |
+| `gc9a01_xf_gf110648.defaults` | XF-GF110648 240x240 GC9A01 屏幕的已验证 8 位 I80 配置。 |
+| `st77916_xf_gf132a159.defaults` | XF-GF132A159 360x360 ST77916 屏幕的已验证 QSPI 配置。 |
 
 ## 服务器编译流程
 

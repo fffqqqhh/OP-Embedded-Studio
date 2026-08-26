@@ -14,6 +14,11 @@ const FIRMWARE_PARTS = [
 ]
 
 const FIRMWARE_FLASH_SIZES: Record<string, string> = {
+  st7789_qs130tab1005a: '8MB',
+  st7735s_lb090r_if03: '8MB',
+  gc9d01n_gvh099wq010b_a0: '8MB',
+  gc9a01_xf_gf110648: '8MB',
+  st77916_xf_gf132a159: '8MB',
   co5300_m5stack_stopwatch: '16MB',
   ili9342_m5stack_cores3: '16MB'
 }

@@ -131,7 +131,8 @@
         "recommendedZh": "LEDA 接 3V3；LEDK 通过限流电阻或恒流驱动回到 GND。",
         "controlledByFirmware": false,
         "menuconfigBacklightGpio": -1
-      }
+      },
+      "flash": "8MB"
     },
     {
       "id": "st7735s_lb090r_if03",
@@ -242,7 +243,8 @@
         "specZh": "背光为 3 颗白光 LED，电压 2.9V-3.1V，典型电流 60mA，最大电流 90mA。",
         "controlledByFirmware": false,
         "menuconfigBacklightGpio": -1
-      }
+      },
+      "flash": "8MB"
     },
     {
       "id": "gc9d01n_gvh099wq010b_a0",
@@ -274,7 +276,7 @@
           "thickness": 1.75
         }
       },
-      "verified": false,
+      "verified": true,
       "defaultsFile": "screen_profiles/gc9d01n_gvh099wq010b_a0.defaults",
       "menuconfig": {
         "CONFIG_EXAMPLE_LCD_CONTROLLER_GC9D01N": true,
@@ -365,7 +367,8 @@
         "specZh": "背光为 2 颗白光 LED，电压 2.8V-3.2V，典型电流 40mA。",
         "controlledByFirmware": false,
         "menuconfigBacklightGpio": -1
-      }
+      },
+      "flash": "8MB"
     },
     {
       "id": "co5300_waveshare_amoled_1_75c",
@@ -416,9 +419,9 @@
       "driverIc": "CO5300",
       "controller": "CO5300",
       "interface": "QSPI",
-        "flash": "16MB",
-        "wirelessContentBytes": 13565952,
-        "logicalResolution": {
+      "flash": "16MB",
+      "wirelessContentBytes": 13565952,
+      "logicalResolution": {
         "width": 466,
         "height": 466
       },
@@ -479,7 +482,7 @@
         "descriptionZh": "320 x 240 横向 LCD，带 FT6336U 电容触摸。"
       },
       "physicalSize": {
-        "diagonalInch": 2.0
+        "diagonalInch": 2
       },
       "verified": false,
       "imageOnly": false,
@@ -522,6 +525,371 @@
         "displayReset": "AW9523B P1_1",
         "backlight": "AXP2101 DLDO1"
       }
+    },
+    {
+      "id": "gc9a01_xf_gf110648",
+      "displayName": "XF-GF110648 240x240 GC9A01",
+      "displayNameZh": "XF-GF110648 240x240 GC9A01 1.09英寸圆屏",
+      "screenType": "round_tft",
+      "module": "XF-GF110648",
+      "driverIc": "GC9A01",
+      "controller": "GC9A01",
+      "interface": "MCU 8-bit / Intel 8080",
+      "logicalResolution": {
+        "width": 240,
+        "height": 240
+      },
+      "visibleArea": {
+        "shape": "round",
+        "description": "1.09 inch circular active area inside a 240 x 240 logical frame. Logical corners can be clipped by the round visible area.",
+        "descriptionZh": "1.09 英寸圆形可视区，位于 240 x 240 逻辑画面内；逻辑四角会被圆形可视区裁切。"
+      },
+      "physicalSize": {
+        "diagonalInch": 1.09,
+        "activeAreaMm": {
+          "width": 27.79,
+          "height": 27.79
+        },
+        "moduleSizeMm": {
+          "width": 30.59,
+          "height": 32.98,
+          "thickness": 1.6
+        }
+      },
+      "verified": true,
+      "defaultsFile": "screen_profiles/gc9a01_xf_gf110648.defaults",
+      "menuconfig": {
+        "CONFIG_EXAMPLE_LCD_CONTROLLER_GC9A01": true,
+        "CONFIG_EXAMPLE_LCD_BUS_I80": true,
+        "CONFIG_EXAMPLE_LCD_H_RES": 240,
+        "CONFIG_EXAMPLE_LCD_V_RES": 240,
+        "CONFIG_EXAMPLE_LCD_X_GAP": 0,
+        "CONFIG_EXAMPLE_LCD_Y_GAP": 0,
+        "CONFIG_EXAMPLE_LCD_INVERT_COLOR": true,
+        "CONFIG_EXAMPLE_LCD_RGB_ORDER_BGR": true,
+        "CONFIG_EXAMPLE_LCD_MIRROR_X": true,
+        "CONFIG_EXAMPLE_LCD_PIXEL_CLOCK_HZ": 10000000
+      },
+      "notes": [
+        "The supplier drawing labels this as MCU 8BIT. Use the I80 data_gpio_nums order as DB0..DB7.",
+        "The mechanical drawing appears to repeat pin number 10 and skip pin 13 in the data bus table. Connect by signal name and physical pin order, not by that duplicated number."
+      ],
+      "notesZh": [
+        "规格书标注接口为 MCU 8BIT，本工程按 I80 并口接入，data_gpio_nums 顺序必须是 DB0..DB7。",
+        "机械图数据线表疑似把 10 脚重复、13 脚漏写。接线请按信号名和 FPC 物理顺序，不要按重复编号盲接。"
+      ],
+      "wiring": [
+        {
+          "fpcPin": 1,
+          "signal": "GND",
+          "connectTo": "GND",
+          "gpio": null,
+          "note": "Common ground"
+        },
+        {
+          "fpcPin": 2,
+          "signal": "WR",
+          "connectTo": "ESP32-S3 GPIO12",
+          "gpio": 12,
+          "note": "I80 write strobe"
+        },
+        {
+          "fpcPin": 3,
+          "signal": "VDD / VCC+RD",
+          "connectTo": "3V3",
+          "gpio": null,
+          "note": "LCD logic power. RD is tied high/not used for write-only I80."
+        },
+        {
+          "fpcPin": 4,
+          "signal": "LEDA",
+          "connectTo": "Backlight anode",
+          "gpio": null,
+          "note": "Backlight positive"
+        },
+        {
+          "fpcPin": 5,
+          "signal": "CS",
+          "connectTo": "ESP32-S3 GPIO10",
+          "gpio": 10,
+          "note": "I80 chip select, active low"
+        },
+        {
+          "fpcPin": 6,
+          "signal": "RS",
+          "connectTo": "ESP32-S3 GPIO9",
+          "gpio": 9,
+          "note": "I80 D/C command/data select"
+        },
+        {
+          "fpcPin": 7,
+          "signal": "TE",
+          "connectTo": "Not connected",
+          "gpio": null,
+          "note": "Tearing-effect output is unused"
+        },
+        {
+          "fpcPin": 8,
+          "signal": "LEDK",
+          "connectTo": "Backlight cathode",
+          "gpio": null,
+          "note": "Use current limiting or a backlight driver"
+        },
+        {
+          "fpcPin": 9,
+          "signal": "DB7",
+          "connectTo": "ESP32-S3 GPIO18",
+          "gpio": 18,
+          "note": "I80 data bit 7"
+        },
+        {
+          "fpcPin": 10,
+          "signal": "DB6",
+          "connectTo": "ESP32-S3 GPIO17",
+          "gpio": 17,
+          "note": "I80 data bit 6"
+        },
+        {
+          "fpcPin": 11,
+          "signal": "DB5",
+          "connectTo": "ESP32-S3 GPIO16",
+          "gpio": 16,
+          "note": "I80 data bit 5. The drawing duplicates pin 10 here; this entry follows physical order."
+        },
+        {
+          "fpcPin": 12,
+          "signal": "DB4",
+          "connectTo": "ESP32-S3 GPIO15",
+          "gpio": 15,
+          "note": "I80 data bit 4"
+        },
+        {
+          "fpcPin": 13,
+          "signal": "DB0",
+          "connectTo": "ESP32-S3 GPIO4",
+          "gpio": 4,
+          "note": "I80 data bit 0. The drawing appears to skip this pin number."
+        },
+        {
+          "fpcPin": 14,
+          "signal": "DB1",
+          "connectTo": "ESP32-S3 GPIO5",
+          "gpio": 5,
+          "note": "I80 data bit 1"
+        },
+        {
+          "fpcPin": 15,
+          "signal": "DB2",
+          "connectTo": "ESP32-S3 GPIO6",
+          "gpio": 6,
+          "note": "I80 data bit 2"
+        },
+        {
+          "fpcPin": 16,
+          "signal": "RESET",
+          "connectTo": "ESP32-S3 GPIO14",
+          "gpio": 14,
+          "note": "Active-low reset"
+        },
+        {
+          "fpcPin": 17,
+          "signal": "DB3",
+          "connectTo": "ESP32-S3 GPIO7",
+          "gpio": 7,
+          "note": "I80 data bit 3"
+        },
+        {
+          "fpcPin": 18,
+          "signal": "GND",
+          "connectTo": "GND",
+          "gpio": null,
+          "note": "Common ground"
+        }
+      ],
+      "backlight": {
+        "recommended": "Use a constant-current backlight driver when possible. LEDA connects to driver positive output or 3V3 test power; LEDK returns through the current limit path.",
+        "recommendedZh": "建议优先使用恒流背光驱动。LEDA 接驱动正输出，或调试时接 3V3；LEDK 通过限流通路回到负端或 GND。",
+        "spec": "2 white LEDs, 2.8V-3.2V, 40mA typical.",
+        "specZh": "背光为 2 颗白光 LED，电压 2.8V-3.2V，典型电流 40mA。",
+        "controlledByFirmware": false,
+        "menuconfigBacklightGpio": -1
+      },
+      "flash": "8MB"
+    },
+    {
+      "id": "st77916_xf_gf132a159",
+      "displayName": "XF-GF132A159 360x360 ST77916",
+      "displayNameZh": "XF-GF132A159 360x360 ST77916 1.32英寸圆屏",
+      "screenType": "round_tft",
+      "module": "XF-GF132A159",
+      "driverIc": "ST77916",
+      "controller": "ST77916",
+      "interface": "QSPI / Quad SPI",
+      "logicalResolution": {
+        "width": 360,
+        "height": 360
+      },
+      "visibleArea": {
+        "shape": "round",
+        "description": "1.32 inch circular active area inside a 360 x 360 logical frame. Logical corners can be clipped by the round visible area.",
+        "descriptionZh": "1.32 英寸圆形可视区，位于 360 x 360 逻辑画面内；逻辑四角会被圆形可视区裁切。"
+      },
+      "physicalSize": {
+        "diagonalInch": 1.32,
+        "activeAreaMm": {
+          "width": 33.48,
+          "height": 33.48
+        },
+        "moduleSizeMm": {
+          "width": 35.98,
+          "height": 33.48,
+          "thickness": 1.6
+        }
+      },
+      "verified": true,
+      "defaultsFile": "screen_profiles/st77916_xf_gf132a159.defaults",
+      "menuconfig": {
+        "CONFIG_EXAMPLE_LCD_CONTROLLER_ST77916": true,
+        "CONFIG_EXAMPLE_LCD_BUS_QSPI": true,
+        "CONFIG_EXAMPLE_LCD_H_RES": 360,
+        "CONFIG_EXAMPLE_LCD_V_RES": 360,
+        "CONFIG_EXAMPLE_LCD_X_GAP": 0,
+        "CONFIG_EXAMPLE_LCD_Y_GAP": 0,
+        "CONFIG_EXAMPLE_LCD_INVERT_COLOR": true,
+        "CONFIG_EXAMPLE_LCD_RGB_ORDER_RGB": true,
+        "CONFIG_EXAMPLE_LCD_PIXEL_CLOCK_HZ": 40000000
+      },
+      "notes": [
+        "The FPC has no D/C pin. This profile uses dc_gpio_num = -1 and relies on the custom ST77916/QSPI command protocol used by this example.",
+        "TE is present on the FPC but is not used by these examples."
+      ],
+      "notesZh": [
+        "这块屏 FPC 没有 D/C 脚，本 profile 使用 dc_gpio_num = -1，命令/参数由当前例程的 ST77916/QSPI 自定义时序发送。",
+        "FPC 上有 TE 脚，但当前例程未使用。"
+      ],
+      "wiring": [
+        {
+          "fpcPin": 1,
+          "signal": "LEDK",
+          "connectTo": "Backlight cathode",
+          "gpio": null,
+          "note": "Use current limiting or a backlight driver"
+        },
+        {
+          "fpcPin": 2,
+          "signal": "LEDA",
+          "connectTo": "Backlight anode",
+          "gpio": null,
+          "note": "Backlight positive"
+        },
+        {
+          "fpcPin": 3,
+          "signal": "VDD3V3",
+          "connectTo": "3V3",
+          "gpio": null,
+          "note": "LCD logic power"
+        },
+        {
+          "fpcPin": 4,
+          "signal": "VDD3V3",
+          "connectTo": "3V3",
+          "gpio": null,
+          "note": "LCD logic power"
+        },
+        {
+          "fpcPin": 5,
+          "signal": "VDD3V3",
+          "connectTo": "3V3",
+          "gpio": null,
+          "note": "LCD logic power"
+        },
+        {
+          "fpcPin": 6,
+          "signal": "GND",
+          "connectTo": "GND",
+          "gpio": null,
+          "note": "Common ground"
+        },
+        {
+          "fpcPin": 7,
+          "signal": "TE",
+          "connectTo": "Not connected",
+          "gpio": null,
+          "note": "Tearing-effect output is unused"
+        },
+        {
+          "fpcPin": 8,
+          "signal": "QSPI-CLK",
+          "connectTo": "ESP32-S3 GPIO12",
+          "gpio": 12,
+          "note": "QSPI clock"
+        },
+        {
+          "fpcPin": 9,
+          "signal": "GND",
+          "connectTo": "GND",
+          "gpio": null,
+          "note": "Common ground"
+        },
+        {
+          "fpcPin": 10,
+          "signal": "QSPI-CS",
+          "connectTo": "ESP32-S3 GPIO10",
+          "gpio": 10,
+          "note": "QSPI chip select, active low"
+        },
+        {
+          "fpcPin": 11,
+          "signal": "QSPI-RST",
+          "connectTo": "ESP32-S3 GPIO14",
+          "gpio": 14,
+          "note": "Active-low reset"
+        },
+        {
+          "fpcPin": 12,
+          "signal": "QSPI-I3 / SPI3",
+          "connectTo": "ESP32-S3 GPIO16",
+          "gpio": 16,
+          "note": "QSPI data3"
+        },
+        {
+          "fpcPin": 13,
+          "signal": "QSPI-I2 / SPI2",
+          "connectTo": "ESP32-S3 GPIO15",
+          "gpio": 15,
+          "note": "QSPI data2"
+        },
+        {
+          "fpcPin": 14,
+          "signal": "QSPI-I1 / SPI1",
+          "connectTo": "ESP32-S3 GPIO13",
+          "gpio": 13,
+          "note": "QSPI data1"
+        },
+        {
+          "fpcPin": 15,
+          "signal": "QSPI-I0 / SPI0",
+          "connectTo": "ESP32-S3 GPIO11",
+          "gpio": 11,
+          "note": "QSPI data0"
+        },
+        {
+          "fpcPin": 16,
+          "signal": "GND",
+          "connectTo": "GND",
+          "gpio": null,
+          "note": "Common ground"
+        }
+      ],
+      "backlight": {
+        "recommended": "Use a constant-current backlight driver when possible. LEDA connects to driver positive output or 3V3 test power; LEDK returns through the current limit path.",
+        "recommendedZh": "建议优先使用恒流背光驱动。LEDA 接驱动正输出，或调试时接 3V3；LEDK 通过限流通路回到负端或 GND。",
+        "spec": "2 white LEDs, 2.8V-3.2V, 40mA typical.",
+        "specZh": "背光为 2 颗白光 LED，电压 2.8V-3.2V，典型电流 40mA。",
+        "controlledByFirmware": false,
+        "menuconfigBacklightGpio": -1
+      },
+      "flash": "8MB"
     }
   ]
 }
