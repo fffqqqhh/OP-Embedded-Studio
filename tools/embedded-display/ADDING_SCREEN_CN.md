@@ -241,21 +241,121 @@ new_panel.h
 
 Profile 注册后，Studio 可以识别屏幕、按目标尺寸预览并编码内容。但如果 `prebuilt-firmware/` 中没有匹配产物，用户不能直接使用依赖预编译固件的烧录方式。
 
-根据需要分别生成并验证对应构建模式，例如：
+### 6.1 选择需要交付的构建模式
 
-- 普通 USB 内容部署；
-- USB 快速单帧；
-- USB 交互或动画交互；
-- BLE 内容传输；
-- Wi-Fi 或实时镜像。
+服务器当前从 `prebuilt-firmware/` 读取以下四种预编译模式：
 
-不要假设一次普通构建会自动覆盖全部模式。构建服务会按 Profile 和 build mode 隔离产物；浏览器烧录清单可通过以下接口检查：
+| build mode | 用途 |
+| --- | --- |
+| `usb-frame` | USB 单帧内容部署，也是 manifest 接口的默认模式 |
+| `wifi-frame` | Wi-Fi 单帧内容部署 |
+| `wifi-live` | Wi-Fi 实时镜像 |
+| `ble-frame` | BLE 单帧内容部署 |
+
+如果只计划支持 USB，可先交付 `usb-frame`。如果目标屏幕需要完整支持当前主要内容通路，则应分别编译、真机验证并交付四套产物。不要假设一次普通构建会自动覆盖全部模式；构建服务按 Profile 和 build mode 隔离配置、分区表和产物。
+
+交互或动画模式还包括 `usb-prototype`、`wifi-prototype`、`lan-frame`、`lan-prototype` 和 `ble-prototype` 等本地构建模式，但它们目前不属于服务器读取 `prebuilt-firmware/` 的四种稳定预编译模式。若要发布这些能力，应先同步扩展预编译产物契约和消费端支持，不能只把文件放入新目录。
+
+### 6.2 每种模式的二进制文件
+
+每个预编译模式应提供以下四个文件，文件名不可修改：
+
+| 文件 | 烧录地址 | 构建来源或生成方式 |
+| --- | ---: | --- |
+| `bootloader.bin` | `0x0000` | `<build-dir>/bootloader/bootloader.bin` |
+| `partition-table.bin` | `0x8000` | `<build-dir>/partition_table/partition-table.bin` |
+| `st7789_simple.bin` | `0x10000` | `<build-dir>/st7789_simple.bin` |
+| `content-reset.bin` | `0x310000` | 构建服务生成的 4096 字节全零内容分区清理镜像 |
+
+`content-reset.bin` 是这些外部内容模式的 manifest 必需项。应使用对应模式构建目录中的文件，或按构建服务当前契约生成，不能拿其他用途的内容镜像替代。
+
+`wifi-credentials.bin` 不得作为预编译固件交付。它由构建服务针对一次部署动态生成，可能包含 Wi-Fi 凭据，只允许存在于本地 build 目录。
+
+### 6.3 服务器接收目录
+
+服务器按 `<build-mode>/<profile-id>/<filename>` 查找文件。建议直接按最终目录结构打包交付：
+
+```text
+tools/embedded-display/prebuilt-firmware/
+├── usb-frame/
+│   └── st7789_my_screen/
+│       ├── bootloader.bin
+│       ├── partition-table.bin
+│       ├── st7789_simple.bin
+│       └── content-reset.bin
+├── wifi-frame/
+│   └── st7789_my_screen/
+│       └── ...
+├── wifi-live/
+│   └── st7789_my_screen/
+│       └── ...
+└── ble-frame/
+    └── st7789_my_screen/
+        └── ...
+```
+
+目录中的 `st7789_my_screen` 必须与 `profiles.json` 的 `id` 完全一致。四个模式可能使用不同分区表和编译宏，不要通过复制同一套二进制来填满四个目录。
+
+### 6.4 与固件一并交付的配置
+
+新增屏幕至少还应交付：
+
+```text
+tools/embedded-display/screen_profiles/<profile-id>.defaults
+tools/embedded-display/screen_profiles/profiles.json 中对应的新增条目
+```
+
+如果接入了全新控制器，还应包含 Kconfig、CMake、Panel 驱动、驱动工厂及特殊总线实现等源码修改。仅交付 `.bin` 会导致后续无法复现或维护固件。
+
+建议附带以下构建记录：
+
+```text
+Profile ID：
+模组型号：
+控制器与总线：
+逻辑分辨率：
+Flash 容量：
+ESP-IDF 版本：
+源码 Git commit：
+已验证 build mode：
+未验证 build mode：
+真机验证日期与硬件版本：
+```
+
+同时提供每个二进制的 SHA-256，以便接收方核对文件完整性：
+
+```bash
+shasum -a 256 \
+  bootloader.bin \
+  partition-table.bin \
+  st7789_simple.bin \
+  content-reset.bin
+```
+
+### 6.5 服务器侧验收
+
+接收方放置文件并更新 Profile 后，先运行：
+
+```bash
+python3 tools/embedded-display/server/build_server.py --check
+```
+
+然后逐一访问计划支持的 manifest：
 
 ```text
 GET /api/artifacts/<profileId>/manifest.json
+GET /api/artifacts/<profileId>/manifest.json?mode=wifi-frame
+GET /api/artifacts/<profileId>/manifest.json?mode=wifi-live
+GET /api/artifacts/<profileId>/manifest.json?mode=ble-frame
 ```
 
-发布前确认 Studio 能找到目标 Profile 的固件文件，并在真实设备上至少走通计划公开支持的每种部署路径。
+默认无 `mode` 参数时使用 `usb-frame`。manifest 成功只表示文件齐全；发布前仍需在真实设备上至少烧录一次每种公开支持的模式，确认 Flash 容量、分区表、固件和 Profile 完全匹配。
+
+交付量可以概括为：
+
+- 仅支持 USB：一份 Profile 配置，加 `usb-frame` 的四个 `.bin`；
+- 完整支持四种预编译模式：一份 Profile 配置，加四种模式各自的四个 `.bin`；
+- 新增控制器：在上述内容之外，再交付全部可复现的底层驱动源码修改。
 
 ## 7. 常见故障
 
@@ -281,4 +381,3 @@ GET /api/artifacts/<profileId>/manifest.json
 - 更新 `screen_profiles/README_CN.md` 和 `OPERATION_GUIDE_CN.md` 的支持列表；
 - 若属于用户可见能力，在根目录 `CHANGELOG.md` 的 Unreleased 区域记录结果；
 - 最后执行与改动范围相符的仓库质量检查。
-
