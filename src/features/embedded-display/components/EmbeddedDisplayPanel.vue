@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 
+import NumberField from '@/components/inputs/NumberField.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { PanelHeader, PanelSection } from '@/components/ui/panel'
 import SegmentedControl from '@/components/ui/SegmentedControl.vue'
@@ -251,22 +252,14 @@ const localContentIsVideo = computed(() => {
 })
 const sequenceFrameRate = ref(20)
 const sequenceOverflowStrategy = ref<SequenceOverflowStrategy>('speed')
-const sequenceFrameRateOptions = [
-  { value: '8', label: '8 FPS' },
-  { value: '12', label: '12 FPS' },
-  { value: '20', label: '20 FPS' }
-]
+function updateSequenceFrameRate(value: number): void {
+  sequenceFrameRate.value = Math.min(30, Math.max(1, Math.round(value)))
+}
 const sequenceOverflowOptions = [
   { value: 'speed', label: '完整加速' },
   { value: 'trim', label: '裁切结尾' },
   { value: 'reject', label: '放弃上传' }
 ]
-const sequenceFrameRateSelectValue = computed({
-  get: () => String(sequenceFrameRate.value),
-  set: (value: string) => {
-    sequenceFrameRate.value = Number(value) || 20
-  }
-})
 const localContentLabel = computed(() => {
   if (!localContentFiles.value.length) return '图片、PNG 序列或视频'
   if (localContentIsVideo.value)
@@ -1014,7 +1007,7 @@ function preparedUsbFrameContent(source: 'frame' | 'file'): PreparedUsbFrameCont
     return {
       profileId: sequence.profileId,
       label: ` PNG 序列：${sequence.frameCount} 帧`,
-      successMessage: `PNG 序列已写入：${sequence.frameCount} 帧 · 20 FPS，设备正在重启。`,
+      successMessage: `PNG 序列已写入：${sequence.frameCount} 帧 · ${Math.round(1000 / sequence.frameDelayMs)} FPS，设备正在重启。`,
       upload: (options) => flashUsbSequenceFirmware(sequence, options)
     }
   }
@@ -1983,10 +1976,14 @@ watch([wifiSsid, wifiPassword], () => {
           {{ resolutionLabel }}
         </p>
         <div class="mt-2 grid grid-cols-2 gap-2">
-          <AppSelect
-            v-model="sequenceFrameRateSelectValue"
-            :options="sequenceFrameRateOptions"
+          <NumberField
+            :model-value="sequenceFrameRate"
+            :min="1"
+            :max="30"
+            :step="1"
+            suffix="FPS"
             label="序列帧率"
+            @update:model-value="updateSequenceFrameRate"
           />
           <AppSelect
             v-model="sequenceOverflowStrategy"

@@ -5,6 +5,8 @@
 ### Changed
 
 - Upgrade CanvasKit to 0.41 and migrate renderer geometry to immutable paths built through `PathBuilder`.
+- Allow local display animations to use any whole-number frame rate from 1 to 30 FPS instead of
+  three fixed choices.
 
 ### Fixed
 
