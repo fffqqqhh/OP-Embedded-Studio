@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Keep USB Frame uploads available after rebooting into persisted animation playback by reserving the content-transfer buffers before the animation runtime starts.
 - Load bundled embedded-display firmware directly in development instead of requiring the optional local firmware-build service during flashing.
 
 ### Added

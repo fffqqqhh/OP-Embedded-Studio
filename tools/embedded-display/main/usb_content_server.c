@@ -29,6 +29,9 @@
 
 static const char *TAG = "usb_content";
 static bool server_started;
+static uint8_t *server_encoded_buffer;
+static uint8_t *server_decoded_buffer;
+static tinfl_decompressor *server_decompressor;
 
 static esp_err_t usb_write_all(const void *data, size_t length)
 {
@@ -238,21 +241,8 @@ static esp_err_t handle_power(void)
 static void usb_content_server_task(void *argument)
 {
     (void)argument;
-    uint8_t *encoded_buffer = heap_caps_malloc(USB_CONTENT_CHUNK_BYTES,
-                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    uint8_t *decoded_buffer = heap_caps_malloc(USB_CONTENT_CHUNK_BYTES,
-                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!decoded_buffer) {
-        decoded_buffer = heap_caps_malloc(USB_CONTENT_CHUNK_BYTES,
-                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-    tinfl_decompressor *decompressor = heap_caps_malloc(sizeof(*decompressor),
-                                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!encoded_buffer || !decoded_buffer || !decompressor) {
-        ESP_LOGE(TAG, "USB content buffers unavailable");
-        free(encoded_buffer);
-        free(decoded_buffer);
-        free(decompressor);
+    if (!server_encoded_buffer || !server_decoded_buffer || !server_decompressor) {
+        ESP_LOGE(TAG, "USB content buffers were not prepared");
         server_started = false;
         vTaskDelete(NULL);
         return;
@@ -285,10 +275,13 @@ static void usb_content_server_task(void *argument)
             operation = "hello";
         } else if (strncmp(line, USB_PROTOCOL_PREFIX " BEGIN ", 14) == 0) {
             operation = "begin";
-            result = handle_begin(line, encoded_buffer);
+            result = handle_begin(line, server_encoded_buffer);
         } else if (strncmp(line, USB_PROTOCOL_PREFIX " CHUNK ", 14) == 0) {
             operation = "chunk";
-            result = handle_chunk(line, encoded_buffer, decoded_buffer, decompressor);
+            result = handle_chunk(line,
+                                  server_encoded_buffer,
+                                  server_decoded_buffer,
+                                  server_decompressor);
         } else if (strcmp(line, USB_PROTOCOL_PREFIX " END") == 0) {
             operation = "finish";
             result = handle_finish();
@@ -315,9 +308,43 @@ static void usb_content_server_task(void *argument)
     }
 }
 
+esp_err_t openpencil_usb_content_server_prepare(void)
+{
+    if (server_encoded_buffer && server_decoded_buffer && server_decompressor) return ESP_OK;
+
+    uint8_t *encoded_buffer = heap_caps_malloc(USB_CONTENT_CHUNK_BYTES,
+                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *decoded_buffer = heap_caps_malloc(USB_CONTENT_CHUNK_BYTES,
+                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!decoded_buffer) {
+        decoded_buffer = heap_caps_malloc(USB_CONTENT_CHUNK_BYTES,
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    tinfl_decompressor *decompressor = heap_caps_malloc(sizeof(*decompressor),
+                                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!encoded_buffer || !decoded_buffer || !decompressor) {
+        ESP_LOGE(TAG,
+                 "reserve USB content buffers failed: internal largest=%u, PSRAM largest=%u",
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        free(encoded_buffer);
+        free(decoded_buffer);
+        free(decompressor);
+        return ESP_ERR_NO_MEM;
+    }
+
+    server_encoded_buffer = encoded_buffer;
+    server_decoded_buffer = decoded_buffer;
+    server_decompressor = decompressor;
+    ESP_LOGI(TAG, "Reserved USB content buffers before display playback");
+    return ESP_OK;
+}
+
 esp_err_t openpencil_usb_content_server_start(void)
 {
     if (server_started) return ESP_OK;
+    ESP_RETURN_ON_ERROR(openpencil_usb_content_server_prepare(), TAG,
+                        "prepare USB content buffers failed");
     if (!usb_serial_jtag_is_driver_installed()) {
         usb_serial_jtag_driver_config_t config = {
             .tx_buffer_size = 4096,

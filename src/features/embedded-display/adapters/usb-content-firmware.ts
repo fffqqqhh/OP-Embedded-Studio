@@ -153,7 +153,9 @@ async function transferUsbContentWithFirmwareFallbackUnlocked(
     try {
       options.onStage?.(
         'transferring',
-        attempt === 0 ? '设备固件兼容，正在上传内容' : 'USB 连接已恢复，正在重新上传内容'
+        attempt === 0
+          ? '设备固件兼容，正在上传内容'
+          : '正在重新连接 USB 内容服务并上传内容'
       )
       const capacity = await options.transfer(firmwarePort, false)
       options.onStage?.('ready', '内容上传完成')

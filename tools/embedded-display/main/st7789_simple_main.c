@@ -416,6 +416,7 @@ void app_main(void)
 #elif CONFIG_OPENPENCIL_BLE_SERVER
             sequence_ready = openpencil_ble_server_start;
 #elif CONFIG_OPENPENCIL_USB_CONTENT_SERVER
+            ESP_ERROR_CHECK(openpencil_usb_content_server_prepare());
             sequence_ready = openpencil_usb_content_server_start;
 #endif
         }
