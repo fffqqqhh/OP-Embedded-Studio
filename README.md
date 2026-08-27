@@ -237,6 +237,8 @@ Vite 开发服务默认使用 `http://127.0.0.1:1420`。不要让 ESP-IDF 生成
 
 推送 `main` 后，`.github/workflows/app.yml` 会先构建 workspace packages，再生成静态站点并部署到 GitHub Pages。生产站点不依赖本地嵌入式构建服务；自定义屏幕方案仍只保存在用户浏览器中，不会进入发布产物。
 
+自行部署给其他人使用时，不需要开发业务服务端：运行 `bun run build:packages && bunx vite build`，将完整的 `dist/` 目录发布到支持 HTTPS 和 SPA fallback 的静态服务器或 CDN 即可。服务器必须以 `application/wasm` 返回 CanvasKit WASM，并让不存在的页面路由回退到 `index.html`，但不存在的静态资源仍返回 `404`。部署在子路径时，构建前设置 `VITE_APP_BASE_URL=/your-path/`。完整的构建、Nginx、缓存、安全头和验收约定见[静态部署 Web 应用](packages/docs/development/self-hosting.md)。
+
 ## Android BLE App
 
 项目包含一个独立、轻量的 Android BLE 图片上传器：

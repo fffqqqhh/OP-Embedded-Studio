@@ -113,6 +113,7 @@ export const developmentSidebar = (
       ...(!prefix
         ? [
             { text: 'Roadmap', link: '/development/roadmap' },
+            { text: '静态部署', link: '/development/self-hosting' },
             { text: 'Renderer Profiler', link: '/development/renderer-profiler' },
             { text: 'Vector Conversion', link: '/development/vector-conversion' },
           ]
