@@ -132,7 +132,23 @@ The Interaction page now separates the state graph from the live device preview.
 
 ## 当前重点适配设备
 
-### Waveshare ESP32-S3-Touch-AMOLED-1.75C
+### ESP32-S3 QFN56 开发板与外接屏幕
+
+当前通用开发平台为 **ESP32-S3 QFN56**，配置为 8MB Flash、8MB PSRAM，使用原生 USB 进行固件烧录和 USB 串口内容传输。外接屏幕共用开发板侧的 SPI GPIO 基础配置；其中 I80 和 QSPI 屏幕按各自 profile 使用对应总线配置。
+
+| 屏幕模组 | 分辨率与形状 | 控制器 | 接口 |
+| --- | --- | --- | --- |
+| QS130TAB1005A | 240 × 240 方屏 | ST7789 | 4-wire SPI |
+| LB090R-IF03 | 128 × 128 圆屏 | ST7735S | 4-wire SPI |
+| GVH099WQ010B-A0 | 160 × 160 圆屏 | GC9D01N | 4-wire SPI |
+| XF-GF110648 | 240 × 240、1.09 英寸圆屏 | GC9A01 | I80 8-bit |
+| XF-GF132A159 | 360 × 360、1.32 英寸圆屏 | ST77916 | QSPI |
+
+这 5 套屏幕 profile 已进入设备目录，并提供 USB 与 BLE 预编译固件。GPIO、颜色顺序、偏移、可视区域和具体接线以 `tools/embedded-display/screen_profiles/profiles.json` 为准；详细调试说明见 `tools/embedded-display/OPERATION_GUIDE_CN.md`。
+
+### 集成式设备
+
+#### Waveshare ESP32-S3-Touch-AMOLED-1.75C
 
 - 466 × 466 圆形 AMOLED 屏幕
 - ESP32-S3 平台与 CO5300 显示控制器
@@ -140,7 +156,7 @@ The Interaction page now separates the state graph from the live device preview.
 - 圆形可视区域、居中裁切与背景补边
 - BOOT 键与触屏交互输入
 
-### M5Stack StopWatch
+#### M5Stack StopWatch
 
 - 466 × 466 圆形 AMOLED 屏幕
 - CO5300 QSPI 显示控制器，LCD_TE 使用 GPIO38
@@ -148,7 +164,7 @@ The Interaction page now separates the state graph from the live device preview.
 - 独立的 16MB 内容分区，支持普通 Frame、交互状态和 PNG 序列
 - PM1 电源键唤醒时序，以及 M5-IOE1 显示供电/复位
 
-### M5Stack CoreS3
+#### M5Stack CoreS3
 
 - 320 × 240 横向 LCD，ILI9342C 控制器
 - SPI 显示接口，RGB565 内容格式
@@ -157,7 +173,7 @@ The Interaction page now separates the state graph from the live device preview.
 - AXP2101 电源管理和 AW9523B 显示复位初始化已纳入固件
 
 Waveshare 与 StopWatch 是当前主要的圆形 AMOLED 验证设备；CoreS3 的 USB/BLE
-链路已接入并持续进行硬件验证。设备下拉框默认只展示这三套已接入前端的方案。
+链路已接入并持续进行硬件验证。设备下拉框同时包含上述 5 套 ESP32-S3 开发板外接屏方案和这 3 套集成式设备方案。
 
 ## 屏幕方案与预编译固件
 
@@ -168,7 +184,7 @@ Waveshare 与 StopWatch 是当前主要的圆形 AMOLED 验证设备；CoreS3 �
 - RGB/BGR、大小端、Flash 容量和内容分区大小
 - GPIO 信号、开发板 GPIO、FPC 引脚和接线备注
 
-自定义方案保存后可以编辑或删除，并会出现在设备选单中。自定义参数可以用于预览和 RGB565 内容编码，但不会自动生成固件，也不能直接套用其他设备的固件。当前只有仓库内置且带有匹配 manifest 的三套设备可以烧录。
+自定义方案保存后可以编辑或删除，并会出现在设备选单中。自定义参数可以用于预览和 RGB565 内容编码，但不会自动生成固件，也不能直接套用其他设备的固件。当前仓库内置的 5 套 ESP32-S3 开发板外接屏方案和 3 套集成式设备方案带有匹配的 USB 固件 manifest，可以烧录。
 
 如果要让新的 GPIO、驱动或分区配置真正可烧录，需要在 `tools/embedded-display/` 中增加对应的 ESP-IDF 默认配置、构建产物和 manifest。仅修改浏览器中的方案 JSON 不会改变设备端驱动。
 
@@ -209,7 +225,7 @@ bun run dev
 http://localhost:1420
 ```
 
-三套内置设备 profile 及其 USB/BLE 预编译固件清单会作为静态资源随项目提供。只有新增屏幕、修改底层驱动、调整分区或重新生成基础固件时，才需要使用嵌入式构建服务：
+8 套内置设备 profile（5 套 ESP32-S3 开发板外接屏方案和 3 套集成式设备方案）及其 USB/BLE 预编译固件清单会作为静态资源随项目提供。只有新增屏幕、修改底层驱动、调整分区或重新生成基础固件时，才需要使用嵌入式构建服务：
 
 ```sh
 python tools/embedded-display/server/build_server.py --host 127.0.0.1 --port 8765
