@@ -19,7 +19,9 @@ Embedded Studio:
 The matching defaults, firmware manifests, and prebuilt images are maintained in
 `screen_profiles/` and `prebuilt-firmware/`. See
 [`OPERATION_GUIDE_CN.md`](OPERATION_GUIDE_CN.md) for wiring, display timing, TE,
-power, and build notes.
+power, and build notes. See
+[`ADDING_SCREEN_CN.md`](ADDING_SCREEN_CN.md) for the complete workflow to add a
+screen profile or integrate a new LCD controller.
 
 ## Verified Baseline
 
