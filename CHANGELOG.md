@@ -6,6 +6,10 @@
 
 - Upgrade CanvasKit to 0.41 and migrate renderer geometry to immutable paths built through `PathBuilder`.
 
+### Fixed
+
+- Load bundled embedded-display firmware directly in development instead of requiring the optional local firmware-build service during flashing.
+
 ### Added
 
 - Show encoded display-resource statistics after preparing local animation uploads, including source and used frames, raw and stored sizes, codec strategy, compression ratio, and content-partition capacity.

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
+import { embeddedManifestUrl } from '../../../src/features/embedded-display/adapters/http'
 import {
   DEFAULT_EMBEDDED_DISPLAY_PROFILE_ID,
   bundledDisplayProfiles,
@@ -58,5 +59,11 @@ describe('embedded display runtime catalog', () => {
       '/embedded-display/firmware/ble-frame/'
     )
     expect(bundledFirmwareManifestUrl(profileId, 'usb-prototype')).toBeNull()
+  })
+
+  test('flashes bundled firmware without requiring the local build service', () => {
+    expect(embeddedManifestUrl('st77916_xf_gf132a159', 'usb-frame')).toBe(
+      '/embedded-display/firmware/usb-frame/st77916_xf_gf132a159/manifest.json'
+    )
   })
 })
