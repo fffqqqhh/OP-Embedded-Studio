@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   encodeUsbSequenceFrame,
   encodeUsbSequenceFrames,
+  isSupportedSequenceImageFile,
   sequenceContentCapacityBytes
 } from '@/features/embedded-display/adapters/usb-sequence'
 import { encodeWirelessImage } from '@/features/embedded-display/adapters/wireless-content'
@@ -47,7 +48,19 @@ function uniqueFrame(seed = 0): Uint8Array {
   return frame
 }
 
-describe('USB PNG sequence content', () => {
+describe('USB image sequence content', () => {
+  test('accepts PNG and JPEG sequence frames', () => {
+    expect(isSupportedSequenceImageFile(new File([], 'frame.png', { type: 'image/png' }))).toBe(
+      true
+    )
+    expect(isSupportedSequenceImageFile(new File([], 'frame.jpg', { type: 'image/jpeg' }))).toBe(
+      true
+    )
+    expect(isSupportedSequenceImageFile(new File([], 'frame.JPEG'))).toBe(true)
+    expect(isSupportedSequenceImageFile(new File([], 'frame.webp', { type: 'image/webp' }))).toBe(
+      false
+    )
+  })
   test('compresses flat RGB565 frames with RLE16', () => {
     const encoded = encodeUsbSequenceFrame(new Uint8Array(8))
     expect(encoded.codec).toBe(1)

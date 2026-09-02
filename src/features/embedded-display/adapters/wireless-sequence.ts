@@ -26,7 +26,7 @@ function ensureWirelessSequenceFits(
 ): WirelessImageSequencePayload {
   if (payload.storedBytes > maxContentBytes) {
     throw new Error(
-      `PNG 序列压缩后为 ${(payload.storedBytes / 1024 / 1024).toFixed(2)} MiB，超过 ${(maxContentBytes / 1024 / 1024).toFixed(2)} MiB 无线传输上限`
+      `图片序列压缩后为 ${(payload.storedBytes / 1024 / 1024).toFixed(2)} MiB，超过 ${(maxContentBytes / 1024 / 1024).toFixed(2)} MiB 无线传输上限`
     )
   }
   return payload
@@ -35,7 +35,7 @@ function ensureWirelessSequenceFits(
 export function encodeWifiSequenceFrames(
   profile: EmbeddedDisplayProfile,
   frames: Uint8Array[],
-  name = 'PNG sequence',
+  name = 'Image sequence',
   options: WirelessSequenceOptions = {}
 ): WirelessImageSequencePayload {
   return ensureWirelessSequenceFits(
@@ -50,7 +50,7 @@ export function encodeWifiSequenceFrames(
 export function encodeBleSequenceFrames(
   profile: EmbeddedDisplayProfile,
   frames: Uint8Array[],
-  name = 'PNG sequence',
+  name = 'Image sequence',
   options: WirelessSequenceOptions = {}
 ): WirelessImageSequencePayload {
   return ensureWirelessSequenceFits(

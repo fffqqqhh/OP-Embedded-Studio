@@ -143,7 +143,8 @@ export function useEmbeddedDisplay() {
     if (selectedProfileId.value === id) {
       selectedProfileId.value =
         profiles.value.find((item) => item.id === DEFAULT_EMBEDDED_DISPLAY_PROFILE_ID)?.id ??
-        profiles.value[0]?.id ?? ''
+        profiles.value[0]?.id ??
+        ''
     }
   }
 
@@ -244,11 +245,11 @@ export function useEmbeddedDisplay() {
   ) {
     const profile = selectedProfile.value
     if (!profile) throw new Error('请先连接设备服务并选择屏幕方案')
-    if (files.length < 2) throw new Error('PNG 序列至少需要两张图片')
+    if (files.length < 2) throw new Error('图片序列至少需要两张图片')
 
-    selectedImageName.value = `${files.length} 张 PNG 序列`
+    selectedImageName.value = `${files.length} 张图片序列`
     buildStatus.value = 'uploading'
-    buildMessage.value = `正在转换 PNG 序列：0 / ${files.length}`
+    buildMessage.value = `正在转换图片序列：0 / ${files.length}`
     try {
       if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
       previewUrl.value = URL.createObjectURL(files[0])
@@ -271,7 +272,7 @@ export function useEmbeddedDisplay() {
       } else if (payload.adaptation === 'trim') {
         adaptationMessage = ` · 已裁切结尾，保留 ${payload.frameCount} 帧`
       }
-      buildMessage.value = `PNG 序列已准备：${payload.frameCount} 帧 · ${fps} FPS · ${(payload.storedBytes / 1024 / 1024).toFixed(2)} MiB${adaptationMessage}`
+      buildMessage.value = `图片序列已准备：${payload.frameCount} 帧 · ${fps} FPS · ${(payload.storedBytes / 1024 / 1024).toFixed(2)} MiB${adaptationMessage}`
       buildLog.value = [
         `sequence: ${payload.frameCount} PNG frames`,
         `size: ${payload.width}×${payload.height}`,
@@ -286,7 +287,7 @@ export function useEmbeddedDisplay() {
     } catch (error) {
       usbSequencePayload.value = null
       buildStatus.value = 'error'
-      buildMessage.value = `PNG 序列转换失败：${error instanceof Error ? error.message : String(error)}`
+      buildMessage.value = `图片序列转换失败：${error instanceof Error ? error.message : String(error)}`
       throw error
     }
   }

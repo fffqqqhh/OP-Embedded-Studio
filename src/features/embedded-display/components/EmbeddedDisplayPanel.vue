@@ -40,6 +40,7 @@ import type { UsbContentSerialPort } from '../adapters/usb-content-transfer'
 import {
   encodeUsbSequenceFrames,
   imageFilesToUsbSequence,
+  isSupportedSequenceImageFile,
   sequenceContentCapacityBytes,
   type SequenceOverflowStrategy,
   type UsbImageSequencePayload
@@ -261,11 +262,11 @@ const sequenceOverflowOptions = [
   { value: 'reject', label: '放弃上传' }
 ]
 const localContentLabel = computed(() => {
-  if (!localContentFiles.value.length) return '图片、PNG 序列或视频'
+  if (!localContentFiles.value.length) return '图片、图片序列或视频'
   if (localContentIsVideo.value)
     return `${localContentFiles.value[0]?.name ?? '本地视频'} · ${sequenceFrameRate.value} FPS`
   if (localContentFiles.value.length === 1) return localContentFiles.value[0]?.name ?? '本地图片'
-  return `${localContentFiles.value.length} 帧 PNG 序列 · ${sequenceFrameRate.value} FPS`
+  return `${localContentFiles.value.length} 帧图片序列 · ${sequenceFrameRate.value} FPS`
 })
 const localContentPrimary = computed(() => {
   if (!localContentFiles.value.length) return '0 帧'
@@ -274,10 +275,10 @@ const localContentPrimary = computed(() => {
 })
 const localContentSecondary = computed(() => {
   const firstFileName = localContentFiles.value[0]?.name
-  if (!firstFileName) return '图片、PNG 序列或视频'
+  if (!firstFileName) return '图片、图片序列或视频'
   if (localContentIsVideo.value) return `视频 · ${sequenceFrameRate.value} FPS · PC 不限制 4 秒`
   return localContentFiles.value.length > 1
-    ? `PNG 序列 · ${sequenceFrameRate.value} FPS · ${firstFileName}`
+    ? `图片序列 · ${sequenceFrameRate.value} FPS · ${firstFileName}`
     : firstFileName
 })
 const preparedLocalSequence = computed(() => {
@@ -661,7 +662,7 @@ function setLocalContentFiles(files: File[]): void {
   const supportedFiles = files.filter((file) => file.type.startsWith('image/') || isVideoFile(file))
   const videoFiles = supportedFiles.filter(isVideoFile)
   if (!supportedFiles.length) {
-    bakeError.value = '请选择图片、PNG 序列或视频文件'
+    bakeError.value = '请选择图片、图片序列或视频文件'
     return
   }
   if (videoFiles.length > 1 || (videoFiles.length === 1 && supportedFiles.length > 1)) {
@@ -670,11 +671,9 @@ function setLocalContentFiles(files: File[]): void {
   }
   if (
     supportedFiles.length > 1 &&
-    supportedFiles.some(
-      (file) => file.type !== 'image/png' && !file.name.toLowerCase().endsWith('.png')
-    )
+    supportedFiles.some((file) => !isSupportedSequenceImageFile(file))
   ) {
-    bakeError.value = '多帧序列只支持 PNG 文件'
+    bakeError.value = '多帧序列只支持 PNG、JPG 和 JPEG 文件'
     return
   }
   const selectedFiles = supportedFiles
@@ -1006,8 +1005,8 @@ function preparedUsbFrameContent(source: 'frame' | 'file'): PreparedUsbFrameCont
   if (sequence) {
     return {
       profileId: sequence.profileId,
-      label: ` PNG 序列：${sequence.frameCount} 帧`,
-      successMessage: `PNG 序列已写入：${sequence.frameCount} 帧 · ${Math.round(1000 / sequence.frameDelayMs)} FPS，设备正在重启。`,
+      label: ` 图片序列：${sequence.frameCount} 帧`,
+      successMessage: `图片序列已写入：${sequence.frameCount} 帧 · ${Math.round(1000 / sequence.frameDelayMs)} FPS，设备正在重启。`,
       upload: (options) => flashUsbSequenceFirmware(sequence, options)
     }
   }
@@ -1030,7 +1029,7 @@ async function flashPreparedUsbFrame(
 ): Promise<void> {
   const content = preparedUsbFrameContent(source)
   if (!content) {
-    bakeError.value = '请先烘焙、选择图片或选择 PNG 序列'
+    bakeError.value = '请先烘焙、选择图片或选择图片序列'
     return
   }
   if (
@@ -2136,7 +2135,7 @@ watch([wifiSsid, wifiPassword], () => {
                 </template>
                 <div v-else class="flex flex-col items-center justify-center gap-1 text-muted">
                   <icon-lucide-upload-cloud class="size-5 text-accent" />
-                  <span class="text-[10px]">拖入图片、PNG 序列或视频</span>
+                  <span class="text-[10px]">拖入图片、图片序列或视频</span>
                 </div>
               </div>
               <div class="grid h-24 min-w-0 grid-rows-3 border-t border-border px-3">
